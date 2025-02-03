@@ -1,6 +1,24 @@
 [package]
 name = "rust-rpxy-l4"
+description = "L4 reverse proxy written in Rust"
 version = "0.1.0"
 edition = "2021"
+readme = "./README.md"
+publish = false
 
 [dependencies]
+# memory allocator
+mimalloc = { version = "*", default-features = false }
+
+# async runtime
+tokio = { version = "1.43.0", default-features = false, features = [
+  "net",
+  "rt-multi-thread",
+  "time",
+  "sync",
+  "macros",
+  "io-util",
+] }
+
+# network
+socket2 = { version = "0.5.8" }

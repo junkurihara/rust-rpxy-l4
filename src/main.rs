@@ -37,7 +37,7 @@ fn main() {
 
 async fn start_tcp_proxy() {
   let listen_on = "127.0.0.1:50553".parse().unwrap();
-  let write_on = "127.0.0.1:50053";
+  let write_on = "192.168.50.184:59978";
   let tcp_socket = bind_tcp_socket(&listen_on).unwrap();
   let tcp_listener = tcp_socket.listen(1024).unwrap();
 
@@ -51,6 +51,19 @@ async fn start_tcp_proxy() {
       Ok(res) => res,
     };
     tokio::spawn(async move {
+      let mut buf = vec![0u8; 4];
+      let res = tokio::time::timeout(tokio::time::Duration::from_millis(100), incoming_stream.peek(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+      if res == 0 {
+        println!("No data received");
+        return;
+      }
+      if buf.eq(b"SSH-") {
+        println!("SSH connection detected");
+      }
+
       // let (mut incoming_readable, mut incoming_writable) = incoming_stream.into_split();
       println!("Accepted TCP connection from: {src_addr}");
       let mut outgoing_stream = TcpStream::connect(write_on).await.unwrap();

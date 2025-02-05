@@ -4,9 +4,23 @@ description = "L4 reverse proxy written in Rust"
 version = "0.1.0"
 edition = "2021"
 readme = "./README.md"
+repository = "https://github.com/junkurihara/rust-rpxy-l4"
+homepage = "https://github.com/junkurihara/rust-rpxy-l4"
+categories = ["asynchronous", "network-programming", "command-line-utilities"]
 publish = false
 
 [dependencies]
+# error handling
+thiserror = { version = "2.0.11" }
+
+# traces and logs
+tracing = { version = "0.1.41" }
+tracing-subscriber = { version = "0.3.19" }
+
+# config
+clap = { version = "4.5.28", features = ["std", "cargo", "wrap_help"] }
+toml = { version = "0.8.19", default-features = false, features = ["parse"] }
+
 # memory allocator
 mimalloc = { version = "*", default-features = false }
 

@@ -10,16 +10,19 @@ categories = ["asynchronous", "network-programming", "command-line-utilities"]
 publish = false
 
 [dependencies]
+derive_builder = { version = "0.20.2" }
+
 # error handling
+# anyhow = { version = "1.0.95" }
 thiserror = { version = "2.0.11" }
 
 # traces and logs
 tracing = { version = "0.1.41" }
 tracing-subscriber = { version = "0.3.19" }
 
-# config
-clap = { version = "4.5.28", features = ["std", "cargo", "wrap_help"] }
-toml = { version = "0.8.19", default-features = false, features = ["parse"] }
+# # config
+# clap = { version = "4.5.28", features = ["std", "cargo", "wrap_help"] }
+# toml = { version = "0.8.19", default-features = false, features = ["parse"] }
 
 # memory allocator
 mimalloc = { version = "*", default-features = false }
@@ -33,6 +36,7 @@ tokio = { version = "1.43.0", default-features = false, features = [
   "macros",
   "io-util",
 ] }
+tokio-util = { version = "0.7.13", default-features = false }
 
 # network
 socket2 = { version = "0.5.8" }

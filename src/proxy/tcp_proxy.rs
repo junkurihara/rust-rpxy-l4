@@ -19,6 +19,8 @@ pub struct TcpProxyMux {
   /// destination socket address for SSH protocol
   #[builder(setter(custom), default = "None")]
   write_on_ssh: Option<SocketAddr>,
+  #[builder(setter(custom), default = "None")]
+  write_on_tls: Option<SocketAddr>,
   // TODO: Add more protocols
 }
 
@@ -29,6 +31,10 @@ impl TcpProxyMuxBuilder {
   }
   pub fn write_on_ssh(&mut self, addr: SocketAddr) -> &mut Self {
     self.write_on_ssh = Some(Some(addr));
+    self
+  }
+  pub fn write_on_tls(&mut self, addr: SocketAddr) -> &mut Self {
+    self.write_on_tls = Some(Some(addr));
     self
   }
 }
@@ -57,6 +63,17 @@ impl TcpProxyMux {
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
+      }
+      TcpProxyProtocol::Tls => {
+        if let Some(addr) = &self.write_on_tls {
+          debug!("Setting up dest addr specific to TLS");
+          Ok(*addr)
+        } else if let Some(addr) = &self.write_on_any {
+          debug!("Setting up dest addr for unspecified proto");
+          Ok(*addr)
+        } else {
+          Err(ProxyError::NoDestinationAddressForProtocol)
+        }
       } // TODO: Add more protocols
     }
   }
@@ -70,6 +87,8 @@ pub enum TcpProxyProtocol {
   Any,
   /// SSH
   Ssh,
+  /// TLS
+  Tls,
   // TODO: and more ...
 }
 
@@ -78,6 +97,7 @@ impl std::fmt::Display for TcpProxyProtocol {
     match self {
       Self::Any => write!(f, "Any"),
       Self::Ssh => write!(f, "SSH"),
+      Self::Tls => write!(f, "TLS"),
       // TODO: and more...
     }
   }
@@ -101,6 +121,7 @@ impl TcpProxyProtocol {
       println!("No data received");
       return Err(ProxyError::NoDataReceivedTcpStream);
     }
+
     // TODO: Add more protocol detection
     if buf.eq(b"SSH-") {
       debug!("SSH connection detected");

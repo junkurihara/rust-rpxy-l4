@@ -27,6 +27,10 @@ pub(crate) fn is_tls_handshake(buf: &[u8]) -> bool {
     return false;
   }
   let payload_len = ((buf[3] as usize) << 8) + buf[4] as usize;
+  if buf.len() < TLS_RECORD_HEADER_LEN + payload_len {
+    debug!("Peek buffer for TLS handshake detection is not enough");
+    return false;
+  }
   debug!("TLS Payload length: {}", payload_len);
 
   // Check if the buffer is a TLS handshake

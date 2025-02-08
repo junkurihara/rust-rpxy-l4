@@ -7,7 +7,7 @@ pub enum ProxyError {
   NoDestinationAddressForProtocol,
 
   #[error("Failed to read first few bytes of TCP stream")]
-  FailedToReadFirstFewBytesTcpStream,
+  TimeOutToReadTcpStream,
 
   #[error("No data received from TCP stream")]
   NoDataReceivedTcpStream,

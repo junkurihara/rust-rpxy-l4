@@ -1,5 +1,8 @@
 use super::{constants::TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC, error::ProxyError, socket::bind_tcp_socket};
-use crate::log::{debug, error, warn};
+use crate::{
+  log::{debug, error, warn},
+  proxy::{constants::TCP_PROTOCOL_DETECTION_BUFFER_SIZE, tls::is_tls_handshake},
+};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
   io::copy_bidirectional,
@@ -64,6 +67,7 @@ impl TcpProxyMux {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
+      // Found TLS protocol
       TcpProxyProtocol::Tls => {
         if let Some(addr) = &self.write_on_tls {
           debug!("Setting up dest addr specific to TLS");
@@ -106,7 +110,7 @@ impl std::fmt::Display for TcpProxyProtocol {
 impl TcpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
   pub async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
-    let mut buf = vec![0u8; 4]; // TODO: This length, 4, is possibly insufficient for other protocols
+    let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
     let Ok(res) = timeout(
       Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
       incoming_stream.peek(&mut buf),
@@ -114,22 +118,27 @@ impl TcpProxyProtocol {
     .await
     else {
       error!("Failed to detect protocol: timeout");
-      return Err(ProxyError::FailedToReadFirstFewBytesTcpStream);
+      return Err(ProxyError::TimeOutToReadTcpStream);
     };
     let read_len = res?;
     if read_len == 0 {
-      println!("No data received");
+      error!("No data received");
       return Err(ProxyError::NoDataReceivedTcpStream);
     }
 
     // TODO: Add more protocol detection
-    if buf.eq(b"SSH-") {
+    if buf.starts_with(b"SSH-") {
       debug!("SSH connection detected");
-      Ok(Self::Ssh)
-    } else {
-      debug!("Untyped TCP connection");
-      Ok(Self::Any)
+      return Ok(Self::Ssh);
     }
+
+    if is_tls_handshake(buf.as_slice()) {
+      debug!("TLS connection detected");
+      return Ok(Self::Tls);
+    }
+
+    debug!("Untyped TCP connection");
+    Ok(Self::Any)
   }
 }
 
@@ -216,10 +225,12 @@ mod tests {
     let handle = tokio::runtime::Handle::current();
     let write_on_any = "127.0.0.1:50053".parse().unwrap();
     let write_on_ssh = "127.0.0.1:50022".parse().unwrap();
+    let write_on_tls = "127.0.0.1:50443".parse().unwrap();
     let write_on_mux = Arc::new(
       TcpProxyMuxBuilder::default()
         .write_on_any(write_on_any)
         .write_on_ssh(write_on_ssh)
+        .write_on_tls(write_on_tls)
         .build()
         .unwrap(),
     );

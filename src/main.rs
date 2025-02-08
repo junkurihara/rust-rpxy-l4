@@ -23,10 +23,12 @@ fn main() {
 
     let write_on_any = "192.168.122.4:53".parse().unwrap();
     let write_on_ssh = "150.95.211.62:59978".parse().unwrap();
+    let write_on_tls = "8.8.4.4:853".parse().unwrap();
     let listen_on = "127.0.0.1:50444".parse().unwrap();
     let tcp_proxy_mux = TcpProxyMuxBuilder::default()
       .write_on_any(write_on_any)
       .write_on_ssh(write_on_ssh)
+      .write_on_tls(write_on_tls)
       .build()
       .unwrap();
     let tcp_proxy = TcpProxyBuilder::default()

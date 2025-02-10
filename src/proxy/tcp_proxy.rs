@@ -173,6 +173,7 @@ impl TcpProxy {
           }
           Ok(res) => res,
         };
+        // TODO: Connection limit
         debug!("Accepted TCP connection from: {src_addr}");
 
         self.runtime_handle.spawn({

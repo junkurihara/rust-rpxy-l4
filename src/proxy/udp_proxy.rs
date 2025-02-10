@@ -120,6 +120,7 @@ impl UdpProxy {
           Ok(res) => res,
         };
         debug!("received {} bytes from {} [source]", buf_size, src_addr);
+        // debug!("UDP packet: {:x?}", &udp_buf[..buf_size]);
 
         let rx_packet_buf = udp_buf[..buf_size].to_vec();
 

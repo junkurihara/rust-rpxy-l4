@@ -1,6 +1,6 @@
 use super::{constants::TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC, error::ProxyError, socket::bind_tcp_socket};
 use crate::{
-  log::{debug, error, warn},
+  log::{debug, error, info, warn},
   proxy::{constants::TCP_PROTOCOL_DETECTION_BUFFER_SIZE, tls::is_tls_handshake},
 };
 use std::{net::SocketAddr, sync::Arc};
@@ -12,43 +12,43 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 /* ---------------------------------------------------------- */
-/// TCP proxy multiplexer
+/// TCP destination multiplexer
 #[derive(Debug, Clone, derive_builder::Builder)]
-pub struct TcpProxyMux {
+pub struct TcpDestinationMux {
   /// destination socket address for any protocol
   /// If this is set, it will be used for all protocols except the specific (non-None) protocols.
   #[builder(setter(custom), default = "None")]
-  write_on_any: Option<SocketAddr>,
+  dst_any: Option<SocketAddr>,
   /// destination socket address for SSH protocol
   #[builder(setter(custom), default = "None")]
-  write_on_ssh: Option<SocketAddr>,
+  dst_ssh: Option<SocketAddr>,
   #[builder(setter(custom), default = "None")]
-  write_on_tls: Option<SocketAddr>,
+  dst_tls: Option<SocketAddr>,
   // TODO: Add more protocols
 }
 
-impl TcpProxyMuxBuilder {
-  pub fn write_on_any(&mut self, addr: SocketAddr) -> &mut Self {
-    self.write_on_any = Some(Some(addr));
+impl TcpDestinationMuxBuilder {
+  pub fn dst_any(&mut self, addr: SocketAddr) -> &mut Self {
+    self.dst_any = Some(Some(addr));
     self
   }
-  pub fn write_on_ssh(&mut self, addr: SocketAddr) -> &mut Self {
-    self.write_on_ssh = Some(Some(addr));
+  pub fn dst_ssh(&mut self, addr: SocketAddr) -> &mut Self {
+    self.dst_ssh = Some(Some(addr));
     self
   }
-  pub fn write_on_tls(&mut self, addr: SocketAddr) -> &mut Self {
-    self.write_on_tls = Some(Some(addr));
+  pub fn dst_tls(&mut self, addr: SocketAddr) -> &mut Self {
+    self.dst_tls = Some(Some(addr));
     self
   }
 }
 
-impl TcpProxyMux {
+impl TcpDestinationMux {
   /// Get the destination socket address for the given protocol
-  pub fn get_write_on(&self, protocol: &TcpProxyProtocol) -> Result<SocketAddr, ProxyError> {
+  pub fn get_destination(&self, protocol: &TcpProxyProtocol) -> Result<SocketAddr, ProxyError> {
     match protocol {
       // No matched protocol found from the pattern
       TcpProxyProtocol::Any => {
-        if let Some(addr) = &self.write_on_any {
+        if let Some(addr) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
           Ok(*addr)
         } else {
@@ -57,10 +57,10 @@ impl TcpProxyMux {
       }
       // Found SSH protocol
       TcpProxyProtocol::Ssh => {
-        if let Some(addr) = &self.write_on_ssh {
+        if let Some(addr) = &self.dst_ssh {
           debug!("Setting up dest addr specific to SSH");
           Ok(*addr)
-        } else if let Some(addr) = &self.write_on_any {
+        } else if let Some(addr) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
           Ok(*addr)
         } else {
@@ -69,10 +69,10 @@ impl TcpProxyMux {
       }
       // Found TLS protocol
       TcpProxyProtocol::Tls => {
-        if let Some(addr) = &self.write_on_tls {
+        if let Some(addr) = &self.dst_tls {
           debug!("Setting up dest addr specific to TLS");
           Ok(*addr)
-        } else if let Some(addr) = &self.write_on_any {
+        } else if let Some(addr) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
           Ok(*addr)
         } else {
@@ -148,8 +148,8 @@ impl TcpProxyProtocol {
 pub struct TcpProxy {
   /// Bound socket address to listen on, exposed to the client
   listen_on: SocketAddr,
-  /// Socket address to write on, the actual destination routed for protocol types
-  write_on_mux: Arc<TcpProxyMux>,
+  /// Multiplexed socket addresses, the actual destination routed for protocol types
+  destination_mux: Arc<TcpDestinationMux>,
   #[builder(default = "super::constants::TCP_BACKLOG")]
   /// TCP backlog size
   backlog: u32,
@@ -160,6 +160,7 @@ pub struct TcpProxy {
 impl TcpProxy {
   /// Start the TCP proxy
   pub async fn start(&self, cancel_token: CancellationToken) -> Result<(), ProxyError> {
+    info!("Starting TCP proxy on {}", self.listen_on);
     let tcp_socket = bind_tcp_socket(&self.listen_on)?;
     let tcp_listener = tcp_socket.listen(self.backlog)?;
 
@@ -175,7 +176,7 @@ impl TcpProxy {
         debug!("Accepted TCP connection from: {src_addr}");
 
         self.runtime_handle.spawn({
-          let write_on_mux = Arc::clone(&self.write_on_mux);
+          let dst_mux = Arc::clone(&self.destination_mux);
           async move {
             let protocol = match TcpProxyProtocol::detect_protocol(&incoming_stream).await {
               Ok(p) => p,
@@ -184,7 +185,7 @@ impl TcpProxy {
                 return;
               }
             };
-            let write_on = match write_on_mux.get_write_on(&protocol) {
+            let dst = match dst_mux.get_destination(&protocol) {
               Ok(addr) => addr,
               Err(e) => {
                 error!("No route for {protocol}: {e}");
@@ -192,8 +193,8 @@ impl TcpProxy {
               }
             };
 
-            let Ok(mut outgoing_stream) = TcpStream::connect(write_on).await else {
-              error!("Failed to connect to the destination: {write_on}");
+            let Ok(mut outgoing_stream) = TcpStream::connect(dst).await else {
+              error!("Failed to connect to the destination: {dst}");
               return;
             };
             if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
@@ -223,21 +224,21 @@ mod tests {
   #[tokio::test]
   async fn test_tcp_proxy() {
     let handle = tokio::runtime::Handle::current();
-    let write_on_any = "127.0.0.1:50053".parse().unwrap();
-    let write_on_ssh = "127.0.0.1:50022".parse().unwrap();
-    let write_on_tls = "127.0.0.1:50443".parse().unwrap();
-    let write_on_mux = Arc::new(
-      TcpProxyMuxBuilder::default()
-        .write_on_any(write_on_any)
-        .write_on_ssh(write_on_ssh)
-        .write_on_tls(write_on_tls)
+    let dst_any = "127.0.0.1:50053".parse().unwrap();
+    let dst_ssh = "127.0.0.1:50022".parse().unwrap();
+    let dst_tls = "127.0.0.1:50443".parse().unwrap();
+    let dst_mux = Arc::new(
+      TcpDestinationMuxBuilder::default()
+        .dst_any(dst_any)
+        .dst_ssh(dst_ssh)
+        .dst_tls(dst_tls)
         .build()
         .unwrap(),
     );
     let listen_on: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let tcp_proxy = TcpProxyBuilder::default()
       .listen_on(listen_on)
-      .write_on_mux(write_on_mux)
+      .destination_mux(dst_mux)
       .runtime_handle(handle.clone())
       .build()
       .unwrap();

@@ -40,12 +40,13 @@ fn main() {
       .unwrap();
 
     let udp_proxy_mux = UdpDestinationMuxBuilder::default()
+      .dst_any("127.0.0.1:4433".parse().unwrap())
       // .dst_any("8.8.8.8:53".parse().unwrap())
-      .dst_any("[2001:4860:4860::8888]:53".parse().unwrap())
+      // .dst_any("[2001:4860:4860::8888]:53".parse().unwrap())
       .build()
       .unwrap();
     let udp_proxy = UdpProxyBuilder::default()
-      .listen_on("[::1]:50444".parse().unwrap())
+      .listen_on("127.0.0.1:50444".parse().unwrap())
       .destination_mux(Arc::new(udp_proxy_mux))
       .runtime_handle(runtime.handle().clone())
       .build()

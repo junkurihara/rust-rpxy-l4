@@ -11,4 +11,10 @@ pub enum ProxyError {
 
   #[error("No data received from TCP stream")]
   NoDataReceivedTcpStream,
+
+  #[error("Too many UDP connections")]
+  TooManyUdpConnections,
+
+  #[error("Broken UDP connection")]
+  BrokenUdpConnection,
 }

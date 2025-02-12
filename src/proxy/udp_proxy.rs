@@ -1,11 +1,10 @@
-use super::{
-  constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
-  error::ProxyError,
-  socket::bind_udp_socket,
+use super::{constants::UDP_BUFFER_SIZE, error::ProxyError, socket::bind_udp_socket};
+use crate::{
+  log::{debug, error, info, warn},
+  proxy::{constants::UDP_CONNECTION_IDLE_LIFETIME, udp_conn::UdpConnectionPool},
 };
-use crate::log::{debug, error, info, warn};
 use std::{net::SocketAddr, sync::Arc};
-use tokio::{net::UdpSocket, sync::mpsc};
+use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
 /* ---------------------------------------------------------- */
@@ -63,7 +62,8 @@ impl std::fmt::Display for UdpProxyProtocol {
 
 impl UdpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming packet
-  pub async fn detect_protocol(incoming_buf: &[u8]) -> Result<Self, ProxyError> {
+  pub async fn detect_protocol(_incoming_buf: &[u8]) -> Result<Self, ProxyError> {
+    // TODO: Implement protocol detection
     debug!("Untyped UDP connection");
     Ok(Self::Any)
   }
@@ -85,9 +85,6 @@ impl UdpProxy {
   pub async fn start(&self, cancel_token: CancellationToken) -> Result<(), ProxyError> {
     info!("Starting UDP proxy on {}", self.listen_on);
 
-    let base_any_socket_v4: SocketAddr = "0.0.0.0:0".parse().unwrap();
-    let base_any_socket_v6: SocketAddr = "[::]:0".parse().unwrap();
-
     // bind the socket to listen on the given address
     let udp_socket = UdpSocket::from_std(bind_udp_socket(&self.listen_on)?)?;
 
@@ -97,6 +94,13 @@ impl UdpProxy {
     // clone for sending back upstream responses to the original source by each individual spawned task
     let udp_socket_tx = Arc::clone(&udp_socket_rx);
 
+    let udp_connection_pool = UdpConnectionPool::new(
+      UDP_CONNECTION_IDLE_LIFETIME, // TODO:
+      0,                            // TODO: max_connection, currently no limit
+      self.runtime_handle.clone(),
+      cancel_token.clone(),
+    );
+
     // Setup buffer
     let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
 
@@ -104,75 +108,36 @@ impl UdpProxy {
       loop {
         let (buf_size, src_addr) = match udp_socket_rx.recv_from(&mut udp_buf).await {
           Err(e) => {
-            println!("Error in UDP listener for downstream: {e}");
-            continue;
+            error!("Error in UDP listener for downstream: {e}");
+            break;
           }
           Ok(res) => res,
         };
         debug!("received {} bytes from {} [source]", buf_size, src_addr);
         // debug!("UDP packet: {:x?}", &udp_buf[..buf_size]);
 
-        let rx_packet_buf = udp_buf[..buf_size].to_vec();
+        // Prune inactive connections first
+        udp_connection_pool.prune_inactive_connections();
 
-        // TODO: poc
-        // TODO: manage for each connection context (by the source address + port)
-        // setup a channel to forward upstream response to the spawned responder task
-        // このチャネルはconnectionごとに作成
-        // - key: [src_socket_addr, dst_socket_addr]
-        // - value: [channel_tx]
-        let (channel_tx, mut channel_rx) = mpsc::channel::<(Vec<u8>, SocketAddr)>(UDP_CHANNEL_CAPACITY);
-        let upd_socket_tx_clone = udp_socket_tx.clone();
-        let dst = self.destination_mux.get_destination(&UdpProxyProtocol::Any).unwrap();
-        let runtime_handle_clone = self.runtime_handle.clone();
-
-        self.runtime_handle.spawn(async move {
-          let udp_socket_to_upstream = match dst {
-            SocketAddr::V4(_) => UdpSocket::from_std(bind_udp_socket(&base_any_socket_v4)?)?,
-            SocketAddr::V6(_) => UdpSocket::from_std(bind_udp_socket(&base_any_socket_v6)?)?,
-          };
-          debug!(
-            "Bound UDP socket for upstream on {}",
-            udp_socket_to_upstream
-              .local_addr()
-              .map(|v| v.to_string())
-              .unwrap_or("unknown".to_string())
-          );
-          let upd_socket_to_upstream_tx = Arc::new(udp_socket_to_upstream);
-          let udp_socket_to_upstream_rx = upd_socket_to_upstream_tx.clone();
-
-          runtime_handle_clone.spawn(async move {
-            let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
-            // This should be loop to handle multiple packets from the same source
-            let (buf_size, _) = match udp_socket_to_upstream_rx.recv_from(&mut udp_buf).await {
-              Err(e) => {
-                error!("Error in UDP listener for upstream: {e}");
-                return Ok(());
-              }
-              Ok(res) => res,
-            };
-            debug!("received {} bytes from {} [upstream]", buf_size, dst);
-            let response = udp_buf[..buf_size].to_vec();
-            if let Err(e) = upd_socket_tx_clone.send_to(response.as_slice(), src_addr).await {
-              error!("Error sending packet to upstream: {e}");
-            };
-
-            Ok(()) as Result<(), ProxyError>
-          });
-
-          // This should be loop to handle multiple packets from the same source
-          let Some((packet, _)) = channel_rx.recv().await else {
-            error!("Error receiving packet from channel");
-            return Ok(());
-          };
-          if let Err(e) = upd_socket_to_upstream_tx.send_to(packet.as_slice(), dst).await {
-            error!("Error sending packet to upstream: {e}");
-          };
-          Ok(()) as Result<(), ProxyError>
-        });
-        if let Err(e) = channel_tx.send((rx_packet_buf, src_addr)).await {
-          error!("Error sending packet to channel: {e}");
+        if let Some(conn) = udp_connection_pool.get(&src_addr) {
+          // Handle case there is an existing connection
+          debug!("Found existing connection for {}", src_addr);
+          let _ = conn.send(udp_buf[..buf_size].to_vec()).await;
+          // here we ignore the error, as the connection might be closed
+          continue;
         }
+
+        // Handle case there is no existing connection
+        debug!("No existing connection for {}", src_addr);
+        let protocol = UdpProxyProtocol::detect_protocol(&udp_buf[..buf_size]).await?;
+        let dst_addr = self.destination_mux.get_destination(&protocol)?;
+        let Ok(conn) = udp_connection_pool.create_new_connection(&src_addr, &dst_addr, udp_socket_tx.clone()) else {
+          continue;
+        };
+        let _ = conn.send(udp_buf[..buf_size].to_vec()).await;
+        // here we ignore the error, as the connection might be closed
       }
+      Ok(()) as Result<(), ProxyError>
     };
 
     tokio::select! {

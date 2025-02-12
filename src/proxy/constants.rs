@@ -1,5 +1,3 @@
-use std::{net::SocketAddr, sync::OnceLock};
-
 /// TCP backlog size
 pub const TCP_BACKLOG: u32 = 1024;
 
@@ -20,13 +18,7 @@ pub const UDP_BUFFER_SIZE: usize = 65536;
 /// UDP channel Capacity TODO: めちゃ適当
 pub const UDP_CHANNEL_CAPACITY: usize = 1024;
 
-/// Any socket address for IPv4 for auto-binding
-pub static BASE_ANY_SOCKET_V4: OnceLock<SocketAddr> = OnceLock::new();
-/// Any socket address for IPv6 for auto-binding
-pub static BASE_ANY_SOCKET_V6: OnceLock<SocketAddr> = OnceLock::new();
-
-/// Initialize once lock values
-pub fn init_once_lock() {
-  let _ = BASE_ANY_SOCKET_V4.get_or_init(|| "0.0.0.0:0".parse().unwrap());
-  let _ = BASE_ANY_SOCKET_V6.get_or_init(|| "[::]:0".parse().unwrap());
-}
+/// UDP connection lifetime in seconds
+/// UDP connection is managed by the source address + port.
+/// If the connection is not used for this duration, it is pruned.
+pub const UDP_CONNECTION_IDLE_LIFETIME: u32 = 60;

@@ -16,6 +16,7 @@ fn main() {
   runtime_builder.enable_all();
   runtime_builder.thread_name("rpxy-layer-4");
   let runtime = runtime_builder.build().unwrap();
+
   init_logger();
 
   runtime.block_on(async {

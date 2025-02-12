@@ -62,11 +62,11 @@ impl std::fmt::Display for UdpProxyProtocol {
 }
 
 impl UdpProxyProtocol {
-  // /// Detect the protocol from the first few bytes of the incoming stream
-  // pub async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
-  //   debug!("Untyped UDP connection");
-  //   Ok(Self::Any)
-  // }
+  /// Detect the protocol from the first few bytes of the incoming packet
+  pub async fn detect_protocol(incoming_buf: &[u8]) -> Result<Self, ProxyError> {
+    debug!("Untyped UDP connection");
+    Ok(Self::Any)
+  }
 }
 
 /* ---------------------------------------------------------- */
@@ -96,16 +96,6 @@ impl UdpProxy {
 
     // clone for sending back upstream responses to the original source by each individual spawned task
     let udp_socket_tx = Arc::clone(&udp_socket_rx);
-
-    //   let incoming_listen_on = "127.0.0.1:50553".parse().unwrap();
-    //   let outgoing_listen_on = "127.0.0.1:50054".parse().unwrap();
-    //   let write_on: SocketAddr = "127.0.0.1:50053".parse().unwrap();
-    //   let incoming_udp_socket = UdpSocket::from_std(bind_udp_socket(&incoming_listen_on).unwrap()).unwrap();
-    //   let incoming_socket_tx = Arc::new(incoming_udp_socket);
-    //   let incoming_socket_rx = incoming_socket_tx.clone();
-    //   let outgoing_udp_socket = UdpSocket::from_std(bind_udp_socket(&outgoing_listen_on).unwrap()).unwrap();
-    //   let outgoing_socket_tx = Arc::new(outgoing_udp_socket);
-    //   let outgoing_socket_rx = outgoing_socket_tx.clone();
 
     // Setup buffer
     let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];

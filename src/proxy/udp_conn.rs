@@ -219,22 +219,18 @@ impl UdpConnectionInner {
       // Handle multiple packets sent back from the upstream as responses
       loop {
         let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
-        let Ok(from_addr) = udp_socket_to_upstream_rx.peek_sender().await else {
-          error!("Error peeking sender address from upstream");
-          return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
-        };
-        if from_addr != self.dst_addr {
-          warn!("Received packet from unexpected address: {}", from_addr);
-          continue;
-        }
 
-        let buf_size = match udp_socket_to_upstream_rx.recv(&mut udp_buf).await {
+        let (buf_size, from_addr) = match udp_socket_to_upstream_rx.recv_from(&mut udp_buf).await {
           Err(e) => {
             error!("Error in UDP listener for upstream: {e}");
             return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
           }
           Ok(res) => res,
         };
+        if from_addr != self.dst_addr {
+          warn!("Received packet from unexpected address: {}", from_addr);
+          continue;
+        }
 
         debug!(
           "[{} <- {}] received {} bytes from upstream",

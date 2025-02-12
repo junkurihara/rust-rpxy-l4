@@ -15,12 +15,19 @@ pub struct UdpDestinationMux {
   /// If this is set, it will be used for all protocols except the specific (non-None) protocols.
   #[builder(setter(custom), default = "None")]
   dst_any: Option<SocketAddr>,
+  /// destination socket address for Wireguard protocol
+  #[builder(setter(custom), default = "None")]
+  dst_wireguard: Option<SocketAddr>,
   // TODO: Add more protocols
 }
 
 impl UdpDestinationMuxBuilder {
   pub fn dst_any(&mut self, addr: SocketAddr) -> &mut Self {
     self.dst_any = Some(Some(addr));
+    self
+  }
+  pub fn dst_wireguard(&mut self, addr: SocketAddr) -> &mut Self {
+    self.dst_wireguard = Some(Some(addr));
     self
   }
 }
@@ -38,6 +45,17 @@ impl UdpDestinationMux {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
+      UdpProxyProtocol::Wireguard => {
+        if let Some(addr) = &self.dst_wireguard {
+          debug!("Setting up dest addr for Wireguard proto");
+          Ok(*addr)
+        } else if let Some(addr) = &self.dst_any {
+          debug!("Setting up dest addr for unspecified proto");
+          Ok(*addr)
+        } else {
+          Err(ProxyError::NoDestinationAddressForProtocol)
+        }
+      }
     }
   }
 }
@@ -48,6 +66,8 @@ impl UdpDestinationMux {
 pub enum UdpProxyProtocol {
   /// any, default
   Any,
+  /// wireguard
+  Wireguard,
   // TODO: and more ...
 }
 
@@ -55,6 +75,7 @@ impl std::fmt::Display for UdpProxyProtocol {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Self::Any => write!(f, "Any"),
+      Self::Wireguard => write!(f, "Wireguard"),
       // TODO: and more...
     }
   }
@@ -62,8 +83,25 @@ impl std::fmt::Display for UdpProxyProtocol {
 
 impl UdpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming packet
-  pub async fn detect_protocol(_incoming_buf: &[u8]) -> Result<Self, ProxyError> {
+  pub async fn detect_protocol(incoming_buf: &[u8]) -> Result<Self, ProxyError> {
+    // debug!("UDP packet: {:x?}", _incoming_buf);
     // TODO: Implement protocol detection
+
+    /* ------ */
+    // Wireguard protocol 'initiation' detection [only Handshake]
+    // Thus this may not be a reliable way to detect Wireguard protocol
+    // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
+    // https://www.wireguard.com/protocol/
+    if incoming_buf.len() == 148
+      && incoming_buf[0] == 0x01
+      && incoming_buf[1] == 0x00
+      && incoming_buf[2] == 0x00
+      && incoming_buf[3] == 0x00
+    {
+      debug!("Wireguard protocol (initiator to responder first message) detected");
+      return Ok(Self::Wireguard);
+    }
+
     debug!("Untyped UDP connection");
     Ok(Self::Any)
   }
@@ -114,7 +152,6 @@ impl UdpProxy {
           Ok(res) => res,
         };
         debug!("received {} bytes from {} [source]", buf_size, src_addr);
-        // debug!("UDP packet: {:x?}", &udp_buf[..buf_size]);
 
         // Prune inactive connections first
         udp_connection_pool.prune_inactive_connections();

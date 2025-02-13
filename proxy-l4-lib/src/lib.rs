@@ -1,4 +1,5 @@
 mod constants;
+mod count;
 mod error;
 mod socket;
 mod tcp_proxy;
@@ -7,5 +8,6 @@ mod trace;
 mod udp_conn;
 mod udp_proxy;
 
+pub use count::ConnectionCount;
 pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProxy, TcpProxyBuilder};
 pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpProxyBuilder};

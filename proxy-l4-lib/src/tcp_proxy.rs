@@ -1,5 +1,6 @@
-use super::{
+use crate::{
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
+  count::ConnectionCount,
   error::ProxyError,
   socket::bind_tcp_socket,
   tls::is_tls_handshake,
@@ -183,6 +184,13 @@ pub struct TcpProxy {
   #[builder(default = "super::constants::TCP_BACKLOG")]
   /// TCP backlog size
   backlog: u32,
+  #[builder(default = "ConnectionCount::default()")]
+  /// Connection counter, set shared counter if #connections of all TCP proxies are needed
+  connection_count: ConnectionCount,
+  #[builder(default = "crate::constants::MAX_TCP_CONCURRENT_CONNECTIONS")]
+  /// Maximum number of concurrent connections
+  /// If `cnt` is shared with other spawned TCP proxies, this value is evaluated for the total number of connections
+  max_connections: usize,
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
 }
@@ -203,16 +211,26 @@ impl TcpProxy {
           }
           Ok(res) => res,
         };
-        // TODO: Connection limit
-        debug!("Accepted TCP connection from: {src_addr}");
+        // Connection limit
+        if self.connection_count.current() >= self.max_connections {
+          warn!("TCP connection limit reached: {}", self.max_connections);
+          continue;
+        }
+        self.connection_count.increment();
+        debug!(
+          "Accepted TCP connection from: {src_addr} (total: {})",
+          self.connection_count.current()
+        );
 
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
+          let connection_count = self.connection_count.clone();
           async move {
             let protocol = match TcpProxyProtocol::detect_protocol(&incoming_stream).await {
               Ok(p) => p,
               Err(e) => {
                 error!("Failed to detect protocol: {e}");
+                connection_count.decrement();
                 return;
               }
             };
@@ -220,18 +238,21 @@ impl TcpProxy {
               Ok(addr) => addr,
               Err(e) => {
                 error!("No route for {protocol}: {e}");
+                connection_count.decrement();
                 return;
               }
             };
 
             let Ok(mut outgoing_stream) = TcpStream::connect(dst).await else {
               error!("Failed to connect to the destination: {dst}");
+              connection_count.decrement();
               return;
             };
             if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
               warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
             }
-            debug!("TCP proxy connection closed");
+            connection_count.decrement();
+            debug!("TCP proxy connection closed (total: {})", connection_count.current());
           }
         });
       }

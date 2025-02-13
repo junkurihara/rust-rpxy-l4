@@ -11,6 +11,9 @@ pub const TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC: u64 = 100;
 /// https://datatracker.ietf.org/doc/html/rfc8446#section-5.1
 pub const TCP_PROTOCOL_DETECTION_BUFFER_SIZE: usize = 4096;
 
+/// Max TCP cnncurrent connections
+pub const MAX_TCP_CONCURRENT_CONNECTIONS: usize = 1024;
+
 /// UDP buffer size, theoretical limit is 65535 bytes in IPv4
 /// But the practical limit is, due to the MTU, less than 1500 bytes.
 pub const UDP_BUFFER_SIZE: usize = 65536;

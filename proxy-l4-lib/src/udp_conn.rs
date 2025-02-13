@@ -3,6 +3,7 @@ use crate::{
   error::ProxyError,
   socket::bind_udp_socket,
   trace::*,
+  udp_proxy::UdpDestination,
 };
 use arc_swap::ArcSwap;
 use std::{
@@ -18,7 +19,7 @@ pub static BASE_ANY_SOCKET_V4: OnceLock<SocketAddr> = OnceLock::new();
 pub static BASE_ANY_SOCKET_V6: OnceLock<SocketAddr> = OnceLock::new();
 
 /// Initialize once lock values
-pub fn init_once_lock() {
+fn init_once_lock() {
   let _ = BASE_ANY_SOCKET_V4.get_or_init(|| "0.0.0.0:0".parse().unwrap());
   let _ = BASE_ANY_SOCKET_V6.get_or_init(|| "[::]:0".parse().unwrap());
 }
@@ -27,39 +28,11 @@ pub fn init_once_lock() {
 type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone)]
-/// Connection pool value
-pub struct UdpConnection {
-  /// Sender to the UdpConnection
-  tx: mpsc::Sender<Vec<u8>>,
-  /// UdpConnection
-  inner: Arc<UdpConnectionInner>,
-}
-
-impl UdpConnection {
-  /// Send a packet to the UdpConnection
-  pub async fn send(&self, packet: Vec<u8>) -> Result<(), ProxyError> {
-    if let Err(e) = self.tx.send(packet).await {
-      error!("Error sending packet to UdpConnection: {e}");
-      error!(
-        "Stopping UdpConnection from {} to {}",
-        self.inner.src_addr, self.inner.dst_addr
-      );
-      self.inner.cancel_token.cancel(); // cancellation will remove the connection from the pool
-      return Err(ProxyError::BrokenUdpConnection);
-    }
-    Ok(())
-  }
-}
-
-/* ---------------------------------------------------------- */
 #[derive(Clone)]
 /// Udp connection pool
-pub struct UdpConnectionPool {
+pub(crate) struct UdpConnectionPool {
   /// inner hashmap
   inner: DashMap<SocketAddr, UdpConnection>,
-  /// connection lifetime
-  connection_idle_lifetime: u64,
   /// max connection. if 0, no limit
   max_connection: usize,
   /// parent cancel token to cancel all connections
@@ -70,18 +43,12 @@ pub struct UdpConnectionPool {
 
 impl UdpConnectionPool {
   /// Create a new UdpConnectionManager
-  pub fn new(
-    connection_idle_lifetime: u32,
-    max_connection: u32,
-    runtime_handle: Handle,
-    parent_cancel_token: CancellationToken,
-  ) -> Self {
+  pub(crate) fn new(max_connection: u32, runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
     init_once_lock();
 
     let inner: DashMap<SocketAddr, UdpConnection> = DashMap::default();
     Self {
       inner,
-      connection_idle_lifetime: connection_idle_lifetime as u64,
       max_connection: max_connection as usize,
       runtime_handle,
       parent_cancel_token,
@@ -89,16 +56,16 @@ impl UdpConnectionPool {
   }
 
   /// Get Arc<UdpConnection> by the source address + port
-  pub fn get(&self, src_addr: &SocketAddr) -> Option<UdpConnection> {
+  pub(crate) fn get(&self, src_addr: &SocketAddr) -> Option<UdpConnection> {
     self.inner.get(src_addr).map(|arc| arc.value().clone())
   }
 
   /// Create and insert a new UdpConnection, and return the
   /// If the source address + port already exists, update the value.
-  pub async fn create_new_connection(
+  pub(crate) async fn create_new_connection(
     &self,
     src_addr: &SocketAddr,
-    dst_addr: &SocketAddr,
+    udp_dst: &UdpDestination,
     udp_socket_to_downstream: Arc<UdpSocket>,
   ) -> Result<UdpConnection, ProxyError> {
     if self.max_connection > 0 && self.inner.len() >= self.max_connection {
@@ -109,7 +76,7 @@ impl UdpConnectionPool {
     let conn = Arc::new(
       UdpConnectionInner::try_new(
         *src_addr,
-        *dst_addr,
+        *udp_dst,
         udp_socket_to_downstream,
         self.parent_cancel_token.child_token(),
       )
@@ -142,11 +109,11 @@ impl UdpConnectionPool {
 
   /// Prune inactive connections
   /// This must be called when a new UDP packet is received.
-  pub fn prune_inactive_connections(&self) {
+  pub(crate) fn prune_inactive_connections(&self) {
     self.inner.retain(|_, conn| {
       let last_active = conn.inner.last_active.load();
       let elapsed = last_active.elapsed();
-      if elapsed.as_secs() < self.connection_idle_lifetime {
+      if elapsed.as_secs() < conn.inner.idle_lifetime {
         return true;
       }
       debug!("UdpConnection from {} is pruned due to inactivity", conn.inner.src_addr);
@@ -157,6 +124,31 @@ impl UdpConnectionPool {
   }
 }
 
+/* ---------------------------------------------------------- */
+#[derive(Debug, Clone)]
+/// Connection pool value
+pub(crate) struct UdpConnection {
+  /// Sender to the UdpConnection
+  tx: mpsc::Sender<Vec<u8>>,
+  /// UdpConnection
+  inner: Arc<UdpConnectionInner>,
+}
+
+impl UdpConnection {
+  /// Send a packet to the UdpConnection
+  pub(crate) async fn send(&self, packet: Vec<u8>) -> Result<(), ProxyError> {
+    if let Err(e) = self.tx.send(packet).await {
+      error!("Error sending packet to UdpConnection: {e}");
+      error!(
+        "Stopping UdpConnection from {} to {}",
+        self.inner.src_addr, self.inner.dst_addr
+      );
+      self.inner.cancel_token.cancel(); // cancellation will remove the connection from the pool
+      return Err(ProxyError::BrokenUdpConnection);
+    }
+    Ok(())
+  }
+}
 /* ---------------------------------------------------------- */
 #[derive(Debug)]
 /// Udp connection
@@ -176,6 +168,10 @@ struct UdpConnectionInner {
   /// Cancel token to cancel the connection service
   cancel_token: CancellationToken,
 
+  /// Connection idle lifetime
+  /// If set to 0, no limit is applied.
+  idle_lifetime: u64,
+
   /// Last active time
   last_active: ArcSwap<Instant>,
 }
@@ -184,10 +180,12 @@ impl UdpConnectionInner {
   /// Create a new UdpConnection
   async fn try_new(
     src_addr: SocketAddr,
-    dst_addr: SocketAddr,
+    udp_dst: UdpDestination,
     udp_socket_to_downstream: Arc<UdpSocket>,
     cancel_token: CancellationToken,
   ) -> Result<Self, ProxyError> {
+    let dst_addr = udp_dst.get_destination();
+    let idle_lifetime = udp_dst.get_connection_idle_lifetime() as u64;
     let udp_socket_to_upstream = match dst_addr {
       SocketAddr::V4(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V4.get().unwrap())?),
       SocketAddr::V6(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V6.get().unwrap())?),
@@ -205,6 +203,7 @@ impl UdpConnectionInner {
       udp_socket_to_upstream,
       udp_socket_to_downstream,
       cancel_token,
+      idle_lifetime,
       last_active,
     })
   }
@@ -322,15 +321,16 @@ mod tests {
     let runtime_handle = tokio::runtime::Handle::current();
 
     let cancel_token = CancellationToken::new();
-    let udp_connection_pool = UdpConnectionPool::new(10, 0, runtime_handle.clone(), cancel_token.clone());
+    let udp_connection_pool = UdpConnectionPool::new(0, runtime_handle.clone(), cancel_token.clone());
 
-    let src_addr = "127.0.0.1:12345".parse().unwrap();
-    let dst_addr = "127.0.0.1:54321".parse().unwrap();
-    let socket: std::net::SocketAddr = "127.0.0.1:55555".parse().unwrap();
+    let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+    let udp_dst = UdpDestination::from(("127.0.0.1:54321".parse::<SocketAddr>().unwrap(), 10));
+
+    let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());
 
     let _udp_connection = udp_connection_pool
-      .create_new_connection(&src_addr, &dst_addr, udp_socket_to_downstream)
+      .create_new_connection(&src_addr, &udp_dst, udp_socket_to_downstream)
       .await
       .unwrap();
 

@@ -1,5 +1,5 @@
 use crate::{
-  constants::{UDP_BUFFER_SIZE, UDP_CONNECTION_IDLE_LIFETIME},
+  constants::UDP_BUFFER_SIZE,
   error::ProxyError,
   socket::bind_udp_socket,
   trace::{debug, error, info, warn},
@@ -10,6 +10,42 @@ use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
 /* ---------------------------------------------------------- */
+#[derive(Debug, Clone, Copy)]
+/// Udp destination struct
+pub(crate) struct UdpDestination {
+  /// Destination socket address
+  dst_addr: SocketAddr,
+  /// Connection idle lifetime in seconds
+  /// If set to 0, no limit is applied for the destination
+  connection_idle_lifetime: u32,
+}
+impl From<SocketAddr> for UdpDestination {
+  fn from(dst_addr: SocketAddr) -> Self {
+    Self {
+      dst_addr,
+      connection_idle_lifetime: crate::constants::UDP_CONNECTION_IDLE_LIFETIME,
+    }
+  }
+}
+impl From<(SocketAddr, u32)> for UdpDestination {
+  fn from((dst_addr, connection_idle_lifetime): (SocketAddr, u32)) -> Self {
+    Self {
+      dst_addr,
+      connection_idle_lifetime,
+    }
+  }
+}
+impl UdpDestination {
+  /// Get the destination socket address
+  pub fn get_destination(&self) -> SocketAddr {
+    self.dst_addr
+  }
+  /// Get the connection idle lifetime
+  pub fn get_connection_idle_lifetime(&self) -> u32 {
+    self.connection_idle_lifetime
+  }
+}
+/* ---------------------------------------------------------- */
 /// Udp destination multiplexer
 /// TODO: Load balance with multiple addresses
 #[derive(Debug, Clone, derive_builder::Builder)]
@@ -17,27 +53,41 @@ pub struct UdpDestinationMux {
   /// destination socket address for any protocol
   /// If this is set, it will be used for all protocols except the specific (non-None) protocols.
   #[builder(setter(custom), default = "None")]
-  dst_any: Option<SocketAddr>,
+  dst_any: Option<UdpDestination>,
   /// destination socket address for Wireguard protocol
   #[builder(setter(custom), default = "None")]
-  dst_wireguard: Option<SocketAddr>,
+  dst_wireguard: Option<UdpDestination>,
   // TODO: Add more protocols
 }
 
 impl UdpDestinationMuxBuilder {
+  pub fn dst_any_with_custom_lifetime(&mut self, addr: SocketAddr, lifetime: u32) -> &mut Self {
+    self.dst_any = Some(Some(UdpDestination {
+      dst_addr: addr,
+      connection_idle_lifetime: lifetime,
+    }));
+    self
+  }
   pub fn dst_any(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_any = Some(Some(addr));
+    self.dst_any = Some(Some(addr.into()));
+    self
+  }
+  pub fn dst_wireguard_with_custom_lifetime(&mut self, addr: SocketAddr, lifetime: u32) -> &mut Self {
+    self.dst_wireguard = Some(Some(UdpDestination {
+      dst_addr: addr,
+      connection_idle_lifetime: lifetime,
+    }));
     self
   }
   pub fn dst_wireguard(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_wireguard = Some(Some(addr));
+    self.dst_wireguard = Some(Some(addr.into()));
     self
   }
 }
 
 impl UdpDestinationMux {
   /// Get the destination socket address for the given protocol
-  pub fn get_destination(&self, protocol: &UdpProxyProtocol) -> Result<SocketAddr, ProxyError> {
+  pub(crate) fn get_destination(&self, protocol: &UdpProxyProtocol) -> Result<UdpDestination, ProxyError> {
     match protocol {
       // No matched protocol found from the pattern
       UdpProxyProtocol::Any => {
@@ -66,7 +116,7 @@ impl UdpDestinationMux {
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
 /// TCP proxy protocol, specific protocols like SSH, and default is "any".
-pub enum UdpProxyProtocol {
+pub(crate) enum UdpProxyProtocol {
   /// any, default
   Any,
   /// wireguard
@@ -86,7 +136,7 @@ impl std::fmt::Display for UdpProxyProtocol {
 
 impl UdpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming packet
-  pub async fn detect_protocol(incoming_buf: &[u8]) -> Result<Self, ProxyError> {
+  pub(crate) async fn detect_protocol(incoming_buf: &[u8]) -> Result<Self, ProxyError> {
     /* ------ */
     // Wireguard protocol 'initiation' detection [only Handshake]
     // Thus this may not be a reliable way to detect Wireguard protocol
@@ -104,7 +154,7 @@ impl UdpProxyProtocol {
 
     // TODO: Add more protocol detection patterns
 
-    debug!("Untyped UDP connection");
+    debug!("Untyped UDP connection detected");
     Ok(Self::Any)
   }
 }
@@ -119,6 +169,9 @@ pub struct UdpProxy {
   destination_mux: Arc<UdpDestinationMux>,
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
+  /// Max UDP concurrent connections TODO: Counter
+  #[builder(default = "crate::constants::MAX_UDP_CONCURRENT_CONNECTIONS")]
+  max_connections: u32,
 }
 
 impl UdpProxy {
@@ -134,12 +187,7 @@ impl UdpProxy {
     // clone for sending back upstream responses to the original source by each individual spawned task
     let udp_socket_tx = Arc::clone(&udp_socket_rx);
 
-    let udp_connection_pool = UdpConnectionPool::new(
-      UDP_CONNECTION_IDLE_LIFETIME, // TODO:
-      0,                            // TODO: max_connection, currently no limit
-      self.runtime_handle.clone(),
-      cancel_token.clone(),
-    );
+    let udp_connection_pool = UdpConnectionPool::new(self.max_connections, self.runtime_handle.clone(), cancel_token.clone());
 
     // Setup buffer
     let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
@@ -169,9 +217,9 @@ impl UdpProxy {
         // Handle case there is no existing connection
         debug!("No existing connection for {}", src_addr);
         let protocol = UdpProxyProtocol::detect_protocol(&udp_buf[..buf_size]).await?;
-        let dst_addr = self.destination_mux.get_destination(&protocol)?;
+        let udp_dst = self.destination_mux.get_destination(&protocol)?;
         let Ok(conn) = udp_connection_pool
-          .create_new_connection(&src_addr, &dst_addr, udp_socket_tx.clone())
+          .create_new_connection(&src_addr, &udp_dst, udp_socket_tx.clone())
           .await
         else {
           continue;

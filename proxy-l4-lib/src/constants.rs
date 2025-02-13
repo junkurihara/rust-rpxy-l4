@@ -30,3 +30,6 @@ pub const MAX_UDP_CONCURRENT_CONNECTIONS: u32 = 2048;
 /// UDP connection is managed by the source address + port.
 /// If the connection is not used for this duration, it is pruned.
 pub const UDP_CONNECTION_IDLE_LIFETIME: u32 = 30;
+
+/// Periodic interval to prune inactive UDP connections
+pub const UDP_CONNECTION_PRUNE_INTERVAL: u64 = 10;

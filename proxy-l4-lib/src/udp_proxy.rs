@@ -257,9 +257,22 @@ impl UdpProxy {
       Ok(()) as Result<(), ProxyError>
     };
 
+    let connection_pruner_service = async {
+      loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(
+          crate::constants::UDP_CONNECTION_PRUNE_INTERVAL,
+        ))
+        .await;
+        udp_connection_pool.prune_inactive_connections();
+      }
+    };
+
     tokio::select! {
       _ = listener_service => {
         error!("UDP proxy stopped");
+      }
+      _ = connection_pruner_service => {
+        error!("UDP connection pruner stopped");
       }
       _ = cancel_token.cancelled() => {
         warn!("UDP proxy cancelled");

@@ -5,7 +5,7 @@ use crate::{
   trace::*,
   udp_proxy::UdpDestination,
 };
-use arc_swap::ArcSwap;
+use aarc::AtomicArc;
 use std::{
   net::SocketAddr,
   sync::{Arc, OnceLock},
@@ -110,7 +110,9 @@ impl UdpConnectionPool {
   /// This must be called when a new UDP packet is received.
   pub(crate) fn prune_inactive_connections(&self) {
     self.inner.retain(|_, conn| {
-      let last_active = conn.inner.last_active.load();
+      let Some(last_active) = conn.inner.last_active.load() else {
+        return false;
+      };
       let elapsed = last_active.elapsed();
       if elapsed.as_secs() < conn.inner.idle_lifetime {
         return true;
@@ -123,7 +125,7 @@ impl UdpConnectionPool {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 /// Connection pool value
 pub(crate) struct UdpConnection {
   /// Sender to the UdpConnection
@@ -148,7 +150,7 @@ impl UdpConnection {
   }
 }
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 /// Udp connection
 struct UdpConnectionInner {
   /// Remote socket address of the client
@@ -171,7 +173,7 @@ struct UdpConnectionInner {
   idle_lifetime: u64,
 
   /// Last active time
-  last_active: Arc<ArcSwap<Instant>>, // TODO: ArcSwap is not appropriate for this use case
+  last_active: AtomicArc<Instant>,
 }
 
 impl UdpConnectionInner {
@@ -193,7 +195,7 @@ impl UdpConnectionInner {
     udp_socket_to_upstream.connect(dst_addr).await?;
     debug!("Connected to the upstream server: {}", dst_addr);
 
-    let last_active = Arc::new(ArcSwap::new(Arc::new(Instant::now())));
+    let last_active = AtomicArc::new(Instant::now());
 
     Ok(Self {
       src_addr,
@@ -208,7 +210,8 @@ impl UdpConnectionInner {
 
   /// Update the last active time
   fn update_last_active(&self) {
-    self.last_active.store(Arc::new(Instant::now()));
+    self.last_active.store(Some(&aarc::Arc::new(Instant::now())));
+    // self.last_active.store(Arc::new(Instant::now()));
   }
 
   /// Serve the UdpConnection

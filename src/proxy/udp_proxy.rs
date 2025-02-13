@@ -168,7 +168,10 @@ impl UdpProxy {
         debug!("No existing connection for {}", src_addr);
         let protocol = UdpProxyProtocol::detect_protocol(&udp_buf[..buf_size]).await?;
         let dst_addr = self.destination_mux.get_destination(&protocol)?;
-        let Ok(conn) = udp_connection_pool.create_new_connection(&src_addr, &dst_addr, udp_socket_tx.clone()) else {
+        let Ok(conn) = udp_connection_pool
+          .create_new_connection(&src_addr, &dst_addr, udp_socket_tx.clone())
+          .await
+        else {
           continue;
         };
         let _ = conn.send(udp_buf[..buf_size].to_vec()).await;

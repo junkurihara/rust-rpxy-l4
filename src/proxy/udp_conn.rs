@@ -95,7 +95,7 @@ impl UdpConnectionPool {
 
   /// Create and insert a new UdpConnection, and return the
   /// If the source address + port already exists, update the value.
-  pub fn create_new_connection(
+  pub async fn create_new_connection(
     &self,
     src_addr: &SocketAddr,
     dst_addr: &SocketAddr,
@@ -106,12 +106,15 @@ impl UdpConnectionPool {
       return Err(ProxyError::TooManyUdpConnections);
     }
 
-    let conn = Arc::new(UdpConnectionInner::try_new(
-      *src_addr,
-      *dst_addr,
-      udp_socket_to_downstream,
-      self.parent_cancel_token.child_token(),
-    )?);
+    let conn = Arc::new(
+      UdpConnectionInner::try_new(
+        *src_addr,
+        *dst_addr,
+        udp_socket_to_downstream,
+        self.parent_cancel_token.child_token(),
+      )
+      .await?,
+    );
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(UDP_CHANNEL_CAPACITY);
     let new_conn = UdpConnection { tx, inner: conn.clone() };
 
@@ -179,7 +182,7 @@ struct UdpConnectionInner {
 
 impl UdpConnectionInner {
   /// Create a new UdpConnection
-  fn try_new(
+  async fn try_new(
     src_addr: SocketAddr,
     dst_addr: SocketAddr,
     udp_socket_to_downstream: Arc<UdpSocket>,
@@ -190,6 +193,9 @@ impl UdpConnectionInner {
       SocketAddr::V6(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V6.get().unwrap())?),
     }
     .map(Arc::new)?;
+
+    udp_socket_to_upstream.connect(dst_addr).await?;
+    debug!("Connected to the upstream server: {}", dst_addr);
 
     let last_active = ArcSwap::new(Arc::new(Instant::now()));
 
@@ -219,18 +225,13 @@ impl UdpConnectionInner {
       // Handle multiple packets sent back from the upstream as responses
       loop {
         let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
-
-        let (buf_size, from_addr) = match udp_socket_to_upstream_rx.recv_from(&mut udp_buf).await {
+        let buf_size = match udp_socket_to_upstream_rx.recv(&mut udp_buf).await {
           Err(e) => {
             error!("Error in UDP listener for upstream: {e}");
             return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
           }
           Ok(res) => res,
         };
-        if from_addr != self.dst_addr {
-          warn!("Received packet from unexpected address: {}", from_addr);
-          continue;
-        }
 
         debug!(
           "[{} <- {}] received {} bytes from upstream",
@@ -267,7 +268,7 @@ impl UdpConnectionInner {
         );
         self.update_last_active();
 
-        if let Err(e) = upd_socket_to_upstream_tx.send_to(packet.as_slice(), self.dst_addr).await {
+        if let Err(e) = upd_socket_to_upstream_tx.send(packet.as_slice()).await {
           error!("Error sending packet to upstream: {e}");
           return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
         };
@@ -310,6 +311,7 @@ mod tests {
 
     let _udp_connection = udp_connection_pool
       .create_new_connection(&src_addr, &dst_addr, udp_socket_to_downstream)
+      .await
       .unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;

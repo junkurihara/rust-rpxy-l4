@@ -4,11 +4,6 @@ mod proxy;
 
 use crate::{log::*, proxy::*};
 use std::sync::Arc;
-// use tokio::{
-// io::copy_bidirectional,
-// net::{TcpStream, UdpSocket},
-// sync::mpsc,
-// };
 
 // Proof of concept
 fn main() {

@@ -1,7 +1,7 @@
 [package]
 name = "rust-rpxy-l4"
 description = "L4 reverse proxy written in Rust"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 readme = "./README.md"
 repository = "https://github.com/junkurihara/rust-rpxy-l4"

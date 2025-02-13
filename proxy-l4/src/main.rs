@@ -20,11 +20,13 @@ fn main() {
     let dst_any = "192.168.122.4:53".parse().unwrap();
     let dst_ssh = "192.168.50.253:59978".parse().unwrap();
     let dst_tls = "8.8.4.4:853".parse().unwrap();
+    let dst_http = "1.1.1.1:80".parse().unwrap();
     let listen_on = "[::1]:50444".parse().unwrap();
     let tcp_proxy_mux = TcpDestinationMuxBuilder::default()
       .dst_any(dst_any)
       .dst_ssh(dst_ssh)
       .dst_tls(dst_tls)
+      .dst_http(dst_http)
       .build()
       .unwrap();
     let tcp_proxy = TcpProxyBuilder::default()

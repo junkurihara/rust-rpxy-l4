@@ -28,6 +28,8 @@ pub struct TcpDestinationMux {
   dst_ssh: Option<SocketAddr>,
   #[builder(setter(custom), default = "None")]
   dst_tls: Option<SocketAddr>,
+  #[builder(setter(custom), default = "None")]
+  dst_http: Option<SocketAddr>,
   // TODO: Add more protocols
 }
 
@@ -42,6 +44,10 @@ impl TcpDestinationMuxBuilder {
   }
   pub fn dst_tls(&mut self, addr: SocketAddr) -> &mut Self {
     self.dst_tls = Some(Some(addr));
+    self
+  }
+  pub fn dst_http(&mut self, addr: SocketAddr) -> &mut Self {
+    self.dst_http = Some(Some(addr));
     self
   }
 }
@@ -82,6 +88,18 @@ impl TcpDestinationMux {
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
+      }
+      // Found HTTP protocol
+      TcpProxyProtocol::Http => {
+        if let Some(addr) = &self.dst_http {
+          debug!("Setting up dest addr specific to HTTP");
+          Ok(*addr)
+        } else if let Some(addr) = &self.dst_any {
+          debug!("Setting up dest addr for unspecified proto");
+          Ok(*addr)
+        } else {
+          Err(ProxyError::NoDestinationAddressForProtocol)
+        }
       } // TODO: Add more protocols
     }
   }
@@ -97,6 +115,8 @@ pub enum TcpProxyProtocol {
   Ssh,
   /// TLS
   Tls,
+  /// Plaintext HTTP
+  Http,
   // TODO: and more ...
 }
 
@@ -106,6 +126,7 @@ impl std::fmt::Display for TcpProxyProtocol {
       Self::Any => write!(f, "Any"),
       Self::Ssh => write!(f, "SSH"),
       Self::Tls => write!(f, "TLS"),
+      Self::Http => write!(f, "HTTP"),
       // TODO: and more...
     }
   }
@@ -139,6 +160,11 @@ impl TcpProxyProtocol {
     if is_tls_handshake(buf.as_slice()) {
       debug!("TLS connection detected");
       return Ok(Self::Tls);
+    }
+
+    if buf.windows(4).any(|w| w.eq(b"HTTP")) {
+      debug!("HTTP connection detected");
+      return Ok(Self::Http);
     }
 
     debug!("Untyped TCP connection");

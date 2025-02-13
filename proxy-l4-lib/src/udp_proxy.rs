@@ -197,7 +197,7 @@ impl UdpProxy {
     let udp_socket_tx = Arc::clone(&udp_socket_rx);
 
     // Build the UDP connection pool
-    let udp_connection_pool = UdpConnectionPool::new(self.runtime_handle.clone(), cancel_token.clone());
+    let udp_connection_pool = Arc::new(UdpConnectionPool::new(self.runtime_handle.clone(), cancel_token.clone()));
 
     // Set the initial connection count
     self.connection_count.set(self.listen_on, 0);
@@ -205,6 +205,16 @@ impl UdpProxy {
     // Setup buffer
     let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
 
+    /* ----------------- */
+    // Prune inactive connections periodically
+    self.runtime_handle.spawn({
+      let udp_connection_pool = udp_connection_pool.clone();
+      let cancel_token = cancel_token.clone();
+      let connection_count = self.connection_count.clone();
+      connection_pruner_service(self.listen_on, connection_count, udp_connection_pool, cancel_token)
+    });
+
+    /* ----------------- */
     let listener_service = async {
       loop {
         let (buf_size, src_addr) = match udp_socket_rx.recv_from(&mut udp_buf).await {
@@ -248,36 +258,54 @@ impl UdpProxy {
           .connection_count
           .set(self.listen_on, udp_connection_pool.local_pool_size());
         debug!(
-          "Current connection: (local: {}, global: {}, max: {})",
+          "Current connection: (local: {}, global: {}) @{}",
           udp_connection_pool.local_pool_size(),
           self.connection_count.current(),
-          self.max_connections
+          self.listen_on,
         );
       }
       Ok(()) as Result<(), ProxyError>
-    };
-
-    let connection_pruner_service = async {
-      loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(
-          crate::constants::UDP_CONNECTION_PRUNE_INTERVAL,
-        ))
-        .await;
-        udp_connection_pool.prune_inactive_connections();
-      }
     };
 
     tokio::select! {
       _ = listener_service => {
         error!("UDP proxy stopped");
       }
-      _ = connection_pruner_service => {
-        error!("UDP connection pruner stopped");
-      }
       _ = cancel_token.cancelled() => {
         warn!("UDP proxy cancelled");
       }
     }
     Ok(())
+  }
+}
+
+/// Connection pruner service to prune inactive connections periodically
+async fn connection_pruner_service(
+  listen_on: SocketAddr,
+  connection_count: ConnectionCountSum<SocketAddr>,
+  udp_connection_pool: Arc<UdpConnectionPool>,
+  cancel_token: CancellationToken,
+) {
+  let service = async {
+    loop {
+      tokio::time::sleep(tokio::time::Duration::from_secs(
+        crate::constants::UDP_CONNECTION_PRUNE_INTERVAL,
+      ))
+      .await;
+      udp_connection_pool.prune_inactive_connections();
+      connection_count.set(listen_on, udp_connection_pool.local_pool_size());
+      debug!(
+        "Current connection: (local: {}, global: {}) @{}",
+        udp_connection_pool.local_pool_size(),
+        connection_count.current(),
+        listen_on,
+      );
+    }
+  };
+  tokio::select! {
+    _ = service => (),
+    _ = cancel_token.cancelled() => {
+      warn!("UDP connection pruner cancelled");
+    }
   }
 }

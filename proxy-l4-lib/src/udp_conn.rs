@@ -81,7 +81,7 @@ impl UdpConnectionPool {
       )
       .await?,
     );
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(UDP_CHANNEL_CAPACITY);
+    let (tx, rx) = mpsc::channel::<Vec<u8>>(UDP_CHANNEL_CAPACITY);
     let new_conn = UdpConnection { tx, inner: conn.clone() };
 
     if let Some(old_conn) = self.inner.insert(*src_addr, new_conn.clone()) {
@@ -92,7 +92,7 @@ impl UdpConnectionPool {
     let self_clone = self.clone();
     let src_addr = *src_addr;
     self.runtime_handle.spawn(async move {
-      conn.serve(&mut rx).await;
+      conn.serve(rx, self_clone.runtime_handle.clone()).await;
       // clean up if the connection service is closed, here the connection service was already closed
       self_clone.remove(&src_addr);
     });
@@ -148,7 +148,7 @@ impl UdpConnection {
   }
 }
 /* ---------------------------------------------------------- */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// Udp connection
 struct UdpConnectionInner {
   /// Remote socket address of the client
@@ -171,7 +171,7 @@ struct UdpConnectionInner {
   idle_lifetime: u64,
 
   /// Last active time
-  last_active: ArcSwap<Instant>,
+  last_active: Arc<ArcSwap<Instant>>, // TODO: ArcSwap is not appropriate for this use case
 }
 
 impl UdpConnectionInner {
@@ -193,7 +193,7 @@ impl UdpConnectionInner {
     udp_socket_to_upstream.connect(dst_addr).await?;
     debug!("Connected to the upstream server: {}", dst_addr);
 
-    let last_active = ArcSwap::new(Arc::new(Instant::now()));
+    let last_active = Arc::new(ArcSwap::new(Arc::new(Instant::now())));
 
     Ok(Self {
       src_addr,
@@ -212,14 +212,77 @@ impl UdpConnectionInner {
   }
 
   /// Serve the UdpConnection
-  async fn serve(&self, channel_rx: &mut mpsc::Receiver<Vec<u8>>) {
+  async fn serve(&self, channel_rx: mpsc::Receiver<Vec<u8>>, runtime_handle: Handle) {
     info!("UdpConnection from {} to {} started", self.src_addr, self.dst_addr);
-    let upd_socket_to_upstream_tx = self.udp_socket_to_upstream.clone();
+    let udp_socket_to_upstream_tx = self.udp_socket_to_upstream.clone();
     let udp_socket_to_upstream_rx = self.udp_socket_to_upstream.clone();
 
     /* ---------------------------------------------------------- */
-    let service_forward_downstream = async {
-      // Handle multiple packets sent back from the upstream as responses
+    let downstream_jh = runtime_handle.clone().spawn({
+      let self_clone = self.clone();
+      async move { self_clone.service_forward_downstream(udp_socket_to_upstream_rx).await }
+    });
+
+    /* ---------------------------------------------------------- */
+    let upstream_jh = runtime_handle.clone().spawn({
+      let self_clone = self.clone();
+      async move {
+        self_clone
+          .service_forward_upstream(channel_rx, udp_socket_to_upstream_tx)
+          .await
+      }
+    });
+
+    /* ---------------------------------------------------------- */
+    match tokio::join!(downstream_jh, upstream_jh) {
+      (Err(e), _) | (_, Err(e)) => {
+        error!("Error serving UdpConnection: {e}");
+      }
+      _ => {}
+    }
+  }
+
+  /// Service to forward packets to the upstream
+  async fn service_forward_upstream(
+    &self,
+    mut channel_rx: mpsc::Receiver<Vec<u8>>,
+    udp_socket_to_upstream_tx: Arc<UdpSocket>,
+  ) -> Result<(), ProxyError> {
+    let service = async move {
+      // Handle multiple packets from the same source
+      loop {
+        let Some(packet) = channel_rx.recv().await else {
+          error!("Error receiving packet from channel");
+          return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
+        };
+        debug!(
+          "[{} -> {}] received {} bytes from downstream",
+          self.src_addr,
+          self.dst_addr,
+          packet.len()
+        );
+        self.update_last_active();
+
+        if let Err(e) = udp_socket_to_upstream_tx.send(packet.as_slice()).await {
+          error!("Error sending packet to upstream: {e}");
+          return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
+        };
+      }
+    };
+
+    tokio::select! {
+      res = service => res,
+      _ = self.cancel_token.cancelled() => {
+        debug!("UdpConnection cancelled [{} -> {}]", self.src_addr, self.dst_addr);
+        Ok(())
+      }
+    }
+  }
+
+  /// Service to forward packets to the downstream
+  async fn service_forward_downstream(&self, udp_socket_to_upstream_rx: Arc<UdpSocket>) -> Result<(), ProxyError> {
+    // Handle multiple packets sent back from the upstream as responses
+    let service = async {
       loop {
         let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
         let buf_size = match udp_socket_to_upstream_rx.recv(&mut udp_buf).await {
@@ -249,42 +312,11 @@ impl UdpConnectionInner {
       }
     };
 
-    /* ---------------------------------------------------------- */
-    let service_forward_upstream = async {
-      // Handle multiple packets from the same source
-      loop {
-        let Some(packet) = channel_rx.recv().await else {
-          error!("Error receiving packet from channel");
-          return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
-        };
-        debug!(
-          "[{} -> {}] received {} bytes from downstream",
-          self.src_addr,
-          self.dst_addr,
-          packet.len()
-        );
-        self.update_last_active();
-
-        if let Err(e) = upd_socket_to_upstream_tx.send(packet.as_slice()).await {
-          error!("Error sending packet to upstream: {e}");
-          return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
-        };
-      }
-    };
-
     tokio::select! {
-      res = service_forward_downstream => {
-        if let Err(e) = res {
-          error!("Error serving UdpConnection to downstream: {e}");
-        }
-      }
-      res = service_forward_upstream => {
-        if let Err(e) = res {
-          error!("Error serving UdpConnection to upstream: {e}");
-        }
-      }
+      res = service => res,
       _ = self.cancel_token.cancelled() => {
-        warn!("UdpConnection cancelled");
+        debug!("UdpConnection cancelled: [{} <- {}]", self.src_addr, self.dst_addr);
+        Ok(())
       }
     }
   }

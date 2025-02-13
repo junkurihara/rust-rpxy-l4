@@ -74,6 +74,14 @@ fn main() {
 
     let cancel_token = tokio_util::sync::CancellationToken::new();
 
+    // tokio::spawn({
+    //   let cancel_token = cancel_token.clone();
+    //   async move {
+    //     tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+    //     cancel_token.cancel();
+    //   }
+    // });
+
     tokio::select! {
       res = tcp_proxy_v6.start(cancel_token.child_token()) => {
         if let Err(e) = res {

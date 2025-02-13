@@ -1,7 +1,9 @@
-use super::{constants::UDP_BUFFER_SIZE, error::ProxyError, socket::bind_udp_socket};
 use crate::{
-  log::{debug, error, info, warn},
-  proxy::{constants::UDP_CONNECTION_IDLE_LIFETIME, udp_conn::UdpConnectionPool},
+  constants::{UDP_BUFFER_SIZE, UDP_CONNECTION_IDLE_LIFETIME},
+  error::ProxyError,
+  socket::bind_udp_socket,
+  trace::{debug, error, info, warn},
+  udp_conn::UdpConnectionPool,
 };
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::UdpSocket;

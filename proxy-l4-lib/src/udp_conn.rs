@@ -1,9 +1,9 @@
-use super::{
+use crate::{
   constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
   error::ProxyError,
   socket::bind_udp_socket,
+  trace::*,
 };
-use crate::log::{debug, error, info, warn};
 use arc_swap::ArcSwap;
 use std::{
   net::SocketAddr,
@@ -293,12 +293,32 @@ impl UdpConnectionInner {
   }
 }
 
+/* ---------------------------------------------------------- */
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::str::FromStr;
+  use tracing_subscriber::{fmt, prelude::*};
+
+  fn init_logger() {
+    let level = tracing::Level::from_str("debug").unwrap();
+    let passed_pkg_names = [env!("CARGO_PKG_NAME").replace('-', "_")];
+    let stdio_layer = fmt::layer()
+      .with_line_number(true)
+      .with_filter(tracing_subscriber::filter::filter_fn(move |metadata| {
+        (passed_pkg_names
+          .iter()
+          .any(|pkg_name| metadata.target().starts_with(pkg_name))
+          && metadata.level() <= &level)
+          || metadata.level() <= &tracing::Level::INFO.min(level)
+      }));
+
+    tracing_subscriber::registry().with(stdio_layer).init();
+  }
+
   #[tokio::test]
   async fn test_udp_connection_pool() {
-    crate::log::init_logger();
+    init_logger();
     let runtime_handle = tokio::runtime::Handle::current();
 
     let cancel_token = CancellationToken::new();

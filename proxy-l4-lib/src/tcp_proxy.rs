@@ -1,8 +1,11 @@
-use super::{constants::TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC, error::ProxyError, socket::bind_tcp_socket};
-use crate::{
-  log::{debug, error, info, warn},
-  proxy::{constants::TCP_PROTOCOL_DETECTION_BUFFER_SIZE, tls::is_tls_handshake},
+use super::{
+  constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
+  error::ProxyError,
+  socket::bind_tcp_socket,
+  tls::is_tls_handshake,
+  trace::*,
 };
+
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
   io::copy_bidirectional,

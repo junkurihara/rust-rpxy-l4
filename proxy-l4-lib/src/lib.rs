@@ -3,6 +3,7 @@ mod error;
 mod socket;
 mod tcp_proxy;
 mod tls;
+mod trace;
 mod udp_conn;
 mod udp_proxy;
 

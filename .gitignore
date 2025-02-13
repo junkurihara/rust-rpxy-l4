@@ -23,6 +23,6 @@ Cargo.lock
 # Added by cargo
 /target
 
-.vscode/
-.private/
-.log/
+.vscode
+.private
+.log

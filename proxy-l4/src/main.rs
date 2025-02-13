@@ -1,8 +1,8 @@
 mod config;
 mod log;
-mod proxy;
 
-use crate::{log::*, proxy::*};
+use crate::log::*;
+use rpxy_l4_lib::*;
 use std::sync::Arc;
 
 // Proof of concept
@@ -15,7 +15,7 @@ fn main() {
   init_logger();
 
   runtime.block_on(async {
-    info!("Starting rpxy layer 4");
+    info!("Starting rpxy for layer 4");
 
     let dst_any = "192.168.122.4:53".parse().unwrap();
     let dst_ssh = "192.168.50.253:59978".parse().unwrap();

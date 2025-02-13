@@ -1,4 +1,4 @@
-use crate::log::debug;
+use crate::trace::*;
 
 const TLS_RECORD_HEADER_LEN: usize = 5;
 const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;

@@ -1,4 +1,4 @@
-use crate::log::error;
+use crate::trace::*;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{SocketAddr, UdpSocket};
 use tokio::net::TcpSocket;

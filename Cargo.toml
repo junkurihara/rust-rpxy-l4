@@ -1,47 +1,23 @@
-[package]
-name = "rust-rpxy-l4"
-description = "L4 reverse proxy written in Rust"
+[workspace.package]
 version = "0.0.1"
-edition = "2021"
-readme = "./README.md"
-repository = "https://github.com/junkurihara/rust-rpxy-l4"
+authors = ["Jun Kurihara"]
 homepage = "https://github.com/junkurihara/rust-rpxy-l4"
+repository = "https://github.com/junkurihara/rust-rpxy-l4"
+license = "MIT"
+readme = "./README.md"
+edition = "2021"
 categories = ["asynchronous", "network-programming", "command-line-utilities"]
 publish = false
 
-[dependencies]
-derive_builder = { version = "0.20.2" }
+[workspace]
+members = ["proxy-l4-lib", "proxy-l4"]
+# exclude = ["submodules"]
+resolver = "2"
 
-# Connection pool
-dashmap = { version = "6.1.0" }
-ahash = { version = "0.8.11" }
-arc-swap = { version = "1.7.1" }
-
-# error handling
-# anyhow = { version = "1.0.95" }
-thiserror = { version = "2.0.11" }
-
-# traces and logs
-tracing = { version = "0.1.41" }
-tracing-subscriber = { version = "0.3.19" }
-
-# # config
-# clap = { version = "4.5.28", features = ["std", "cargo", "wrap_help"] }
-# toml = { version = "0.8.19", default-features = false, features = ["parse"] }
-
-# memory allocator
-mimalloc = { version = "*", default-features = false }
-
-# async runtime
-tokio = { version = "1.43.0", default-features = false, features = [
-  "net",
-  "rt-multi-thread",
-  "time",
-  "sync",
-  "macros",
-  "io-util",
-] }
-tokio-util = { version = "0.7.13", default-features = false }
-
-# network
-socket2 = { version = "0.5.8" }
+[profile.release]
+codegen-units = 1
+incremental = false
+lto = "fat"
+opt-level = 3
+panic = "abort"
+strip = true

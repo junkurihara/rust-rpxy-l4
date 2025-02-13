@@ -11,15 +11,15 @@ type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 pub struct ConnectionCount(Arc<AtomicUsize>);
 
 impl ConnectionCount {
-  pub fn current(&self) -> usize {
+  pub(crate) fn current(&self) -> usize {
     self.0.load(Ordering::Relaxed)
   }
 
-  pub fn increment(&self) -> usize {
+  pub(crate) fn increment(&self) -> usize {
     self.0.fetch_add(1, Ordering::Relaxed)
   }
 
-  pub fn decrement(&self) -> usize {
+  pub(crate) fn decrement(&self) -> usize {
     let mut count;
     while {
       count = self.0.load(Ordering::Relaxed);
@@ -43,11 +43,11 @@ impl<T> ConnectionCountSum<T>
 where
   T: Eq + std::hash::Hash,
 {
-  pub fn current(&self) -> usize {
+  pub(crate) fn current(&self) -> usize {
     self.0.iter().map(|v| *v.value()).sum()
   }
   /// Set or update the value for the key, returning the previous value for the key
-  pub fn set(&self, key: T, value: usize) -> usize {
+  pub(crate) fn set(&self, key: T, value: usize) -> usize {
     self.0.insert(key, value).unwrap_or(0)
   }
 }

@@ -1,0 +1,21 @@
+name: Unit Test
+
+on:
+  push:
+  pull_request:
+    types: [synchronize, opened]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Run unit tests
+        run: |
+          cargo test --verbose

@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 /* ---------------------------------------------------------- */
 /// Udp destination multiplexer
+/// TODO: Load balance with multiple addresses
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct UdpDestinationMux {
   /// destination socket address for any protocol
@@ -86,9 +87,6 @@ impl std::fmt::Display for UdpProxyProtocol {
 impl UdpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming packet
   pub async fn detect_protocol(incoming_buf: &[u8]) -> Result<Self, ProxyError> {
-    // debug!("UDP packet: {:x?}", _incoming_buf);
-    // TODO: Implement protocol detection
-
     /* ------ */
     // Wireguard protocol 'initiation' detection [only Handshake]
     // Thus this may not be a reliable way to detect Wireguard protocol
@@ -103,6 +101,8 @@ impl UdpProxyProtocol {
       debug!("Wireguard protocol (initiator to responder first message) detected");
       return Ok(Self::Wireguard);
     }
+
+    // TODO: Add more protocol detection patterns
 
     debug!("Untyped UDP connection");
     Ok(Self::Any)

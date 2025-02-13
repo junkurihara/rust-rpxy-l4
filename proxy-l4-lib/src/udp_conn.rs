@@ -33,8 +33,6 @@ type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 pub(crate) struct UdpConnectionPool {
   /// inner hashmap
   inner: DashMap<SocketAddr, UdpConnection>,
-  /// max connection. if 0, no limit
-  max_connection: usize,
   /// parent cancel token to cancel all connections
   parent_cancel_token: CancellationToken,
   /// runtime handle
@@ -43,13 +41,12 @@ pub(crate) struct UdpConnectionPool {
 
 impl UdpConnectionPool {
   /// Create a new UdpConnectionManager
-  pub(crate) fn new(max_connection: u32, runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
+  pub(crate) fn new(runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
     init_once_lock();
 
     let inner: DashMap<SocketAddr, UdpConnection> = DashMap::default();
     Self {
       inner,
-      max_connection: max_connection as usize,
       runtime_handle,
       parent_cancel_token,
     }
@@ -60,6 +57,11 @@ impl UdpConnectionPool {
     self.inner.get(src_addr).map(|arc| arc.value().clone())
   }
 
+  /// Get current connection count for this pool
+  pub(crate) fn local_pool_size(&self) -> usize {
+    self.inner.len()
+  }
+
   /// Create and insert a new UdpConnection, and return the
   /// If the source address + port already exists, update the value.
   pub(crate) async fn create_new_connection(
@@ -68,10 +70,7 @@ impl UdpConnectionPool {
     udp_dst: &UdpDestination,
     udp_socket_to_downstream: Arc<UdpSocket>,
   ) -> Result<UdpConnection, ProxyError> {
-    if self.max_connection > 0 && self.inner.len() >= self.max_connection {
-      warn!("Too many UDP connections");
-      return Err(ProxyError::TooManyUdpConnections);
-    }
+    // Connection limit is handled by the caller
 
     let conn = Arc::new(
       UdpConnectionInner::try_new(
@@ -120,7 +119,6 @@ impl UdpConnectionPool {
       conn.inner.cancel_token.cancel();
       false
     });
-    debug!("Current UDP connection count: {}", self.inner.len());
   }
 }
 
@@ -321,7 +319,7 @@ mod tests {
     let runtime_handle = tokio::runtime::Handle::current();
 
     let cancel_token = CancellationToken::new();
-    let udp_connection_pool = UdpConnectionPool::new(0, runtime_handle.clone(), cancel_token.clone());
+    let udp_connection_pool = UdpConnectionPool::new(runtime_handle.clone(), cancel_token.clone());
 
     let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
     let udp_dst = UdpDestination::from(("127.0.0.1:54321".parse::<SocketAddr>().unwrap(), 10));

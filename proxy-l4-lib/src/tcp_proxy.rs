@@ -16,6 +16,26 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 /* ---------------------------------------------------------- */
+#[derive(Debug, Clone, Copy)]
+/// Tcp destination struct
+/// TODO: Load balance with multiple addresses
+pub(crate) struct TcpDestination {
+  /// Destination socket address
+  dst_addr: SocketAddr,
+}
+impl From<SocketAddr> for TcpDestination {
+  fn from(dst_addr: SocketAddr) -> Self {
+    Self { dst_addr }
+  }
+}
+impl TcpDestination {
+  /// Get the destination socket address
+  pub(crate) fn get_destination(&self) -> SocketAddr {
+    self.dst_addr
+  }
+}
+
+/* ---------------------------------------------------------- */
 /// TCP destination multiplexer
 /// TODO: Load balance with multiple addresses
 #[derive(Debug, Clone, derive_builder::Builder)]
@@ -23,39 +43,39 @@ pub struct TcpDestinationMux {
   /// destination socket address for any protocol
   /// If this is set, it will be used for all protocols except the specific (non-None) protocols.
   #[builder(setter(custom), default = "None")]
-  dst_any: Option<SocketAddr>,
+  dst_any: Option<TcpDestination>,
   /// destination socket address for SSH protocol
   #[builder(setter(custom), default = "None")]
-  dst_ssh: Option<SocketAddr>,
+  dst_ssh: Option<TcpDestination>,
   #[builder(setter(custom), default = "None")]
-  dst_tls: Option<SocketAddr>,
+  dst_tls: Option<TcpDestination>,
   #[builder(setter(custom), default = "None")]
-  dst_http: Option<SocketAddr>,
+  dst_http: Option<TcpDestination>,
   // TODO: Add more protocols
 }
 
 impl TcpDestinationMuxBuilder {
   pub fn dst_any(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_any = Some(Some(addr));
+    self.dst_any = Some(Some(addr.into()));
     self
   }
   pub fn dst_ssh(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_ssh = Some(Some(addr));
+    self.dst_ssh = Some(Some(addr.into()));
     self
   }
   pub fn dst_tls(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_tls = Some(Some(addr));
+    self.dst_tls = Some(Some(addr.into()));
     self
   }
   pub fn dst_http(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_http = Some(Some(addr));
+    self.dst_http = Some(Some(addr.into()));
     self
   }
 }
 
 impl TcpDestinationMux {
   /// Get the destination socket address for the given protocol
-  pub fn get_destination(&self, protocol: &TcpProxyProtocol) -> Result<SocketAddr, ProxyError> {
+  pub(crate) fn get_destination(&self, protocol: &TcpProxyProtocol) -> Result<TcpDestination, ProxyError> {
     match protocol {
       // No matched protocol found from the pattern
       TcpProxyProtocol::Any => {
@@ -109,7 +129,7 @@ impl TcpDestinationMux {
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
 /// TCP proxy protocol, specific protocols like SSH, and default is "any".
-pub enum TcpProxyProtocol {
+pub(crate) enum TcpProxyProtocol {
   /// any, default
   Any,
   /// SSH
@@ -135,7 +155,7 @@ impl std::fmt::Display for TcpProxyProtocol {
 
 impl TcpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
-  pub async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
+  pub(crate) async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
     let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
     let Ok(res) = timeout(
       Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
@@ -179,18 +199,23 @@ impl TcpProxyProtocol {
 pub struct TcpProxy {
   /// Bound socket address to listen on, exposed to the client
   listen_on: SocketAddr,
+
   /// Multiplexed socket addresses, the actual destination routed for protocol types
   destination_mux: Arc<TcpDestinationMux>,
+
   #[builder(default = "super::constants::TCP_BACKLOG")]
   /// TCP backlog size
   backlog: u32,
+
   #[builder(default = "ConnectionCount::default()")]
   /// Connection counter, set shared counter if #connections of all TCP proxies are needed
   connection_count: ConnectionCount,
+
   #[builder(default = "crate::constants::MAX_TCP_CONCURRENT_CONNECTIONS")]
   /// Maximum number of concurrent connections
   /// If `cnt` is shared with other spawned TCP proxies, this value is evaluated for the total number of connections
   max_connections: usize,
+
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
 }
@@ -243,6 +268,7 @@ impl TcpProxy {
               }
             };
 
+            let dst = dst.get_destination();
             let Ok(mut outgoing_stream) = TcpStream::connect(dst).await else {
               error!("Failed to connect to the destination: {dst}");
               connection_count.decrement();

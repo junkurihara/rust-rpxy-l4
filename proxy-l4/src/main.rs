@@ -21,7 +21,8 @@ fn main() {
     let dst_ssh = "192.168.50.253:59978".parse().unwrap();
     let dst_tls = "8.8.4.4:853".parse().unwrap();
     let dst_http = "1.1.1.1:80".parse().unwrap();
-    let listen_on = "[::1]:50444".parse().unwrap();
+    let listen_on_v6 = "[::1]:50444".parse().unwrap();
+    let listen_on_v4 = "127.0.0.1:50444".parse().unwrap();
     let tcp_proxy_mux = TcpDestinationMuxBuilder::default()
       .dst_any(dst_any)
       .dst_ssh(dst_ssh)
@@ -29,10 +30,21 @@ fn main() {
       .dst_http(dst_http)
       .build()
       .unwrap();
-    let tcp_proxy = TcpProxyBuilder::default()
-      .listen_on(listen_on)
+
+    // connection count will be shared among all TCP proxies
+    let tcp_conn_count = TcpConnectionCount::default();
+    let tcp_proxy_v6 = TcpProxyBuilder::default()
+      .listen_on(listen_on_v6)
+      .destination_mux(Arc::new(tcp_proxy_mux.clone()))
+      .runtime_handle(runtime.handle().clone())
+      .connection_count(tcp_conn_count.clone())
+      .build()
+      .unwrap();
+    let tcp_proxy_v4 = TcpProxyBuilder::default()
+      .listen_on(listen_on_v4)
       .destination_mux(Arc::new(tcp_proxy_mux))
       .runtime_handle(runtime.handle().clone())
+      .connection_count(tcp_conn_count)
       .build()
       .unwrap();
 
@@ -43,24 +55,44 @@ fn main() {
       .dst_any_with_custom_lifetime("[2001:4860:4860::8888]:53".parse().unwrap(), 5)
       .build()
       .unwrap();
-    let udp_proxy = UdpProxyBuilder::default()
-      .listen_on("[::1]:50444".parse().unwrap())
+    // connection count will be shared among all UDP proxies
+    let udp_conn_count = UdpConnectionCount::<std::net::SocketAddr>::default();
+    let udp_proxy_v6 = UdpProxyBuilder::default()
+      .listen_on(listen_on_v6)
+      .destination_mux(Arc::new(udp_proxy_mux.clone()))
+      .runtime_handle(runtime.handle().clone())
+      .connection_count(udp_conn_count.clone())
+      .build()
+      .unwrap();
+    let udp_proxy_v4 = UdpProxyBuilder::default()
+      .listen_on(listen_on_v4)
       .destination_mux(Arc::new(udp_proxy_mux))
       .runtime_handle(runtime.handle().clone())
+      .connection_count(udp_conn_count)
       .build()
       .unwrap();
 
     let cancel_token = tokio_util::sync::CancellationToken::new();
 
     tokio::select! {
-      res = tcp_proxy.start(cancel_token.child_token()) => {
+      res = tcp_proxy_v6.start(cancel_token.child_token()) => {
         if let Err(e) = res {
-          error!("TCP proxy stopped: {}", e);
+          error!("TCPv6 proxy stopped: {}", e);
         }
       }
-      res = udp_proxy.start(cancel_token.child_token()) => {
+      res = tcp_proxy_v4.start(cancel_token.child_token()) => {
         if let Err(e) = res {
-          error!("UDP proxy stopped: {}", e);
+          error!("TCPv4 proxy stopped: {}", e);
+        }
+      }
+      res = udp_proxy_v6.start(cancel_token.child_token()) => {
+        if let Err(e) = res {
+          error!("UDPv6 proxy stopped: {}", e);
+        }
+      }
+      res = udp_proxy_v4.start(cancel_token.child_token()) => {
+        if let Err(e) = res {
+          error!("UDPv4 proxy stopped: {}", e);
         }
       }
     }

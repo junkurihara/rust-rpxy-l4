@@ -1,5 +1,6 @@
 use crate::{
   constants::UDP_BUFFER_SIZE,
+  count::ConnectionCountSum,
   error::ProxyError,
   socket::bind_udp_socket,
   trace::{debug, error, info, warn},
@@ -12,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, Copy)]
 /// Udp destination struct
+/// TODO: Load balance with multiple addresses
 pub(crate) struct UdpDestination {
   /// Destination socket address
   dst_addr: SocketAddr,
@@ -37,11 +39,11 @@ impl From<(SocketAddr, u32)> for UdpDestination {
 }
 impl UdpDestination {
   /// Get the destination socket address
-  pub fn get_destination(&self) -> SocketAddr {
+  pub(crate) fn get_destination(&self) -> SocketAddr {
     self.dst_addr
   }
   /// Get the connection idle lifetime
-  pub fn get_connection_idle_lifetime(&self) -> u32 {
+  pub(crate) fn get_connection_idle_lifetime(&self) -> u32 {
     self.connection_idle_lifetime
   }
 }
@@ -165,11 +167,18 @@ impl UdpProxyProtocol {
 pub struct UdpProxy {
   /// Bound socket address to listen on, exposed to the client
   listen_on: SocketAddr,
+
   /// Socket address to write on, the actual destination routed for protocol types
   destination_mux: Arc<UdpDestinationMux>,
+
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
-  /// Max UDP concurrent connections TODO: Counter
+
+  /// Connection counter, set shared counter if #connections of all TCP proxies are needed
+  #[builder(default = "ConnectionCountSum::default()")]
+  connection_count: ConnectionCountSum<SocketAddr>,
+
+  /// Max UDP concurrent connections
   #[builder(default = "crate::constants::MAX_UDP_CONCURRENT_CONNECTIONS")]
   max_connections: u32,
 }
@@ -187,7 +196,11 @@ impl UdpProxy {
     // clone for sending back upstream responses to the original source by each individual spawned task
     let udp_socket_tx = Arc::clone(&udp_socket_rx);
 
-    let udp_connection_pool = UdpConnectionPool::new(self.max_connections, self.runtime_handle.clone(), cancel_token.clone());
+    // Build the UDP connection pool
+    let udp_connection_pool = UdpConnectionPool::new(self.runtime_handle.clone(), cancel_token.clone());
+
+    // Set the initial connection count
+    self.connection_count.set(self.listen_on, 0);
 
     // Setup buffer
     let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
@@ -216,6 +229,11 @@ impl UdpProxy {
 
         // Handle case there is no existing connection
         debug!("No existing connection for {}", src_addr);
+        // Check the connection limit
+        if self.max_connections > 0 && self.connection_count.current() >= self.max_connections as usize {
+          warn!("UDP connection limit reached: {}", self.max_connections);
+          continue;
+        }
         let protocol = UdpProxyProtocol::detect_protocol(&udp_buf[..buf_size]).await?;
         let udp_dst = self.destination_mux.get_destination(&protocol)?;
         let Ok(conn) = udp_connection_pool
@@ -226,6 +244,15 @@ impl UdpProxy {
         };
         let _ = conn.send(udp_buf[..buf_size].to_vec()).await;
         // here we ignore the error, as the connection might be closed
+        self
+          .connection_count
+          .set(self.listen_on, udp_connection_pool.local_pool_size());
+        debug!(
+          "Current connection: (local: {}, global: {}, max: {})",
+          udp_connection_pool.local_pool_size(),
+          self.connection_count.current(),
+          self.max_connections
+        );
       }
       Ok(()) as Result<(), ProxyError>
     };

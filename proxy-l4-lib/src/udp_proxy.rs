@@ -59,6 +59,9 @@ pub struct UdpDestinationMux {
   /// destination socket address for Wireguard protocol
   #[builder(setter(custom), default = "None")]
   dst_wireguard: Option<UdpDestination>,
+  /// destination socket address for IETF QUIC protocol
+  #[builder(setter(custom), default = "None")]
+  dst_quic: Option<UdpDestination>,
   // TODO: Add more protocols
 }
 
@@ -83,6 +86,17 @@ impl UdpDestinationMuxBuilder {
   }
   pub fn dst_wireguard(&mut self, addr: SocketAddr) -> &mut Self {
     self.dst_wireguard = Some(Some(addr.into()));
+    self
+  }
+  pub fn dst_quic_with_custom_lifetime(&mut self, addr: SocketAddr, lifetime: u32) -> &mut Self {
+    self.dst_quic = Some(Some(UdpDestination {
+      dst_addr: addr,
+      connection_idle_lifetime: lifetime,
+    }));
+    self
+  }
+  pub fn dst_quic(&mut self, addr: SocketAddr) -> &mut Self {
+    self.dst_quic = Some(Some(addr.into()));
     self
   }
 }
@@ -111,6 +125,17 @@ impl UdpDestinationMux {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
+      UdpProxyProtocol::Quic => {
+        if let Some(addr) = &self.dst_quic {
+          debug!("Setting up dest addr for QUIC proto");
+          Ok(*addr)
+        } else if let Some(addr) = &self.dst_any {
+          debug!("Setting up dest addr for unspecified proto");
+          Ok(*addr)
+        } else {
+          Err(ProxyError::NoDestinationAddressForProtocol)
+        }
+      }
     }
   }
 }
@@ -123,6 +148,8 @@ pub(crate) enum UdpProxyProtocol {
   Any,
   /// wireguard
   Wireguard,
+  /// quic
+  Quic,
   // TODO: and more ...
 }
 
@@ -131,6 +158,7 @@ impl std::fmt::Display for UdpProxyProtocol {
     match self {
       Self::Any => write!(f, "Any"),
       Self::Wireguard => write!(f, "Wireguard"),
+      Self::Quic => write!(f, "QUIC"),
       // TODO: and more...
     }
   }
@@ -153,6 +181,11 @@ impl UdpProxyProtocol {
       debug!("Wireguard protocol (initiator to responder first message) detected");
       return Ok(Self::Wireguard);
     }
+    /* ------ */
+    // IETF QUIC protocol detection
+    // https://www.rfc-editor.org/rfc/rfc9000.html
+    // https://www.rfc-editor.org/rfc/rfc9001.html
+    debug!("{:x?}", incoming_buf);
 
     // TODO: Add more protocol detection patterns
 

@@ -1,6 +1,7 @@
 mod constants;
 mod count;
 mod error;
+mod quic;
 mod socket;
 mod tcp_proxy;
 mod tls;

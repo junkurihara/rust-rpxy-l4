@@ -2,6 +2,7 @@ use crate::{
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
   error::ProxyError,
+  quic::is_quic_handshake,
   socket::bind_udp_socket,
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
@@ -182,13 +183,13 @@ impl UdpProxyProtocol {
       return Ok(Self::Wireguard);
     }
     /* ------ */
-    // IETF QUIC protocol detection
-    // https://www.rfc-editor.org/rfc/rfc9000.html
-    // https://www.rfc-editor.org/rfc/rfc9001.html
-    debug!("{:x?}", incoming_buf);
+    // IETF QUIC handshake protocol detection
+    if is_quic_handshake(incoming_buf) {
+      debug!("IETF QUIC protocol detected");
+      return Ok(Self::Quic);
+    }
 
     // TODO: Add more protocol detection patterns
-
     debug!("Untyped UDP connection detected");
     Ok(Self::Any)
   }

@@ -2,7 +2,7 @@ use crate::{
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
   error::ProxyError,
-  quic::is_quic_handshake,
+  quic::is_quic_initial_packet,
   socket::bind_udp_socket,
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
@@ -184,7 +184,7 @@ impl UdpProxyProtocol {
     }
     /* ------ */
     // IETF QUIC handshake protocol detection
-    if is_quic_handshake(incoming_buf) {
+    if is_quic_initial_packet(incoming_buf) {
       debug!("IETF QUIC protocol detected");
       return Ok(Self::Quic);
     }

@@ -39,7 +39,38 @@ pub(crate) fn is_quic_handshake(buf: &[u8]) -> bool {
     return false;
   }
   debug!("SCID: {:x?}", &buf[ptr - scid_len..ptr]);
+  // Token length
+  // let token_len =
+  // let token_len = buf[ptr] as usize;
+  // ptr += 1 + token_len;
+  // if ptr >= buf.len() {
+  //   return false;
+  // }
+  // debug!("Token: {:x?}", &buf[ptr - token_len..ptr]);
+  // Payload length
 
   debug!("{:x?}", buf);
   false
+}
+
+/// Variable-length integer encoding
+/// https://www.rfc-editor.org/rfc/rfc9000.html#integer-encoding
+#[inline]
+fn variable_length_int(buf: &[u8], mut pos: usize) -> (usize, usize) {
+  // let mut val = buf[pos] as usize;
+  // if val & 0x80 == 0 {
+  //   return (val, pos + 1);
+  // }
+  // val &= 0x7f;
+  // let mut shift = 7;
+  // loop {
+  //   pos += 1;
+  //   val += (buf[pos] as usize) << shift;
+  //   if buf[pos] & 0x80 == 0 {
+  //     break;
+  //   }
+  //   shift += 7;
+  // }
+  // (val, pos + 1)
+  todo!()
 }

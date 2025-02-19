@@ -33,10 +33,17 @@ pub(crate) fn is_tls_handshake(buf: &[u8]) -> bool {
   }
   debug!("TLS Payload length: {}", payload_len);
 
+  is_tls_client_hello(&buf[TLS_RECORD_HEADER_LEN..], tls_version_major, tls_version_minor)
+}
+
+/// Check if the buffer is a TLS ClientHello, called from TLS and QUIC
+pub(crate) fn is_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_version_minor: u8) -> bool {
+  let mut pos = 0;
+
   // Check if the buffer is a TLS handshake
   // https://datatracker.ietf.org/doc/html/rfc8446#page-24
   // https://tools.ietf.org/html/rfc5246#section-7.4
-  let mut pos = TLS_RECORD_HEADER_LEN;
+  // let mut pos = TLS_RECORD_HEADER_LEN;
   if buf[pos] != TLS_HANDSHAKE_TYPE_CLIENT_HELLO {
     return false;
   }

@@ -199,6 +199,7 @@ fn unprotect(buf: &[u8], dcid: &[u8], pn_offset: usize, payload_len: usize) -> R
   // let nonce = Nonce::from_slice(protection_values.iv.as_slice());
   let cipher = Aes128Gcm::new(key);
   let Ok(decrypted) = cipher.decrypt(nonce, payload) else {
+    error!("Failed to decrypt");
     return Err(anyhow::anyhow!("Failed to decrypt"));
   };
 
@@ -206,10 +207,29 @@ fn unprotect(buf: &[u8], dcid: &[u8], pn_offset: usize, payload_len: usize) -> R
 }
 
 /* ---------------------------------------------------- */
-/// TODO:
+/// Build nonce for AES-GCM from IV and packet number.
+/// https://www.rfc-editor.org/rfc/rfc9000.html#name-sample-packet-number-decodi
+/// NOTE: Since we are "stateless" for the quic connection, and the packet number is not tracked,
+/// we have to assume that the largest packet number acknowledged is 0.
 fn build_nonce(iv: &[u8], pn: &[u8]) -> [u8; 12] {
+  let largest_pn: usize = 0;
+  let pn_int = pn.iter().fold(0, |acc, &b| (acc << 8) + b as usize);
+  let expected_pn = largest_pn + 1;
+  let pn_win = 1 << (pn.len() * 8);
+  // let pn_hwin = pn_win / 2;
+  let pn_mask = pn_win - 1;
+
+  let candidate_pn = (expected_pn & !pn_mask) | pn_int;
+  let candidate_pn_buf = candidate_pn.to_be_bytes();
+  debug!("Candidate packet number: {:x?}", candidate_pn_buf);
+
   let mut nonce = [0u8; 12];
-  nonce.copy_from_slice(&iv[..12]);
+  nonce.copy_from_slice(iv);
+  nonce[12 - candidate_pn_buf.len()..]
+    .iter_mut()
+    .zip(&candidate_pn_buf)
+    .for_each(|(a, b)| *a ^= b);
+
   nonce
 }
 
@@ -430,5 +450,23 @@ mod tests {
       .unwrap();
 
     assert_eq!(decrypted, plaintext);
+  }
+
+  #[test]
+  fn test_pn() {
+    let largest_pn: usize = 0xa82f30ea;
+    let truncated_pn = [0x9b, 0x32];
+    let truncated_pn_int = truncated_pn.iter().fold(0, |acc, &b| (acc << 8) + b as usize);
+    let expected_pn = largest_pn + 1;
+    let pn_win = 1 << (truncated_pn.len() * 8);
+    let pn_hwin = pn_win / 2;
+    let pn_mask = pn_win - 1;
+    println!("pn_win: {:x?}, pn_hwin: {:x?}, pn_mask: {:x?}", pn_win, pn_hwin, pn_mask);
+    println!("!pn_mask: {:x?}", !pn_mask);
+
+    let candidate_pn = (expected_pn & !pn_mask) | truncated_pn_int;
+    println!("candidate_pn: {:x?}", candidate_pn);
+    let candidate_pn_buf = candidate_pn.to_be_bytes();
+    println!("candidate_pn_bu: {:x?}", candidate_pn_buf);
   }
 }

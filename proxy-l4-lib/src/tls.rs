@@ -56,10 +56,16 @@ pub(crate) fn is_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_version
   //  - 32	Random
   //  - to	Session ID Length
   pos += 38;
+  if buf.len() < pos {
+    return false;
+  }
 
   // Session ID
   let session_id_len = buf[pos] as usize;
   pos += 1 + session_id_len;
+  if buf.len() < pos {
+    return false;
+  }
 
   // Cipher Suites
   let cipher_suites_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
@@ -67,6 +73,9 @@ pub(crate) fn is_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_version
     return false;
   }
   pos += 2 + cipher_suites_len;
+  if buf.len() < pos {
+    return false;
+  }
 
   // Compression Methods
   let compression_methods_len = buf[pos] as usize;
@@ -74,6 +83,9 @@ pub(crate) fn is_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_version
     return false;
   }
   pos += 1 + compression_methods_len;
+  if buf.len() < pos {
+    return false;
+  }
 
   // Now we are at the end of the Client Hello message.
   // If no extensions are present, the next 2 bytes, extension_type, should be 0.
@@ -83,11 +95,17 @@ pub(crate) fn is_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_version
     return false;
   }
   pos += 2;
+  if buf.len() < pos {
+    return false;
+  }
   debug!("TLS extensions_len: {}", extensions_len);
   // Check extensions
   // https://datatracker.ietf.org/doc/html/rfc8446#section-4.2
   let mut cnt = 0;
   while cnt < extensions_len {
+    if buf.len() < pos + 4 {
+      return false;
+    }
     let extension_type = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
     debug!("TLS extension_type: {:2x}", extension_type);
     // TODO: parse extension for the routing with SNI and ALPN

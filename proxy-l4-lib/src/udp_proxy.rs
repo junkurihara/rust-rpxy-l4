@@ -1,47 +1,92 @@
 use crate::{
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
+  destination::{Destination, DestinationBuilder},
   error::ProxyError,
   quic::is_quic_packet,
   socket::bind_udp_socket,
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
+  LoadBalance,
 };
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 /// Udp destination struct
-/// TODO: Load balance with multiple addresses
 pub(crate) struct UdpDestination {
   /// Destination socket address
-  dst_addr: SocketAddr,
+  inner: Destination,
   /// Connection idle lifetime in seconds
   /// If set to 0, no limit is applied for the destination
   connection_idle_lifetime: u32,
 }
-impl From<SocketAddr> for UdpDestination {
-  fn from(dst_addr: SocketAddr) -> Self {
-    Self {
-      dst_addr,
+impl TryFrom<&[SocketAddr]> for UdpDestination {
+  type Error = ProxyError;
+  fn try_from(dst_addrs: &[SocketAddr]) -> Result<Self, Self::Error> {
+    let inner = DestinationBuilder::default()
+      .dst_addrs(dst_addrs.to_vec())
+      .build()
+      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+    Ok(Self {
+      inner,
       connection_idle_lifetime: crate::constants::UDP_CONNECTION_IDLE_LIFETIME,
-    }
+    })
   }
 }
-impl From<(SocketAddr, u32)> for UdpDestination {
-  fn from((dst_addr, connection_idle_lifetime): (SocketAddr, u32)) -> Self {
-    Self {
-      dst_addr,
+impl TryFrom<(&[SocketAddr], &LoadBalance)> for UdpDestination {
+  type Error = ProxyError;
+  fn try_from((dst_addrs, load_balance): (&[SocketAddr], &LoadBalance)) -> Result<Self, Self::Error> {
+    let inner = DestinationBuilder::default()
+      .dst_addrs(dst_addrs.to_vec())
+      .load_balance(*load_balance)
+      .build()
+      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+    Ok(Self {
+      inner,
+      connection_idle_lifetime: crate::constants::UDP_CONNECTION_IDLE_LIFETIME,
+    })
+  }
+}
+impl TryFrom<(&[SocketAddr], u32)> for UdpDestination {
+  type Error = ProxyError;
+  fn try_from((dst_addrs, connection_idle_lifetime): (&[SocketAddr], u32)) -> Result<Self, Self::Error> {
+    let inner = DestinationBuilder::default()
+      .dst_addrs(dst_addrs.to_vec())
+      .build()
+      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+    Ok(Self {
+      inner,
       connection_idle_lifetime,
-    }
+    })
   }
 }
+impl TryFrom<(&[SocketAddr], &LoadBalance, u32)> for UdpDestination {
+  type Error = ProxyError;
+  fn try_from(
+    (dst_addrs, load_balance, connection_idle_lifetime): (&[SocketAddr], &LoadBalance, u32),
+  ) -> Result<Self, Self::Error> {
+    let inner = DestinationBuilder::default()
+      .dst_addrs(dst_addrs.to_vec())
+      .load_balance(*load_balance)
+      .build()
+      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+    Ok(Self {
+      inner,
+      connection_idle_lifetime,
+    })
+  }
+}
+
 impl UdpDestination {
   /// Get the destination socket address
-  pub(crate) fn get_destination(&self) -> SocketAddr {
-    self.dst_addr
+  pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
+    self
+      .inner
+      .get_destination(src_addr)
+      .map_err(ProxyError::DestinationBuilderError)
   }
   /// Get the connection idle lifetime
   pub(crate) fn get_connection_idle_lifetime(&self) -> u32 {
@@ -50,7 +95,6 @@ impl UdpDestination {
 }
 /* ---------------------------------------------------------- */
 /// Udp destination multiplexer
-/// TODO: Load balance with multiple addresses
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct UdpDestinationMux {
   /// destination socket address for any protocol
@@ -67,37 +111,55 @@ pub struct UdpDestinationMux {
 }
 
 impl UdpDestinationMuxBuilder {
-  pub fn dst_any_with_custom_lifetime(&mut self, addr: SocketAddr, lifetime: u32) -> &mut Self {
-    self.dst_any = Some(Some(UdpDestination {
-      dst_addr: addr,
-      connection_idle_lifetime: lifetime,
-    }));
+  /* --------------------- */
+  pub fn dst_any_with_lb_and_lifetime(&mut self, addrs: &[SocketAddr], lb: &LoadBalance, lifetime: u32) -> &mut Self {
+    self.dst_any = Some(UdpDestination::try_from((addrs, lb, lifetime)).ok());
     self
   }
-  pub fn dst_any(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_any = Some(Some(addr.into()));
+  pub fn dst_any_with_lifetime(&mut self, addrs: &[SocketAddr], lifetime: u32) -> &mut Self {
+    self.dst_any = Some(UdpDestination::try_from((addrs, lifetime)).ok());
     self
   }
-  pub fn dst_wireguard_with_custom_lifetime(&mut self, addr: SocketAddr, lifetime: u32) -> &mut Self {
-    self.dst_wireguard = Some(Some(UdpDestination {
-      dst_addr: addr,
-      connection_idle_lifetime: lifetime,
-    }));
+  pub fn dst_any_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
+    self.dst_any = Some(UdpDestination::try_from((addrs, lb)).ok());
     self
   }
-  pub fn dst_wireguard(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_wireguard = Some(Some(addr.into()));
+  pub fn dst_any(&mut self, addrs: &[SocketAddr]) -> &mut Self {
+    self.dst_any = Some(UdpDestination::try_from(addrs).ok());
     self
   }
-  pub fn dst_quic_with_custom_lifetime(&mut self, addr: SocketAddr, lifetime: u32) -> &mut Self {
-    self.dst_quic = Some(Some(UdpDestination {
-      dst_addr: addr,
-      connection_idle_lifetime: lifetime,
-    }));
+  /* --------------------- */
+  pub fn dst_wireguard_with_lb_and_lifetime(&mut self, addrs: &[SocketAddr], lb: &LoadBalance, lifetime: u32) -> &mut Self {
+    self.dst_wireguard = Some(UdpDestination::try_from((addrs, lb, lifetime)).ok());
     self
   }
-  pub fn dst_quic(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_quic = Some(Some(addr.into()));
+  pub fn dst_wireguard_with_lifetime(&mut self, addrs: &[SocketAddr], lifetime: u32) -> &mut Self {
+    self.dst_wireguard = Some(UdpDestination::try_from((addrs, lifetime)).ok());
+    self
+  }
+  pub fn dst_wireguard_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
+    self.dst_wireguard = Some(UdpDestination::try_from((addrs, lb)).ok());
+    self
+  }
+  pub fn dst_wireguard(&mut self, addrs: &[SocketAddr]) -> &mut Self {
+    self.dst_wireguard = Some(UdpDestination::try_from(addrs).ok());
+    self
+  }
+  /* --------------------- */
+  pub fn dst_quic_with_lb_and_lifetime(&mut self, addrs: &[SocketAddr], lb: &LoadBalance, lifetime: u32) -> &mut Self {
+    self.dst_quic = Some(UdpDestination::try_from((addrs, lb, lifetime)).ok());
+    self
+  }
+  pub fn dst_quic_with_lifetime(&mut self, addrs: &[SocketAddr], lifetime: u32) -> &mut Self {
+    self.dst_quic = Some(UdpDestination::try_from((addrs, lifetime)).ok());
+    self
+  }
+  pub fn dst_quic_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
+    self.dst_quic = Some(UdpDestination::try_from((addrs, lb)).ok());
+    self
+  }
+  pub fn dst_quic(&mut self, addrs: &[SocketAddr]) -> &mut Self {
+    self.dst_quic = Some(UdpDestination::try_from(addrs).ok());
     self
   }
 }
@@ -108,31 +170,31 @@ impl UdpDestinationMux {
     match protocol {
       // No matched protocol found from the pattern
       UdpProxyProtocol::Any => {
-        if let Some(addr) = &self.dst_any {
+        if let Some(dst) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
+          Ok(dst.clone())
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
       UdpProxyProtocol::Wireguard => {
-        if let Some(addr) = &self.dst_wireguard {
+        if let Some(dst) = &self.dst_wireguard {
           debug!("Setting up dest addr for Wireguard proto");
-          Ok(*addr)
-        } else if let Some(addr) = &self.dst_any {
+          Ok(dst.clone())
+        } else if let Some(dst) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
+          Ok(dst.clone())
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
       UdpProxyProtocol::Quic => {
-        if let Some(addr) = &self.dst_quic {
+        if let Some(dst) = &self.dst_quic {
           debug!("Setting up dest addr for QUIC proto");
-          Ok(*addr)
-        } else if let Some(addr) = &self.dst_any {
+          Ok(dst.clone())
+        } else if let Some(dst) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
+          Ok(dst.clone())
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }

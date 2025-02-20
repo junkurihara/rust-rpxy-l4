@@ -52,10 +52,10 @@ fn main() {
     /* -------------------------------------- */
     let udp_proxy_mux = UdpDestinationMuxBuilder::default()
       // .dst_any("127.0.0.1:4433".parse().unwrap())
-      .dst_wireguard_with_custom_lifetime("192.168.50.253:52280".parse().unwrap(), 30)
+      .dst_wireguard_with_lifetime(&["192.168.50.253:52280".parse().unwrap()], 30)
       // .dst_any("8.8.8.8:53".parse().unwrap())
-      .dst_any_with_custom_lifetime("8.8.8.8:53".parse().unwrap(), 5)
-      .dst_quic_with_custom_lifetime("127.0.0.1:4433".parse().unwrap(), 30)
+      .dst_any_with_lifetime(&["8.8.8.8:53".parse().unwrap()], 5)
+      .dst_quic_with_lifetime(&["127.0.0.1:4433".parse().unwrap()], 30)
       .build()
       .unwrap();
     // connection count will be shared among all UDP proxies

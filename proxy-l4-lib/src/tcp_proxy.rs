@@ -56,7 +56,6 @@ impl TcpDestination {
 
 /* ---------------------------------------------------------- */
 /// TCP destination multiplexer
-/// TODO: Load balance with multiple addresses
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct TcpDestinationMux {
   /// destination socket address for any protocol

@@ -74,8 +74,8 @@ impl UdpConnectionPool {
 
     let conn = Arc::new(
       UdpConnectionInner::try_new(
-        *src_addr,
-        *udp_dst,
+        src_addr,
+        udp_dst,
         udp_socket_to_downstream,
         self.parent_cancel_token.child_token(),
       )
@@ -179,12 +179,12 @@ struct UdpConnectionInner {
 impl UdpConnectionInner {
   /// Create a new UdpConnection
   async fn try_new(
-    src_addr: SocketAddr,
-    udp_dst: UdpDestination,
+    src_addr: &SocketAddr,
+    udp_dst: &UdpDestination,
     udp_socket_to_downstream: Arc<UdpSocket>,
     cancel_token: CancellationToken,
   ) -> Result<Self, ProxyError> {
-    let dst_addr = udp_dst.get_destination();
+    let dst_addr = udp_dst.get_destination(src_addr)?;
     let idle_lifetime = udp_dst.get_connection_idle_lifetime() as u64;
     let udp_socket_to_upstream = match dst_addr {
       SocketAddr::V4(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V4.get().unwrap())?),
@@ -193,13 +193,13 @@ impl UdpConnectionInner {
     .map(Arc::new)?;
 
     udp_socket_to_upstream.connect(dst_addr).await?;
-    debug!("Connected to the upstream server: {}", dst_addr);
+    debug!("Connected to the upstream server: {dst_addr}");
 
     let last_active = AtomicArc::new(Instant::now());
 
     Ok(Self {
-      src_addr,
-      dst_addr,
+      src_addr: *src_addr,
+      dst_addr: *dst_addr,
       udp_socket_to_upstream,
       udp_socket_to_downstream,
       cancel_token,
@@ -357,7 +357,7 @@ mod tests {
     let udp_connection_pool = UdpConnectionPool::new(runtime_handle.clone(), cancel_token.clone());
 
     let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let udp_dst = UdpDestination::from(("127.0.0.1:54321".parse::<SocketAddr>().unwrap(), 10));
+    let udp_dst = UdpDestination::try_from((["127.0.0.1:54321".parse::<SocketAddr>().unwrap()].as_slice(), 10)).unwrap();
 
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());

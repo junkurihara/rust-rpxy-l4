@@ -17,10 +17,11 @@ fn main() {
   runtime.block_on(async {
     info!("Starting rpxy for layer 4");
 
-    let dst_any = "192.168.122.4:53".parse().unwrap();
-    let dst_ssh = "192.168.50.253:59978".parse().unwrap();
-    let dst_tls = "8.8.4.4:853".parse().unwrap();
-    let dst_http = "1.1.1.1:80".parse().unwrap();
+    /* -------------------------------------- */
+    let dst_any = &["192.168.122.4:53".parse().unwrap()];
+    let dst_ssh = &["192.168.50.253:59978".parse().unwrap()];
+    let dst_tls = &["8.8.4.4:853".parse().unwrap()];
+    let dst_http = &["1.1.1.1:80".parse().unwrap()];
     let listen_on_v6 = "[::1]:50444".parse().unwrap();
     let listen_on_v4 = "127.0.0.1:50444".parse().unwrap();
     let tcp_proxy_mux = TcpDestinationMuxBuilder::default()
@@ -48,6 +49,7 @@ fn main() {
       .build()
       .unwrap();
 
+    /* -------------------------------------- */
     let udp_proxy_mux = UdpDestinationMuxBuilder::default()
       // .dst_any("127.0.0.1:4433".parse().unwrap())
       .dst_wireguard_with_custom_lifetime("192.168.50.253:52280".parse().unwrap(), 30)

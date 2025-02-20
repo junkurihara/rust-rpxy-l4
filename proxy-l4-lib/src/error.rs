@@ -17,4 +17,7 @@ pub enum ProxyError {
 
   #[error("Broken UDP connection")]
   BrokenUdpConnection,
+
+  #[error("Destination builder error: {0}")]
+  DestinationBuilderError(anyhow::Error),
 }

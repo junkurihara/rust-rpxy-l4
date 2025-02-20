@@ -1,6 +1,7 @@
 use crate::{
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
+  destination::{Destination, DestinationBuilder, LoadBalance},
   error::ProxyError,
   socket::bind_tcp_socket,
   tls::is_tls_handshake,
@@ -16,22 +17,40 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 /// Tcp destination struct
-/// TODO: Load balance with multiple addresses
 pub(crate) struct TcpDestination {
-  /// Destination socket address
-  dst_addr: SocketAddr,
+  /// Destination inner
+  inner: Destination,
 }
-impl From<SocketAddr> for TcpDestination {
-  fn from(dst_addr: SocketAddr) -> Self {
-    Self { dst_addr }
+impl TryFrom<&[SocketAddr]> for TcpDestination {
+  type Error = ProxyError;
+  fn try_from(dst_addrs: &[SocketAddr]) -> Result<Self, Self::Error> {
+    let inner = DestinationBuilder::default()
+      .dst_addrs(dst_addrs.to_vec())
+      .build()
+      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+    Ok(Self { inner })
+  }
+}
+impl TryFrom<(&[SocketAddr], &LoadBalance)> for TcpDestination {
+  type Error = ProxyError;
+  fn try_from((dst_addrs, load_balance): (&[SocketAddr], &LoadBalance)) -> Result<Self, Self::Error> {
+    let inner = DestinationBuilder::default()
+      .dst_addrs(dst_addrs.to_vec())
+      .load_balance(*load_balance)
+      .build()
+      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+    Ok(Self { inner })
   }
 }
 impl TcpDestination {
   /// Get the destination socket address
-  pub(crate) fn get_destination(&self) -> SocketAddr {
-    self.dst_addr
+  pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
+    self
+      .inner
+      .get_destination(src_addr)
+      .map_err(ProxyError::DestinationBuilderError)
   }
 }
 
@@ -55,20 +74,36 @@ pub struct TcpDestinationMux {
 }
 
 impl TcpDestinationMuxBuilder {
-  pub fn dst_any(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_any = Some(Some(addr.into()));
+  pub fn dst_any(&mut self, addrs: &[SocketAddr]) -> &mut Self {
+    self.dst_any = Some(TcpDestination::try_from(addrs).ok());
     self
   }
-  pub fn dst_ssh(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_ssh = Some(Some(addr.into()));
+  pub fn dst_any_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
+    self.dst_any = Some(TcpDestination::try_from((addrs, lb)).ok());
     self
   }
-  pub fn dst_tls(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_tls = Some(Some(addr.into()));
+  pub fn dst_ssh(&mut self, addrs: &[SocketAddr]) -> &mut Self {
+    self.dst_ssh = Some(TcpDestination::try_from(addrs).ok());
     self
   }
-  pub fn dst_http(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_http = Some(Some(addr.into()));
+  pub fn dst_ssh_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
+    self.dst_ssh = Some(TcpDestination::try_from((addrs, lb)).ok());
+    self
+  }
+  pub fn dst_tls(&mut self, addrs: &[SocketAddr]) -> &mut Self {
+    self.dst_tls = Some(TcpDestination::try_from(addrs).ok());
+    self
+  }
+  pub fn dst_tls_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
+    self.dst_tls = Some(TcpDestination::try_from((addrs, lb)).ok());
+    self
+  }
+  pub fn dst_http(&mut self, addrs: &[SocketAddr]) -> &mut Self {
+    self.dst_http = Some(TcpDestination::try_from(addrs).ok());
+    self
+  }
+  pub fn dst_http_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
+    self.dst_http = Some(TcpDestination::try_from((addrs, lb)).ok());
     self
   }
 }
@@ -79,45 +114,45 @@ impl TcpDestinationMux {
     match protocol {
       // No matched protocol found from the pattern
       TcpProxyProtocol::Any => {
-        if let Some(addr) = &self.dst_any {
+        if let Some(dst) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
+          Ok(dst.clone())
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
       // Found SSH protocol
       TcpProxyProtocol::Ssh => {
-        if let Some(addr) = &self.dst_ssh {
+        if let Some(dst) = &self.dst_ssh {
           debug!("Setting up dest addr specific to SSH");
-          Ok(*addr)
-        } else if let Some(addr) = &self.dst_any {
+          Ok(dst.clone())
+        } else if let Some(dst) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
+          Ok(dst.clone())
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
       // Found TLS protocol
       TcpProxyProtocol::Tls => {
-        if let Some(addr) = &self.dst_tls {
+        if let Some(dst) = &self.dst_tls {
           debug!("Setting up dest addr specific to TLS");
-          Ok(*addr)
-        } else if let Some(addr) = &self.dst_any {
+          Ok(dst.clone())
+        } else if let Some(dst) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
+          Ok(dst.clone())
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
       // Found HTTP protocol
       TcpProxyProtocol::Http => {
-        if let Some(addr) = &self.dst_http {
+        if let Some(dst) = &self.dst_http {
           debug!("Setting up dest addr specific to HTTP");
-          Ok(*addr)
-        } else if let Some(addr) = &self.dst_any {
+          Ok(dst.clone())
+        } else if let Some(dst) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
+          Ok(dst.clone())
         } else {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
@@ -268,9 +303,13 @@ impl TcpProxy {
               }
             };
 
-            let dst = dst.get_destination();
-            let Ok(mut outgoing_stream) = TcpStream::connect(dst).await else {
-              error!("Failed to connect to the destination: {dst}");
+            let Ok(dst_addr) = dst.get_destination(&src_addr) else {
+              error!("Failed to get destination address for {src_addr}");
+              connection_count.decrement();
+              return;
+            };
+            let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await else {
+              error!("Failed to connect to the destination: {dst_addr}");
               connection_count.decrement();
               return;
             };
@@ -302,9 +341,9 @@ mod tests {
   #[tokio::test]
   async fn test_tcp_proxy() {
     let handle = tokio::runtime::Handle::current();
-    let dst_any = "127.0.0.1:50053".parse().unwrap();
-    let dst_ssh = "127.0.0.1:50022".parse().unwrap();
-    let dst_tls = "127.0.0.1:50443".parse().unwrap();
+    let dst_any = &["127.0.0.1:50053".parse().unwrap()];
+    let dst_ssh = &["127.0.0.1:50022".parse().unwrap()];
+    let dst_tls = &["127.0.0.1:50443".parse().unwrap()];
     let dst_mux = Arc::new(
       TcpDestinationMuxBuilder::default()
         .dst_any(dst_any)

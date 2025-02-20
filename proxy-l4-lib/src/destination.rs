@@ -1,7 +1,27 @@
 use rand::Rng;
-
-use crate::load_balance::LoadBalance;
 use std::net::SocketAddr;
+
+/* ---------------------------------------------------------- */
+/// Load balancing policy
+/// Note that in the `SourceIp` and `SourceSocket` policies, a selected servers
+/// for a source IP/socket might differs when new [Destination] is created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoadBalance {
+  /// Choose a server by the source IP address
+  /// If the source IP is not changed, the same backend will be selected.
+  SourceIp,
+
+  /// Choose a server by the source socket address (IP + port).
+  /// Even if the source IP is not changed, the same backend might not be selected when the source port is different.
+  SourceSocket,
+
+  /// Randomly select a server
+  Random,
+
+  #[default]
+  /// Always select the first server [default]
+  None,
+}
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, derive_builder::Builder)]
@@ -15,7 +35,7 @@ pub(crate) struct Destination {
   /// Load balancing policy
   load_balance: LoadBalance,
 
-  /// Random source
+  /// Random source leveraged for load balancing policies [LoadBalance::SourceIp] and [LoadBalance::SourceSocket]
   #[builder(setter(skip), default = "ahash::RandomState::default()")]
   random: ahash::RandomState,
 }
@@ -30,11 +50,6 @@ impl DestinationBuilder {
     Ok(())
   }
 }
-// impl From<SocketAddr> for TcpDestination {
-//   fn from(dst_addr: SocketAddr) -> Self {
-//     Self { dst_addr }
-//   }
-// }
 impl Destination {
   /// Get the destination socket address according to the given load balancing policy
   pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, anyhow::Error> {

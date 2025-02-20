@@ -18,7 +18,7 @@ ahash = { version = "0.8.11" }
 aarc = { version = "0.3.2" }
 
 # error handling
-anyhow = { version = "1.0.95" }
+anyhow = { version = "1.0.96" }
 thiserror = { version = "2.0.11" }
 
 # traces and logs

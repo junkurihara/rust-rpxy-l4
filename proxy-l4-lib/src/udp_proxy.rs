@@ -5,6 +5,7 @@ use crate::{
   error::ProxyError,
   quic::is_quic_packet,
   socket::bind_udp_socket,
+  tls::{TlsClientHelloInfo, TlsDestinations},
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
   LoadBalance,
@@ -12,6 +13,9 @@ use crate::{
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
+
+/// Type alias for QUIC destinations
+type QuicDestinations = TlsDestinations<UdpDestination>;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
@@ -23,51 +27,16 @@ pub(crate) struct UdpDestination {
   /// If set to 0, no limit is applied for the destination
   connection_idle_lifetime: u32,
 }
-impl TryFrom<&[SocketAddr]> for UdpDestination {
-  type Error = ProxyError;
-  fn try_from(dst_addrs: &[SocketAddr]) -> Result<Self, Self::Error> {
-    let inner = DestinationBuilder::default()
-      .dst_addrs(dst_addrs.to_vec())
-      .build()
-      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
-    Ok(Self {
-      inner,
-      connection_idle_lifetime: crate::constants::UDP_CONNECTION_IDLE_LIFETIME,
-    })
-  }
-}
-impl TryFrom<(&[SocketAddr], &LoadBalance)> for UdpDestination {
-  type Error = ProxyError;
-  fn try_from((dst_addrs, load_balance): (&[SocketAddr], &LoadBalance)) -> Result<Self, Self::Error> {
-    let inner = DestinationBuilder::default()
-      .dst_addrs(dst_addrs.to_vec())
-      .load_balance(*load_balance)
-      .build()
-      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
-    Ok(Self {
-      inner,
-      connection_idle_lifetime: crate::constants::UDP_CONNECTION_IDLE_LIFETIME,
-    })
-  }
-}
-impl TryFrom<(&[SocketAddr], u32)> for UdpDestination {
-  type Error = ProxyError;
-  fn try_from((dst_addrs, connection_idle_lifetime): (&[SocketAddr], u32)) -> Result<Self, Self::Error> {
-    let inner = DestinationBuilder::default()
-      .dst_addrs(dst_addrs.to_vec())
-      .build()
-      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
-    Ok(Self {
-      inner,
-      connection_idle_lifetime,
-    })
-  }
-}
-impl TryFrom<(&[SocketAddr], &LoadBalance, u32)> for UdpDestination {
+
+impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestination {
   type Error = ProxyError;
   fn try_from(
-    (dst_addrs, load_balance, connection_idle_lifetime): (&[SocketAddr], &LoadBalance, u32),
+    (dst_addrs, load_balance, connection_idle_lifetime): (&[SocketAddr], Option<&LoadBalance>, Option<u32>),
   ) -> Result<Self, Self::Error> {
+    let binding = LoadBalance::default();
+    let load_balance = load_balance.unwrap_or(&binding);
+    let connection_idle_lifetime = connection_idle_lifetime.unwrap_or(crate::constants::UDP_CONNECTION_IDLE_LIFETIME);
+
     let inner = DestinationBuilder::default()
       .dst_addrs(dst_addrs.to_vec())
       .load_balance(*load_balance)
@@ -106,60 +75,55 @@ pub struct UdpDestinationMux {
   dst_wireguard: Option<UdpDestination>,
   /// destination socket address for IETF QUIC protocol
   #[builder(setter(custom), default = "None")]
-  dst_quic: Option<UdpDestination>,
+  dst_quic: Option<QuicDestinations>,
   // TODO: Add more protocols
 }
 
 impl UdpDestinationMuxBuilder {
   /* --------------------- */
-  pub fn dst_any_with_lb_and_lifetime(&mut self, addrs: &[SocketAddr], lb: &LoadBalance, lifetime: u32) -> &mut Self {
-    self.dst_any = Some(UdpDestination::try_from((addrs, lb, lifetime)).ok());
-    self
-  }
-  pub fn dst_any_with_lifetime(&mut self, addrs: &[SocketAddr], lifetime: u32) -> &mut Self {
-    self.dst_any = Some(UdpDestination::try_from((addrs, lifetime)).ok());
-    self
-  }
-  pub fn dst_any_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
-    self.dst_any = Some(UdpDestination::try_from((addrs, lb)).ok());
-    self
-  }
-  pub fn dst_any(&mut self, addrs: &[SocketAddr]) -> &mut Self {
-    self.dst_any = Some(UdpDestination::try_from(addrs).ok());
+  pub fn dst_any(&mut self, addrs: &[SocketAddr], load_balance: Option<&LoadBalance>, lifetime: Option<u32>) -> &mut Self {
+    let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
+    if udp_dest.is_err() {
+      return self;
+    }
+    self.dst_any = Some(udp_dest.ok());
     self
   }
   /* --------------------- */
-  pub fn dst_wireguard_with_lb_and_lifetime(&mut self, addrs: &[SocketAddr], lb: &LoadBalance, lifetime: u32) -> &mut Self {
-    self.dst_wireguard = Some(UdpDestination::try_from((addrs, lb, lifetime)).ok());
-    self
-  }
-  pub fn dst_wireguard_with_lifetime(&mut self, addrs: &[SocketAddr], lifetime: u32) -> &mut Self {
-    self.dst_wireguard = Some(UdpDestination::try_from((addrs, lifetime)).ok());
-    self
-  }
-  pub fn dst_wireguard_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
-    self.dst_wireguard = Some(UdpDestination::try_from((addrs, lb)).ok());
-    self
-  }
-  pub fn dst_wireguard(&mut self, addrs: &[SocketAddr]) -> &mut Self {
-    self.dst_wireguard = Some(UdpDestination::try_from(addrs).ok());
+  pub fn dst_wireguard(&mut self, addrs: &[SocketAddr], load_balance: Option<&LoadBalance>, lifetime: Option<u32>) -> &mut Self {
+    let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
+    if udp_dest.is_err() {
+      return self;
+    }
+    self.dst_any = Some(udp_dest.ok());
     self
   }
   /* --------------------- */
-  pub fn dst_quic_with_lb_and_lifetime(&mut self, addrs: &[SocketAddr], lb: &LoadBalance, lifetime: u32) -> &mut Self {
-    self.dst_quic = Some(UdpDestination::try_from((addrs, lb, lifetime)).ok());
-    self
-  }
-  pub fn dst_quic_with_lifetime(&mut self, addrs: &[SocketAddr], lifetime: u32) -> &mut Self {
-    self.dst_quic = Some(UdpDestination::try_from((addrs, lifetime)).ok());
-    self
-  }
-  pub fn dst_quic_with_lb(&mut self, addrs: &[SocketAddr], lb: &LoadBalance) -> &mut Self {
-    self.dst_quic = Some(UdpDestination::try_from((addrs, lb)).ok());
-    self
-  }
-  pub fn dst_quic(&mut self, addrs: &[SocketAddr]) -> &mut Self {
-    self.dst_quic = Some(UdpDestination::try_from(addrs).ok());
+  pub fn dst_quic(
+    &mut self,
+    addrs: &[SocketAddr],
+    load_balance: Option<&LoadBalance>,
+    lifetime: Option<u32>,
+    server_names: Option<&[&str]>,
+  ) -> &mut Self {
+    let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
+    if udp_dest.is_err() {
+      return self;
+    }
+
+    let udp_dest = udp_dest.unwrap();
+    let mut current = if self.dst_quic.as_ref().is_none_or(|d| d.is_none()) {
+      TlsDestinations::<UdpDestination>::new()
+    } else {
+      self.dst_quic.as_ref().unwrap().as_ref().unwrap().clone()
+    };
+
+    if let Some(server_names) = server_names {
+      current.add(server_names, udp_dest);
+    } else {
+      current.add(&[], udp_dest);
+    }
+    self.dst_quic = Some(Some(current));
     self
   }
 }
@@ -188,10 +152,14 @@ impl UdpDestinationMux {
           Err(ProxyError::NoDestinationAddressForProtocol)
         }
       }
-      UdpProxyProtocol::Quic => {
+      UdpProxyProtocol::Quic(client_hello_info) => {
         if let Some(dst) = &self.dst_quic {
           debug!("Setting up dest addr for QUIC proto");
-          Ok(dst.clone())
+          if let Some(found) = dst.find(&client_hello_info.server_name) {
+            Ok(found.clone())
+          } else {
+            Err(ProxyError::NoDestinationAddressForProtocol)
+          }
         } else if let Some(dst) = &self.dst_any {
           debug!("Setting up dest addr for unspecified proto");
           Ok(dst.clone())
@@ -212,7 +180,7 @@ pub(crate) enum UdpProxyProtocol {
   /// wireguard
   Wireguard,
   /// quic
-  Quic,
+  Quic(TlsClientHelloInfo),
   // TODO: and more ...
 }
 
@@ -221,7 +189,7 @@ impl std::fmt::Display for UdpProxyProtocol {
     match self {
       Self::Any => write!(f, "Any"),
       Self::Wireguard => write!(f, "Wireguard"),
-      Self::Quic => write!(f, "QUIC"),
+      Self::Quic(_) => write!(f, "QUIC"),
       // TODO: and more...
     }
   }
@@ -248,7 +216,10 @@ impl UdpProxyProtocol {
     // IETF QUIC handshake protocol detection
     if is_quic_packet(incoming_buf) {
       debug!("IETF QUIC protocol detected");
-      return Ok(Self::Quic);
+      return Ok(Self::Quic(TlsClientHelloInfo {
+        server_name: "".to_string(),
+        alpn: "".to_string(),
+      })); // TODO: return client hello info for TLS TODO: TODO:
     }
 
     // TODO: Add more protocol detection patterns

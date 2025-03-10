@@ -1,5 +1,62 @@
 use crate::trace::*;
 
+/* ---------------------------------------------------------- */
+#[derive(Debug, Clone, Default)]
+/// TLS Server Name Indication (SNI) for routing
+pub(crate) struct TlsServerNames {
+  /// Matched SNIs for the destination
+  /// If empty, any SNI is allowed
+  server_names: Vec<String>,
+}
+impl From<&[&str]> for TlsServerNames {
+  fn from(server_names: &[&str]) -> Self {
+    Self {
+      server_names: server_names.iter().map(|s| s.to_lowercase()).collect(),
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+/// Router for TLS/QUIC destinations
+pub(crate) struct TlsDestinations<T> {
+  /// inner
+  inner: Vec<(TlsServerNames, T)>,
+}
+impl<T> TlsDestinations<T> {
+  /// Create a new instance
+  pub(crate) fn new() -> Self {
+    Self { inner: Vec::new() }
+  }
+  /// Add a destination with SNI
+  pub(crate) fn add(&mut self, server_names: &[&str], dest: T) {
+    self.inner.push((TlsServerNames::from(server_names), dest));
+  }
+  /// Find a destination by SNI
+  pub(crate) fn find(&self, server_name: &str) -> Option<&T> {
+    let server_name = server_name.to_lowercase();
+    let filtered = {
+      let matched = self.inner.iter().find(|(snis, _)| snis.server_names.contains(&server_name));
+      if matched.is_none() {
+        self.inner.iter().find(|(snis, _)| snis.server_names.is_empty())
+      } else {
+        matched
+      }
+    };
+    filtered.map(|(_, dest)| dest)
+  }
+}
+/* ---------------------------------------------------------- */
+#[derive(Debug, Clone)]
+/// Probed TLS ClientHello information
+pub(crate) struct TlsClientHelloInfo {
+  /// SNI
+  pub(crate) server_name: String,
+  /// TODO: ALPN
+  #[allow(unused)]
+  pub(crate) alpn: String,
+  //TODO: /// ECH info
+}
+/* ---------------------------------------------------------- */
 const TLS_RECORD_HEADER_LEN: usize = 5;
 const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;

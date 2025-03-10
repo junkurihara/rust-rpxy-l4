@@ -357,7 +357,8 @@ mod tests {
     let udp_connection_pool = UdpConnectionPool::new(runtime_handle.clone(), cancel_token.clone());
 
     let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let udp_dst = UdpDestination::try_from((["127.0.0.1:54321".parse::<SocketAddr>().unwrap()].as_slice(), 10)).unwrap();
+    let udp_dst =
+      UdpDestination::try_from((["127.0.0.1:54321".parse::<SocketAddr>().unwrap()].as_slice(), None, Some(10))).unwrap();
 
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());

@@ -25,10 +25,10 @@ fn main() {
     let listen_on_v6 = "[::1]:50444".parse().unwrap();
     let listen_on_v4 = "127.0.0.1:50444".parse().unwrap();
     let tcp_proxy_mux = TcpDestinationMuxBuilder::default()
-      .dst_any(dst_any)
-      .dst_ssh(dst_ssh)
-      .dst_tls(dst_tls)
-      .dst_http(dst_http)
+      .dst_any(dst_any, None)
+      .dst_ssh(dst_ssh, None)
+      .dst_http(dst_http, None)
+      .dst_tls(dst_tls, None, None)
       .build()
       .unwrap();
 
@@ -52,10 +52,10 @@ fn main() {
     /* -------------------------------------- */
     let udp_proxy_mux = UdpDestinationMuxBuilder::default()
       // .dst_any("127.0.0.1:4433".parse().unwrap())
-      .dst_wireguard_with_lifetime(&["192.168.50.253:52280".parse().unwrap()], 30)
+      .dst_wireguard(&["192.168.50.253:52280".parse().unwrap()], None, Some(30))
       // .dst_any("8.8.8.8:53".parse().unwrap())
-      .dst_any_with_lifetime(&["8.8.8.8:53".parse().unwrap()], 5)
-      .dst_quic_with_lifetime(&["127.0.0.1:4433".parse().unwrap()], 30)
+      .dst_any(&["8.8.8.8:53".parse().unwrap()], None, Some(5))
+      .dst_quic(&["127.0.0.1:4433".parse().unwrap()], None, Some(30), None)
       .build()
       .unwrap();
     // connection count will be shared among all UDP proxies

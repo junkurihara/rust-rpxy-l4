@@ -24,7 +24,7 @@ tracing-subscriber = { version = "0.3.19" }
 mimalloc = { version = "*", default-features = false }
 
 # async runtime
-tokio = { version = "1.43.0", default-features = false, features = [
+tokio = { version = "1.44.0", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",

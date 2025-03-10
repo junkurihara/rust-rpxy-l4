@@ -1,0 +1,136 @@
+########################################
+#   Example configuration of rpxy-L4   #
+########################################
+
+###################
+# Global settings #
+###################
+
+# Listen port, must be set
+listen_ports = [50443, 50080]
+
+# (Optional) Listen [::], [default: false]
+listen_ipv6 = true
+
+# (Optional) TCP backlog size [default: 1024]
+tcp_backlog = 1024
+
+# (Optional) Maximum TCP connections [default: 1024]
+tcp_max_connections = 1024
+
+# (Optional) Maximum UDP connections [default: 2048]
+udp_max_connections = 2048
+
+# (Optional) Default targets for TCP connections. [default: empty]
+# If specified, connections that are not detected as specified protocols will be forwarded to these targets.
+# Otherwise, only specified protocols pass through and others are dropped.
+# Format: ["<ip>:<port>", "<ip>:<port>", ...]
+tcp_target = ["192.168.122.4:53"]
+
+# (Optional) Load balancing method for default targets [default: none]
+# - source_ip: based on source IP hash
+# - source_socket: based on source IP and port hash
+# - random: random selection
+# - none: always use the first target
+tcp_load_balance = "source_ip" # source_ip, source_socket, random, or none
+
+# (Optional) Default targets for UDP connections. [default: empty]
+udp_target = ["192.168.122.4:53"]
+
+# (Optional) Load balancing method for default targets [default: none]
+udp_load_balance = "source_ip"
+
+
+#########################
+# Per-protocol settings #
+#########################
+[protocols]
+
+# Note that multiple entries with `protocols = "tls"` or `"quic"` can be configured.
+# On the other hand, only one entry with `protocols = "ssh"`, `"http"`, or `"wireguard"` can be configured.
+
+#########################
+### Example for TLS
+[protocols."tls_1"]
+# Name of protocol tls|ssh|http|wireguard|quic
+protocol = "tls"
+
+# Target for connections detected as the `protocol`.
+target = ["192.168.122.4:443"]
+
+# (Optional) Load balancing method specific to this connections [default: none]
+load_balance = "source_ip"
+
+# (Optional) Accept ports for this protocol [default: same as `listen_ports`]
+# If not specified, all TCP or UDP connections through `listen_ports` are probed for the specified protocol.
+# If specified, only connections through the specified ports are probed.
+accept_ports = [50443]
+
+#########################
+### Example for TLS with SNI routing
+[protocols."tls_2"]
+protocol = "tls"
+target = ["192.168.122.5:443"]
+load_balance = "source_ip"
+accept_ports = [50443]
+
+# (Optional) SNI-based routing for TLS/QUIC connections, only valid when `protocol = "tls"` or `"quic"`.
+# If specified, only TLS/QUIC connections matched to the given SNI(s) are forwarded to the target.
+# Format: ["<server_name>", "<server_name>", ...]
+server_name = ["example.com", "example.org"]
+
+#########################
+### Example for TLS with ECH support
+[protocols."tls_3"]
+protocol = "tls"
+target = ["192.168.122.6:443"]
+load_balance = "source_ip"
+accept_ports = [50443]
+server_name = ["example.com", "example.org"]
+
+# (Optional) Support for encrypted client hello (ECH) for TLS connections, only valid when `protocol = "tls"` or `"quic"` and `server_name` is set.
+# If specified, the proxy will attempts to decrypt the encrypted InnerClientHello contained in the OuterClientHello matched to the SNI-matched connections.
+# For instance, when TLS ClientHello with SNI "example.com" (Outer) is given, the proxy will decrypts the encrypted part of the ClientHello (Inner).
+# Then it forwards the plaintext ClientHello to the target. TODO:
+ech_config = { private_keys = ["/path/to/private.key"] }
+
+
+#########################
+### Example for QUIC
+[protocols."quic"]
+# Name of protocol tls|ssh|http|wireguard|quic
+protocol = "quic"
+
+# Target for connections detected as QUIC.
+target = ["192.168.122.4:443"]
+
+# Load balancing method for QUIC connections [default: none]
+load_balance = "source_ip"
+
+# (Optional) Accept ports for QUIC connections. [default: same as `listen_ports`]
+accept_ports = [50443]
+
+#########################
+### Example for SSH
+[protocols."ssh"]
+# Name of protocol tls|ssh|http|wireguard|quic
+protocol = "ssh"
+
+# Target for connections detected as SSH.
+target = ["192.168.122.4:22"]
+
+# Load balancing method for SSH connections [default: none]
+load_balance = "source_ip"
+
+# (Optional) Accept ports for SSH connections. [default: same as `listen_ports`]
+# accept_ports = [50443, 50080]
+
+
+#################################
+#      Experimental setting     #
+#################################
+[experimental]
+
+######
+# Experimental settings for Encrypted Client Hello for TLS and QUIC
+[experimental.ech]

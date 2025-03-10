@@ -7,7 +7,8 @@
 ###################
 
 # Listen port, must be set
-listen_ports = [50443, 50080]
+# Is it nice to have multiple listen ports?
+listen_port = 50443
 
 # (Optional) Listen [::], [default: false]
 listen_ipv6 = true
@@ -61,10 +62,6 @@ target = ["192.168.122.4:443"]
 # (Optional) Load balancing method specific to this connections [default: none]
 load_balance = "source_ip"
 
-# (Optional) Accept ports for this protocol [default: same as `listen_ports`]
-# If not specified, all TCP or UDP connections through `listen_ports` are probed for the specified protocol.
-# If specified, only connections through the specified ports are probed.
-accept_ports = [50443]
 
 #########################
 ### Example for TLS with SNI routing
@@ -72,12 +69,11 @@ accept_ports = [50443]
 protocol = "tls"
 target = ["192.168.122.5:443"]
 load_balance = "source_ip"
-accept_ports = [50443]
 
 # (Optional) SNI-based routing for TLS/QUIC connections, only valid when `protocol = "tls"` or `"quic"`.
 # If specified, only TLS/QUIC connections matched to the given SNI(s) are forwarded to the target.
 # Format: ["<server_name>", "<server_name>", ...]
-server_name = ["example.com", "example.org"]
+server_names = ["example.com", "example.org"]
 
 #########################
 ### Example for TLS with ECH support
@@ -85,12 +81,11 @@ server_name = ["example.com", "example.org"]
 protocol = "tls"
 target = ["192.168.122.6:443"]
 load_balance = "source_ip"
-accept_ports = [50443]
-server_name = ["example.com", "example.org"]
+server_names = ["example.net"]
 
 # (Optional) Support for encrypted client hello (ECH) for TLS connections, only valid when `protocol = "tls"` or `"quic"` and `server_name` is set.
 # If specified, the proxy will attempts to decrypt the encrypted InnerClientHello contained in the OuterClientHello matched to the SNI-matched connections.
-# For instance, when TLS ClientHello with SNI "example.com" (Outer) is given, the proxy will decrypts the encrypted part of the ClientHello (Inner).
+# For instance, when TLS ClientHello with SNI "example.net" (Outer) is given, the proxy will decrypts the encrypted part of the ClientHello (Inner).
 # Then it forwards the plaintext ClientHello to the target. TODO:
 ech_config = { private_keys = ["/path/to/private.key"] }
 
@@ -107,8 +102,8 @@ target = ["192.168.122.4:443"]
 # Load balancing method for QUIC connections [default: none]
 load_balance = "source_ip"
 
-# (Optional) Accept ports for QUIC connections. [default: same as `listen_ports`]
-accept_ports = [50443]
+# server_names = ["example.com", "example.org"]
+# ech_config = { private_keys = ["/path/to/private.key"] }
 
 #########################
 ### Example for SSH
@@ -122,11 +117,16 @@ target = ["192.168.122.4:22"]
 # Load balancing method for SSH connections [default: none]
 load_balance = "source_ip"
 
-# (Optional) Accept ports for SSH connections. [default: same as `listen_ports`]
-# accept_ports = [50443, 50080]
-
 
 #################################
 #      Experimental setting     #
 #################################
 [experimental]
+
+
+################################################################################################
+# NOT IMPLEMENTED JUST AN IDEA
+# # (Optional) Acceptable incoming ports for this protocol [default: same as `listen_ports`]
+# # If not specified, all TCP or UDP connections through `listen_ports` are probed for the specified protocol.
+# # If specified, only connections through the specified ports are probed.
+# listen_ports = [50443]

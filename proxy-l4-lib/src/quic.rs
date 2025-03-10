@@ -1,4 +1,7 @@
-use crate::{tls::is_tls_client_hello, trace::*};
+use crate::{
+  tls::{probe_tls_client_hello, TlsClientHelloInfo},
+  trace::*,
+};
 
 const QUIC_VERSION: &[u8] = &[0x00, 0x00, 0x00, 0x01];
 const INITIAL_SALT: &[u8] = &[
@@ -18,47 +21,46 @@ const QUIC_HP: &[u8] = &[
 ];
 
 /* ---------------------------------------------------- */
-pub(crate) fn is_quic_packet(buf: &[u8]) -> bool {
+pub(crate) fn probe_quic_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
   if buf.is_empty() {
-    return false;
+    return None;
   }
-  // We consider version negotiation packet and initial packet only
-  // since only communication initiated from the client is expected.
+  // We consider version initial packet only since only communication initiated from the client is expected.
   match buf[0] {
-    0x80..=0xbf => is_quic_version_negotiation_packet(buf),
-    0xc0..=0xcf => is_quic_initial_packet(buf),
-    _ => false,
+    0x80..=0xbf => None, // version negotiation packet, but it is sent by the server as a response to the client
+    0xc0..=0xcf => probe_quic_initial_packet(buf),
+    _ => None,
   }
 }
 
-/* ---------------------------------------------------- */
-/// Check if the buffer contains a QUIC version negotiation packet.
-fn is_quic_version_negotiation_packet(buf: &[u8]) -> bool {
-  // header(1), version(4), DCID length(1), SCID length(1)
-  if buf.len() < 7 {
-    return false;
-  }
-  // Packet header byte: 0b1xxx_xxxx
-  if buf[0] & 0x80 == 0 {
-    return false;
-  }
-  // Version: 0x00000000
-  if !buf[1..5].eq(&[0x00, 0x00, 0x00, 0x00]) {
-    return false;
-  }
-  let mut ptr = 5;
-  let Ok((_dcid, _scid)) = dcid_scid(buf, &mut ptr) else {
-    return false;
-  };
+// /* ---------------------------------------------------- */
+// /// Check if the buffer contains a QUIC version negotiation packet.
+// fn is_quic_version_negotiation_packet(buf: &[u8]) -> bool {
+//   // header(1), version(4), DCID length(1), SCID length(1)
+//   if buf.len() < 7 {
+//     return false;
+//   }
+//   // Packet header byte: 0b1xxx_xxxx
+//   if buf[0] & 0x80 == 0 {
+//     return false;
+//   }
+//   // Version: 0x00000000
+//   if !buf[1..5].eq(&[0x00, 0x00, 0x00, 0x00]) {
+//     return false;
+//   }
+//   let mut ptr = 5;
+//   let Ok((_dcid, _scid)) = dcid_scid(buf, &mut ptr) else {
+//     return false;
+//   };
 
-  // Supported versions, each 4 bytes
-  let remained = buf.len() - ptr;
-  if remained % 4 != 0 {
-    return false;
-  }
+//   // Supported versions, each 4 bytes
+//   let remained = buf.len() - ptr;
+//   if remained % 4 != 0 {
+//     return false;
+//   }
 
-  true
-}
+//   true
+// }
 
 /* ---------------------------------------------------- */
 /// Check if the buffer contains a QUIC initial packet with TLS ClientHello.
@@ -68,75 +70,75 @@ fn is_quic_version_negotiation_packet(buf: &[u8]) -> bool {
 /// - First checks if the buffer is consistent with a QUIC initial packet.
 /// - Then derive the header protection key and decrypt the packet.
 /// - Finally, check if the decrypted packet is consistent with a QUIC TLS ClientHello.
-fn is_quic_initial_packet(buf: &[u8]) -> bool {
+fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
   // header(1), version(4), DCID length(1), SCID length(1)
   if buf.len() < 7 {
-    return false;
+    return None;
   }
   // Packet header byte
   // 0b1100_[0000] - Long header for initial packet type
   // with protected packet number field length ([0000])
   // omitting the protected part.
   if buf[0] & 0xf0 != 0xc0 {
-    return false;
+    return None;
   }
   // Version
   if !buf[1..5].eq(QUIC_VERSION) {
-    return false;
+    return None;
   }
   let mut ptr = 5;
   let Ok((dcid, _scid)) = dcid_scid(buf, &mut ptr) else {
-    return false;
+    return None;
   };
   // Token length
   let Ok(token_len) = variable_length_int(buf, &mut ptr) else {
-    return false;
+    return None;
   };
   ptr += token_len;
   if ptr >= buf.len() {
-    return false;
+    return None;
   }
   debug!("Token: {:x?}", &buf[ptr - token_len..ptr]);
   // Payload length
   let Ok(payload_len) = variable_length_int(buf, &mut ptr) else {
-    return false;
+    return None;
   };
 
   if ptr + payload_len >= buf.len() {
-    return false;
+    return None;
   }
   debug!("Payload: {:x?}", &buf[ptr..ptr + payload_len]);
   // The remaining part should be padded frames
   if buf[ptr + payload_len..].iter().any(|&b| b != 0) {
-    return false;
+    return None;
   }
 
   // So far, the buffer is consistent with a QUIC initial packet.
   // Now, try to decrypt the packet and check if it is a TLS ClientHello.
   let Ok(expected_crypto_frame) = unprotect(buf, &dcid, ptr, payload_len) else {
-    return false;
+    return None;
   };
   debug!("Expected crypto frame: {:x?}", expected_crypto_frame);
   let mut ptr = 0;
   // Frame type
   if expected_crypto_frame[ptr] != 0x06 {
-    return false;
+    return None;
   }
   ptr += 1;
   // Frame offset
   let Ok(_frame_offset) = variable_length_int(&expected_crypto_frame, &mut ptr) else {
-    return false;
+    return None;
   };
   // Crypto data length
   let Ok(crypto_data_len) = variable_length_int(&expected_crypto_frame, &mut ptr) else {
-    return false;
+    return None;
   };
   if ptr + crypto_data_len > expected_crypto_frame.len() {
-    return false;
+    return None;
   }
   let crypto_data = &expected_crypto_frame[ptr..ptr + crypto_data_len];
   debug!("Crypto data: {:x?}", crypto_data);
-  is_tls_client_hello(crypto_data, 3, 2)
+  probe_tls_client_hello(crypto_data, 3, 2)
 }
 
 /* ---------------------------------------------------- */

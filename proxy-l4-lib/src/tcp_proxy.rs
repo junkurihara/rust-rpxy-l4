@@ -4,7 +4,7 @@ use crate::{
   destination::{Destination, DestinationBuilder, LoadBalance},
   error::ProxyError,
   socket::bind_tcp_socket,
-  tls::{is_tls_handshake, TlsClientHelloInfo},
+  tls::{probe_tls_handshake, TlsClientHelloInfo},
   trace::*,
 };
 use std::{net::SocketAddr, sync::Arc};
@@ -233,12 +233,9 @@ impl TcpProxyProtocol {
       return Ok(Self::Ssh);
     }
 
-    if is_tls_handshake(buf.as_slice()) {
+    if let Some(info) = probe_tls_handshake(buf.as_slice()) {
       debug!("TLS connection detected");
-      return Ok(Self::Tls(TlsClientHelloInfo {
-        server_name: "".to_string(),
-        alpn: "".to_string(),
-      })); // TODO: return client hello info for TLS TODO: TODO:
+      return Ok(Self::Tls(info));
     }
 
     if buf.windows(4).any(|w| w.eq(b"HTTP")) {

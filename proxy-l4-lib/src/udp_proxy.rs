@@ -3,7 +3,7 @@ use crate::{
   count::ConnectionCountSum,
   destination::{Destination, DestinationBuilder},
   error::ProxyError,
-  quic::is_quic_packet,
+  quic::probe_quic_packet,
   socket::bind_udp_socket,
   tls::{TlsClientHelloInfo, TlsDestinations},
   trace::{debug, error, info, warn},
@@ -214,12 +214,9 @@ impl UdpProxyProtocol {
     }
     /* ------ */
     // IETF QUIC handshake protocol detection
-    if is_quic_packet(incoming_buf) {
+    if let Some(info) = probe_quic_packet(incoming_buf) {
       debug!("IETF QUIC protocol detected");
-      return Ok(Self::Quic(TlsClientHelloInfo {
-        server_name: "".to_string(),
-        alpn: "".to_string(),
-      })); // TODO: return client hello info for TLS TODO: TODO:
+      return Ok(Self::Quic(info));
     }
 
     // TODO: Add more protocol detection patterns

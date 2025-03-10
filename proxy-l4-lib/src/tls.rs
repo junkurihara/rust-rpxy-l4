@@ -49,9 +49,9 @@ impl<T> TlsDestinations<T> {
 #[derive(Debug, Clone)]
 /// Probed TLS ClientHello information
 pub(crate) struct TlsClientHelloInfo {
-  /// SNI
+  /// SNI TODO: Make this a list
   pub(crate) server_name: String,
-  /// TODO: ALPN
+  /// TODO: ALPN Make this a list
   #[allow(unused)]
   pub(crate) alpn: String,
   //TODO: /// ECH info
@@ -174,6 +174,12 @@ pub(crate) fn probe_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_vers
     cnt += 2;
     // let extension_payload = &buf[pos..pos + extension_len];
     // debug!("TLS extension_payload: {:?}", extension_payload);
+    if extension_type.eq(&0x00) {
+      debug!("Found Server Name Indication extension");
+      let extension_payload = &buf[pos..pos + extension_len];
+      let sni = parse_sni(extension_payload);
+      println!("SNI: {:?}", sni);
+    }
     pos += extension_len;
     cnt += extension_len;
   }
@@ -189,4 +195,45 @@ pub(crate) fn probe_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_vers
     server_name: String::new(),
     alpn: String::new(),
   })
+}
+
+/// Parse server name from the SNI extension
+pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
+  let mut pos = 0;
+
+  // byte length of the server name list payload
+  let server_name_list_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
+  pos += 2;
+
+  let mut sni_list = Vec::new();
+  while pos + 3 < buf.len() {
+    let name_type = buf[pos];
+    let len = ((buf[pos + 1] as usize) << 8) + buf[pos + 2] as usize;
+    if buf.len() < pos + 3 + len {
+      return Err(anyhow::anyhow!("Invalid SNI extension"));
+    }
+    match name_type {
+      0x00 => {
+        // Hostname
+        let name_payload = &buf[pos + 3..pos + 3 + len];
+        let name = String::from_utf8_lossy(name_payload).to_string().to_ascii_lowercase();
+        sni_list.push(name);
+      }
+      _ => {
+        debug!("Unknown SNI name type: {:x}", name_type);
+      }
+    }
+
+    pos += 3 + len;
+  }
+
+  if sni_list.is_empty() {
+    return Err(anyhow::anyhow!("No SNI found"));
+  }
+
+  if pos != server_name_list_len + 2 {
+    return Err(anyhow::anyhow!("Invalid SNI extension"));
+  }
+
+  Ok(sni_list)
 }

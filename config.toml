@@ -130,7 +130,3 @@ load_balance = "source_ip"
 #      Experimental setting     #
 #################################
 [experimental]
-
-######
-# Experimental settings for Encrypted Client Hello for TLS and QUIC
-[experimental.ech]

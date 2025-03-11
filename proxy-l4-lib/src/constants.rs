@@ -24,7 +24,7 @@ pub const MAX_TCP_CONCURRENT_CONNECTIONS: usize = 1024;
 /// Max UDP concurrent connections in total of all spawned UDP proxies
 /// For UDP, the connection remains until the lifetime expires.
 /// This means that even a short communication, e.g., DNS, does not immediately release the connection.
-pub const MAX_UDP_CONCURRENT_CONNECTIONS: u32 = 2048;
+pub const MAX_UDP_CONCURRENT_CONNECTIONS: usize = 2048;
 
 /// Default UDP connection lifetime in seconds, can be configured for each protocol
 /// UDP connection is managed by the source address + port.

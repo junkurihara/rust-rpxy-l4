@@ -1,0 +1,56 @@
+# Example configuration file for rpxy-L4
+
+listen_port = 8448
+listen_ipv6 = true
+tcp_backlog = 1024
+tcp_max_connections = 1024
+udp_max_connections = 2048
+tcp_target = ["1.1.1.1:53"] # dns
+tcp_load_balance = "none"
+udp_target = ["8.8.8.8:53"] # dns
+udp_load_balance = "none"
+udp_idle_lifetime = 5
+
+[protocols]
+
+# HTTP
+[protocols."http_1"]
+# check with `curl -H "Host: 1.1.1.1" http://localhost:8448 -v`
+protocol = "http"
+target = ["1.1.1.1:80"]
+load_balance = "none"
+
+# DNS over TLS
+[protocols."tls_1"]
+# check with `dig t.co @localhost -p 8448 +tls`
+protocol = "tls"
+target = ["1.1.1.1:853"]
+load_balance = "source_ip"
+alpn = ["dot"]
+
+# HTTP/2 over TLS
+[protocols."tls_2"]
+# check with `curl https://localhost:8448 -v --http2 --insecure`
+protocol = "tls"
+target = ["127.0.0.1:4433"]  # host `rpxy` on localhost:4433
+load_balance = "source_ip"
+server_names = ["localhost"]
+alpn = ["h2"]
+
+# HTTP/3 over QUIC
+[protocols."quic_1"]
+# check with `curl https://localhost:8448 -v --http3-only --insecure`
+protocol = "quic"
+target = ["127.0.0.1:4433"]  # host `rpxy` on localhost:4433
+load_balance = "source_ip"
+idle_lifetime = 30
+alpn = ["h3"]
+server_names = ["localhost"]
+
+# WireGuard
+[protocols."wireguard_1"]
+protocol = "wireguard"
+target = ["192.168.1.2:51820"]
+load_balance = "none"
+# longer than the keepalive interval of the wireguard tunnel
+idle_lifetime = 30

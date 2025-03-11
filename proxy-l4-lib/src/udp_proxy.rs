@@ -95,7 +95,7 @@ impl UdpDestinationMuxBuilder {
     if udp_dest.is_err() {
       return self;
     }
-    self.dst_any = Some(udp_dest.ok());
+    self.dst_wireguard = Some(udp_dest.ok());
     self
   }
   /* --------------------- */
@@ -129,6 +129,10 @@ impl UdpDestinationMuxBuilder {
 }
 
 impl UdpDestinationMux {
+  /// Check if the destination mux is empty
+  pub fn is_empty(&self) -> bool {
+    self.dst_any.is_none() && self.dst_wireguard.is_none() && self.dst_quic.is_none()
+  }
   /// Get the destination socket address for the given protocol
   pub(crate) fn get_destination(&self, protocol: &UdpProxyProtocol) -> Result<UdpDestination, ProxyError> {
     match protocol {
@@ -244,7 +248,7 @@ pub struct UdpProxy {
 
   /// Max UDP concurrent connections
   #[builder(default = "crate::constants::MAX_UDP_CONCURRENT_CONNECTIONS")]
-  max_connections: u32,
+  max_connections: usize,
 }
 
 impl UdpProxy {
@@ -304,7 +308,7 @@ impl UdpProxy {
         // Handle case there is no existing connection
         debug!("No existing connection for {}", src_addr);
         // Check the connection limit
-        if self.max_connections > 0 && self.connection_count.current() >= self.max_connections as usize {
+        if self.max_connections > 0 && self.connection_count.current() >= self.max_connections {
           warn!("UDP connection limit reached: {}", self.max_connections);
           continue;
         }

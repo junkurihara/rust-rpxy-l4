@@ -1,14 +1,14 @@
-########################################
-#   Example configuration of rpxy-L4   #
-########################################
+##############################################
+#   Configuration specification of rpxy-L4   #
+##############################################
 
 ###################
 # Global settings #
 ###################
 
 # Listen port, must be set
-# Is it nice to have multiple listen ports?
-listen_port = 50443
+# TODO: Is it nice to have multiple listen ports?
+listen_port = 8448
 
 # (Optional) Listen [::], [default: false]
 listen_ipv6 = true
@@ -40,6 +40,9 @@ udp_target = ["192.168.122.4:53"]
 
 # (Optional) Load balancing method for default targets [default: none]
 udp_load_balance = "source_ip"
+
+# (Optional) Udp connection idle lifetime in seconds [default: 30]
+udp_idle_lifetime = 30
 
 
 #########################
@@ -122,6 +125,9 @@ target = ["192.168.122.4:443"]
 # Load balancing method for QUIC connections [default: none]
 load_balance = "source_ip"
 
+# (Optional) Idle lifetime for QUIC connections in seconds [default: 30]
+idle_lifetime = 30
+
 # server_names = ["example.com", "example.org"]
 # ech_config = { private_keys = ["/path/to/private.key"] }
 
@@ -138,10 +144,10 @@ target = ["192.168.122.4:22"]
 load_balance = "source_ip"
 
 
-#################################
-#      Experimental setting     #
-#################################
-[experimental]
+# #################################
+# #      Experimental setting     #
+# #################################
+# [experimental]
 
 
 ################################################################################################

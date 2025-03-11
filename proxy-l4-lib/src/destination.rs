@@ -23,6 +23,19 @@ pub enum LoadBalance {
   None,
 }
 
+impl TryFrom<&str> for LoadBalance {
+  type Error = anyhow::Error;
+  fn try_from(value: &str) -> Result<Self, Self::Error> {
+    match value {
+      "source_ip" => Ok(LoadBalance::SourceIp),
+      "source_socket" => Ok(LoadBalance::SourceSocket),
+      "random" => Ok(LoadBalance::Random),
+      "none" => Ok(LoadBalance::None),
+      _ => Err(anyhow::anyhow!("Invalid load balance: {}", value)),
+    }
+  }
+}
+
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, derive_builder::Builder)]
 #[builder(build_fn(validate = "Self::validate"))]

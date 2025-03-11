@@ -125,6 +125,10 @@ impl TcpDestinationMuxBuilder {
 }
 
 impl TcpDestinationMux {
+  /// Check if the destination mux is empty
+  pub fn is_empty(&self) -> bool {
+    self.dst_any.is_none() && self.dst_ssh.is_none() && self.dst_http.is_none() && self.dst_tls.is_none()
+  }
   /// Get the destination socket address for the given protocol
   pub(crate) fn get_destination(&self, protocol: &TcpProxyProtocol) -> Result<TcpDestination, ProxyError> {
     match protocol {

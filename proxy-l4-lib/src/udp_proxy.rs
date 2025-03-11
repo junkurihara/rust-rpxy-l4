@@ -105,6 +105,7 @@ impl UdpDestinationMuxBuilder {
     load_balance: Option<&LoadBalance>,
     lifetime: Option<u32>,
     server_names: Option<&[&str]>,
+    alpn: Option<&[&str]>,
   ) -> &mut Self {
     let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
     if udp_dest.is_err() {
@@ -118,11 +119,10 @@ impl UdpDestinationMuxBuilder {
       self.dst_quic.as_ref().unwrap().as_ref().unwrap().clone()
     };
 
-    if let Some(server_names) = server_names {
-      current.add(server_names, udp_dest);
-    } else {
-      current.add(&[], udp_dest);
-    }
+    let server_names = server_names.unwrap_or_default();
+    let alpn = alpn.unwrap_or_default();
+    current.add(server_names, alpn, udp_dest);
+
     self.dst_quic = Some(Some(current));
     self
   }

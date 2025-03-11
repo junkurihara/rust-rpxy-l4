@@ -28,7 +28,7 @@ fn main() {
       .dst_any(dst_any, None)
       .dst_ssh(dst_ssh, None)
       .dst_http(dst_http, None)
-      .dst_tls(dst_tls, None, None)
+      .dst_tls(dst_tls, None, None, None)
       .build()
       .unwrap();
 
@@ -55,7 +55,7 @@ fn main() {
       .dst_wireguard(&["192.168.50.253:52280".parse().unwrap()], None, Some(30))
       // .dst_any("8.8.8.8:53".parse().unwrap())
       .dst_any(&["8.8.8.8:53".parse().unwrap()], None, Some(5))
-      .dst_quic(&["127.0.0.1:4433".parse().unwrap()], None, Some(30), None)
+      .dst_quic(&["127.0.0.1:4433".parse().unwrap()], None, Some(30), None, None)
       .build()
       .unwrap();
     // connection count will be shared among all UDP proxies

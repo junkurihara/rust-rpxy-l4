@@ -2,16 +2,20 @@ use crate::trace::*;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, Default)]
-/// TLS Server Name Indication (SNI) for routing
-pub(crate) struct TlsServerNames {
+/// Matching rule of TLS Server Name Indication (SNI) and Application-Layer Protocol Negotiation (ALPN) for routing
+pub(crate) struct TlsMatchingRule {
   /// Matched SNIs for the destination
   /// If empty, any SNI is allowed
-  server_names: Vec<String>,
+  sni: Vec<String>,
+  /// Matched ALPNs for the destination
+  /// If empty, any ALPN is allowed
+  alpn: Vec<String>,
 }
-impl From<&[&str]> for TlsServerNames {
-  fn from(server_names: &[&str]) -> Self {
+impl From<(&[&str], &[&str])> for TlsMatchingRule {
+  fn from((server_names, alpn): (&[&str], &[&str])) -> Self {
     Self {
-      server_names: server_names.iter().map(|s| s.to_lowercase()).collect(),
+      sni: server_names.iter().map(|s| s.to_lowercase()).collect(),
+      alpn: alpn.iter().map(|s| s.to_lowercase()).collect(),
     }
   }
 }
@@ -20,7 +24,7 @@ impl From<&[&str]> for TlsServerNames {
 /// Router for TLS/QUIC destinations
 pub(crate) struct TlsDestinations<T> {
   /// inner
-  inner: Vec<(TlsServerNames, T)>,
+  inner: Vec<(TlsMatchingRule, T)>,
 }
 impl<T> TlsDestinations<T> {
   /// Create a new instance
@@ -28,23 +32,36 @@ impl<T> TlsDestinations<T> {
     Self { inner: Vec::new() }
   }
   /// Add a destination with SNI
-  pub(crate) fn add(&mut self, server_names: &[&str], dest: T) {
-    self.inner.push((TlsServerNames::from(server_names), dest));
+  pub(crate) fn add(&mut self, server_names: &[&str], alpn: &[&str], dest: T) {
+    self.inner.push((TlsMatchingRule::from((server_names, alpn)), dest));
   }
   /// Find a destination by SNI
   pub(crate) fn find(&self, received_client_hello: &TlsClientHelloInfo) -> Option<&T> {
     let received_sni = received_client_hello.sni.iter().map(|v| v.to_lowercase());
+    let received_alpn = received_client_hello.alpn.iter().map(|v| v.to_lowercase());
+
     let filtered = {
-      let matched = self.inner.iter().find(|(sni_key, _)| {
-        sni_key
-          .server_names
+      let filtered = self.inner.iter().filter(|(rule, _)| {
+        let is_sni_match = rule
+          .sni
           .iter()
           .any(|server_name| received_sni.clone().any(|r| r.eq(server_name)))
+          || rule.sni.is_empty();
+        let is_alpn_match = rule.alpn.iter().any(|alpn| received_alpn.clone().any(|r| r.eq(alpn))) || rule.alpn.is_empty();
+        is_sni_match && is_alpn_match
       });
-      if matched.is_none() {
-        self.inner.iter().find(|(snis, _)| snis.server_names.is_empty())
+      // Extract the most specific match
+      if let Some(both_matched) = filtered
+        .clone()
+        .find(|(rule, _)| !rule.sni.is_empty() && !rule.alpn.is_empty())
+      {
+        Some(both_matched)
+      } else if let Some(sni_matched) = filtered.clone().find(|(rule, _)| !rule.sni.is_empty()) {
+        Some(sni_matched)
+      } else if let Some(alpn_matched) = filtered.clone().find(|(rule, _)| !rule.alpn.is_empty()) {
+        Some(alpn_matched)
       } else {
-        matched
+        filtered.clone().next()
       }
     };
     filtered.map(|(_, dest)| dest)
@@ -204,7 +221,7 @@ pub(crate) fn probe_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_vers
     return None;
   }
 
-  debug!("TLS ClientHello detected: {:#?}", client_hello_info);
+  debug!("TLS ClientHello detected: {:?}", client_hello_info);
   Some(client_hello_info)
 }
 
@@ -297,27 +314,70 @@ mod tests {
   #[test]
   fn test_tls_destinations() {
     let mut tls_destinations = TlsDestinations::new();
-    tls_destinations.add(&["example.com"], "127.0.0.1");
-    tls_destinations.add(&["example.org"], "192.168.0.1");
-    tls_destinations.add(&[], "1.1.1.1");
+    tls_destinations.add(&["example.com"], &[], "127.0.0.1");
+    tls_destinations.add(&["example.org"], &[], "192.168.0.1");
+    tls_destinations.add(&[], &[], "1.1.1.1");
+
+    tls_destinations.add(&[], &["h2"], "8.8.8.8");
+    tls_destinations.add(&["example.com"], &["h2"], "127.0.0.2");
+
+    // Test SNI
+    // Match only sni
     let mut received = TlsClientHelloInfo {
       sni: vec!["example.com".to_string()],
       alpn: Vec::new(),
     };
-
     let dest = tls_destinations.find(&received);
-
     assert_eq!(dest, Some(&"127.0.0.1"));
 
     received.sni = vec!["example.org".to_string()];
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"192.168.0.1"));
 
+    // Doesn't match sni
     received.sni = vec!["example.net".to_string()];
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"1.1.1.1"));
 
+    // Doesn't match sni
     received.sni = vec!["example.io".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"1.1.1.1"));
+
+    // Test ALPN
+    // Match only alpn
+    received.sni = vec![];
+    received.alpn = vec!["h2".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"8.8.8.8"));
+
+    // Doesn't match alpn
+    received.alpn = vec!["h3".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"1.1.1.1"));
+
+    // Test both SNI and ALPN
+    // Match both sni and alpn to single destination
+    received.sni = vec!["example.com".to_string()];
+    received.alpn = vec!["h2".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"127.0.0.2"));
+
+    // Match sni but doesn't match alpn
+    received.sni = vec!["example.com".to_string()];
+    received.alpn = vec!["h3".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"127.0.0.1"));
+
+    // Match sni and alpn "independently", sni is prioritized
+    received.sni = vec!["example.org".to_string()];
+    received.alpn = vec!["h2".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"192.168.0.1"));
+
+    // Match neither sni nor alpn
+    received.sni = vec!["example.net".to_string()];
+    received.alpn = vec!["h3".to_string()];
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"1.1.1.1"));
   }

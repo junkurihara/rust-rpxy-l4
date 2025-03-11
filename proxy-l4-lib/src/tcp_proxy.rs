@@ -101,6 +101,7 @@ impl TcpDestinationMuxBuilder {
     addrs: &[SocketAddr],
     load_balance: Option<&LoadBalance>,
     server_names: Option<&[&str]>,
+    alpn: Option<&[&str]>,
   ) -> &mut Self {
     let tcp_dest = TcpDestination::try_from((addrs, load_balance));
     if tcp_dest.is_err() {
@@ -114,11 +115,10 @@ impl TcpDestinationMuxBuilder {
       self.dst_tls.as_ref().unwrap().as_ref().unwrap().clone()
     };
 
-    if let Some(server_names) = server_names {
-      current.add(server_names, tcp_dest);
-    } else {
-      current.add(&[], tcp_dest);
-    }
+    let server_names = server_names.unwrap_or_default();
+    let alpn = alpn.unwrap_or_default();
+    current.add(server_names, alpn, tcp_dest);
+
     self.dst_tls = Some(Some(current));
     self
   }
@@ -369,8 +369,8 @@ mod tests {
       TcpDestinationMuxBuilder::default()
         .dst_any(dst_any, None)
         .dst_ssh(dst_ssh, None)
-        .dst_tls(dst_tls_1, None, None)
-        .dst_tls(dst_tls_2, None, Some(&["example.com"]))
+        .dst_tls(dst_tls_1, None, None, None)
+        .dst_tls(dst_tls_2, None, Some(&["example.com"]), None)
         .build()
         .unwrap(),
     );

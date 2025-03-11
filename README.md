@@ -3,7 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Unit Test](https://github.com/junkurihara/rust-rpxy-l4/actions/workflows/ci.yml/badge.svg)
 
-> **WIP Project**
+> **WIP project, early stage of development.**
+> Not recommended for production use.
 
 ## Introduction
 
@@ -14,7 +15,7 @@
 - **Basic L4 reverse proxy feature**: `rpxy-l4` can forward TCP and UDP packets to the backend server.
 - **Protocol multiplexing**: `rpxy-l4` can multiplex multiple protocols over TCP/UDP on the same port, which means `rpxy-l4` routes specific protocols to their corresponding backend servers. Currently, it supports the following protocols:
   - TCP: HTTP (cleartext), TLS, SSH
-  - UDP: QUIC (IETF RFC 9000), WireGuard
+  - UDP: QUIC (IETF [RFC9000](https://datatracker.ietf.org/doc/html/rfc9000)), WireGuard
 - **Load balancing**: `rpxy-l4` can distribute incoming connections to multiple backend servers based on the several simple load balancing algorithms.
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
 - **TLS/QUIC forwarder**: `rpxy-l4` can forward TLS/IETF QUIC streams to appropriate backend servers based on the ServerName Indication (SNI) and Application Layer Protocol Negotiation (ALPN) values.
@@ -55,7 +56,7 @@ TBD!
 
 `rpxy-4` cannot be built without the following projects and inspirations:
 
-- [`sslh`](https://github.com/hyperium/hyper): `rpxy-l4` is strongly inspired by `sslh` for its protocol multiplexer feature.
+- [`sslh`](https://github.com/yrutschle/sslh): `rpxy-l4` is strongly inspired by `sslh` for its protocol multiplexer feature.
 - [`tokio`](https://github.com/tokio-rs/tokio): Great async runtime for Rust.
 
 ## License

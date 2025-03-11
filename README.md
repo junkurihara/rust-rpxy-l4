@@ -1,4 +1,4 @@
-# rpxy-l4: A reverse proxy for the L4 layer (TCP+UDP) with protocol multiplexer, written in Rust
+# rpxy-l4: A reverse proxy for the layer 4 (TCP+UDP) with protocol multiplexer, written in Rust
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Unit Test](https://github.com/junkurihara/rust-rpxy-l4/actions/workflows/ci.yml/badge.svg)

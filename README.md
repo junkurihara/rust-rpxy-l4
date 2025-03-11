@@ -3,8 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Unit Test](https://github.com/junkurihara/rust-rpxy-l4/actions/workflows/ci.yml/badge.svg)
 
-> **WIP project, early stage of development.**
-> Not recommended for production use.
+> **WIP project, early stage of development.** This project just started from the owner's personal interest and research activity. Not recommended for production use yet.
 
 ## Introduction
 
@@ -49,6 +48,14 @@ You can run `rpxy-l4` with a configuration file like
 `rpxy-l4` always tracks the change of `config.toml` in the real-time manner and apply the change immediately without restarting the process.
 
 ## Configuration
+
+TBD!
+
+## Containerization
+
+TBD!
+
+## Caveats
 
 TBD!
 

@@ -5,12 +5,15 @@ use crate::{
   trace::*,
   udp_proxy::UdpDestination,
 };
-use aarc::AtomicArc;
 use std::{
   net::SocketAddr,
-  sync::{Arc, OnceLock},
+  sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, OnceLock,
+  },
+  time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::{net::UdpSocket, runtime::Handle, sync::mpsc, time::Instant};
+use tokio::{net::UdpSocket, runtime::Handle, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
 /// Any socket address for IPv4 for auto-binding
@@ -110,11 +113,14 @@ impl UdpConnectionPool {
   /// This must be called when a new UDP packet is received.
   pub(crate) fn prune_inactive_connections(&self) {
     self.inner.retain(|_, conn| {
-      let Some(last_active) = conn.inner.last_active.load() else {
-        return false;
-      };
-      let elapsed = last_active.elapsed();
-      if elapsed.as_secs() < conn.inner.idle_lifetime {
+      let last_active = conn.inner.last_active.load(Ordering::Acquire);
+      let current = get_since_the_epoch();
+      let elapsed = current - last_active;
+      debug!(
+        "UdpConnection from {} to {} is active for {} seconds",
+        conn.inner.src_addr, conn.inner.dst_addr, elapsed
+      );
+      if elapsed < conn.inner.idle_lifetime {
         return true;
       }
       debug!("UdpConnection from {} is pruned due to inactivity", conn.inner.src_addr);
@@ -173,7 +179,7 @@ struct UdpConnectionInner {
   idle_lifetime: u64,
 
   /// Last active time
-  last_active: AtomicArc<Instant>,
+  last_active: Arc<AtomicU64>,
 }
 
 impl UdpConnectionInner {
@@ -195,7 +201,7 @@ impl UdpConnectionInner {
     udp_socket_to_upstream.connect(dst_addr).await?;
     debug!("Connected to the upstream server: {dst_addr}");
 
-    let last_active = AtomicArc::new(Instant::now());
+    let last_active = Arc::new(AtomicU64::new(get_since_the_epoch()));
 
     Ok(Self {
       src_addr: *src_addr,
@@ -210,8 +216,7 @@ impl UdpConnectionInner {
 
   /// Update the last active time
   fn update_last_active(&self) {
-    self.last_active.store(Some(&aarc::Arc::new(Instant::now())));
-    // self.last_active.store(Arc::new(Instant::now()));
+    self.last_active.store(get_since_the_epoch(), Ordering::Release);
   }
 
   /// Serve the UdpConnection
@@ -323,6 +328,14 @@ impl UdpConnectionInner {
       }
     }
   }
+}
+
+#[inline]
+fn get_since_the_epoch() -> u64 {
+  SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .expect("Time went backwards!!! Check system time.")
+    .as_secs()
 }
 
 /* ---------------------------------------------------------- */

@@ -18,7 +18,6 @@ rand = { version = "0.9.0" }
 # Connection pool
 dashmap = { version = "6.1.0" }
 ahash = { version = "0.8.11" }
-aarc = { version = "0.3.2" }
 
 # error handling
 anyhow = { version = "1.0.97" }

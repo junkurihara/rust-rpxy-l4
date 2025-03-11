@@ -1,21 +1,43 @@
 mod config;
 mod log;
 
-use crate::log::*;
+use crate::{config::parse_opts, log::*};
+use config::{ConfigToml, ConfigTomlReloader};
+use hot_reload::ReloaderService;
 use rpxy_l4_lib::*;
 use std::sync::Arc;
 
-// Proof of concept
+/// Delay in seconds to watch the config file
+const CONFIG_WATCH_DELAY_SECS: u32 = 15;
+
 fn main() {
+  init_logger();
+
   let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
   runtime_builder.enable_all();
-  runtime_builder.thread_name("rpxy-layer-4");
+  runtime_builder.thread_name("rpxy-l4");
   let runtime = runtime_builder.build().unwrap();
-
-  init_logger();
 
   runtime.block_on(async {
     info!("Starting rpxy for layer 4");
+
+    let Ok(parsed_opts) = parse_opts() else {
+      error!("Invalid toml file");
+      std::process::exit(1);
+    };
+
+    // config service watches the service config file.
+    // if the base service config file is updated, the  entrypoint will be restarted.
+    let (config_service, config_rx) = ReloaderService::<ConfigTomlReloader, ConfigToml, String>::new(
+      &parsed_opts.config_file_path,
+      CONFIG_WATCH_DELAY_SECS,
+      false,
+    )
+    .await
+    .unwrap();
+
+    let config = ConfigToml::new(&parsed_opts.config_file_path).unwrap();
+    println!("{:#?}", config);
 
     /* -------------------------------------- */
     let dst_any = &["192.168.122.4:53".parse().unwrap()];

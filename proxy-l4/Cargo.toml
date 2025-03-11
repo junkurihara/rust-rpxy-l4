@@ -12,13 +12,20 @@ publish.workspace = true
 [dependencies]
 rpxy-l4-lib = { path = "../proxy-l4-lib" }
 
+# error handling
+anyhow = { version = "1.0.97" }
+
 # logging
 tracing = { version = "0.1.41" }
 tracing-subscriber = { version = "0.3.19" }
 
-# # config
-# clap = { version = "4.5.28", features = ["std", "cargo", "wrap_help"] }
-# toml = { version = "0.8.19", default-features = false, features = ["parse"] }
+# config
+clap = { version = "4.5.28", features = ["std", "cargo", "wrap_help"] }
+toml = { version = "0.8.19", default-features = false, features = ["parse"] }
+hot_reload = { version = "0.1.8" }
+serde = { version = "1.0.219", default-features = false, features = ["derive"] }
+serde_ignored = { version = "0.1.11" }
+async-trait = { version = "0.1.87" }
 
 # memory allocator
 mimalloc = { version = "*", default-features = false }

@@ -32,10 +32,15 @@ impl<T> TlsDestinations<T> {
     self.inner.push((TlsServerNames::from(server_names), dest));
   }
   /// Find a destination by SNI
-  pub(crate) fn find(&self, server_name: &str) -> Option<&T> {
-    let server_name = server_name.to_lowercase();
+  pub(crate) fn find(&self, received_client_hello: &TlsClientHelloInfo) -> Option<&T> {
+    let received_sni = received_client_hello.sni.iter().map(|v| v.to_lowercase());
     let filtered = {
-      let matched = self.inner.iter().find(|(snis, _)| snis.server_names.contains(&server_name));
+      let matched = self.inner.iter().find(|(sni_key, _)| {
+        sni_key
+          .server_names
+          .iter()
+          .any(|server_name| received_sni.clone().any(|r| r.eq(server_name)))
+      });
       if matched.is_none() {
         self.inner.iter().find(|(snis, _)| snis.server_names.is_empty())
       } else {
@@ -46,14 +51,14 @@ impl<T> TlsDestinations<T> {
   }
 }
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 /// Probed TLS ClientHello information
 pub(crate) struct TlsClientHelloInfo {
-  /// SNI TODO: Make this a list
-  pub(crate) server_name: String,
-  /// TODO: ALPN Make this a list
+  /// SNI
+  pub(crate) sni: Vec<String>,
+  /// ALPN
   #[allow(unused)]
-  pub(crate) alpn: String,
+  pub(crate) alpn: Vec<String>,
   //TODO: /// ECH info
 }
 /* ---------------------------------------------------------- */
@@ -158,6 +163,7 @@ pub(crate) fn probe_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_vers
   debug!("TLS extensions_len: {}", extensions_len);
   // Check extensions
   // https://datatracker.ietf.org/doc/html/rfc8446#section-4.2
+  let mut client_hello_info = TlsClientHelloInfo::default();
   let mut cnt = 0;
   while cnt < extensions_len {
     if buf.len() < pos + 4 {
@@ -165,21 +171,30 @@ pub(crate) fn probe_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_vers
     }
     let extension_type = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
     debug!("TLS extension_type: {:2x}", extension_type);
-    // TODO: parse extension for the routing with SNI and ALPN
     pos += 2;
     cnt += 2;
     let extension_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
     // debug!("TLS extension_len: {}", extension_len);
     pos += 2;
     cnt += 2;
-    // let extension_payload = &buf[pos..pos + extension_len];
+    let extension_payload = &buf[pos..pos + extension_len];
     // debug!("TLS extension_payload: {:?}", extension_payload);
-    if extension_type.eq(&0x00) {
-      debug!("Found Server Name Indication extension");
-      let extension_payload = &buf[pos..pos + extension_len];
-      let sni = parse_sni(extension_payload);
-      println!("SNI: {:?}", sni);
+    /* ---------------- */
+    // parse extension for the routing with SNI and ALPN
+    match extension_type {
+      0x00 => {
+        // Server Name Indication
+        debug!("Found Server Name Indication extension");
+        client_hello_info.sni = parse_sni(extension_payload).unwrap_or_default();
+      }
+      0x10 => {
+        // Application-Layer Protocol Negotiation
+        debug!("Found Application-Layer Protocol Negotiation extension");
+        client_hello_info.alpn = parse_alpn(extension_payload).unwrap_or_default();
+      }
+      _ => {}
     }
+    /* ---------------- */
     pos += extension_len;
     cnt += extension_len;
   }
@@ -189,15 +204,12 @@ pub(crate) fn probe_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_vers
     return None;
   }
 
-  debug!("TLS ClientHello detected");
-  // TODO: TODO: TODO: TODO:
-  Some(TlsClientHelloInfo {
-    server_name: String::new(),
-    alpn: String::new(),
-  })
+  debug!("TLS ClientHello detected: {:#?}", client_hello_info);
+  Some(client_hello_info)
 }
 
 /// Parse server name from the SNI extension
+/// https://datatracker.ietf.org/doc/html/rfc6066#section-3
 pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
   let mut pos = 0;
 
@@ -210,13 +222,14 @@ pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
     let name_type = buf[pos];
     let len = ((buf[pos + 1] as usize) << 8) + buf[pos + 2] as usize;
     if buf.len() < pos + 3 + len {
+      error!("Invalid SNI extension");
       return Err(anyhow::anyhow!("Invalid SNI extension"));
     }
     match name_type {
       0x00 => {
         // Hostname
         let name_payload = &buf[pos + 3..pos + 3 + len];
-        let name = String::from_utf8_lossy(name_payload).to_string().to_ascii_lowercase();
+        let name = String::from_utf8_lossy(name_payload).to_ascii_lowercase();
         sni_list.push(name);
       }
       _ => {
@@ -228,12 +241,84 @@ pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
   }
 
   if sni_list.is_empty() {
+    error!("No SNI found");
     return Err(anyhow::anyhow!("No SNI found"));
   }
 
   if pos != server_name_list_len + 2 {
+    error!("Invalid SNI extension");
     return Err(anyhow::anyhow!("Invalid SNI extension"));
   }
 
   Ok(sni_list)
+}
+
+/// Parse ALPN extension
+/// https://datatracker.ietf.org/doc/html/rfc7301
+pub(crate) fn parse_alpn(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
+  let mut pos = 0;
+
+  // byte length of the protocol name list payload
+  let protocol_name_list_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
+  pos += 2;
+
+  let mut alpn_list = Vec::new();
+  while pos + 1 < buf.len() {
+    let len = buf[pos] as usize;
+    if buf.len() < pos + 1 + len || len == 0 {
+      // 0-length protocol name is invalid
+      error!("Invalid ALPN extension");
+      return Err(anyhow::anyhow!("Invalid ALPN extension"));
+    }
+    let name_payload = &buf[pos + 1..pos + 1 + len];
+    let protocol_name = String::from_utf8_lossy(name_payload).to_ascii_lowercase();
+    alpn_list.push(protocol_name);
+    pos += 1 + len;
+  }
+
+  if alpn_list.is_empty() {
+    error!("No ALPN found");
+    return Err(anyhow::anyhow!("No ALPN found"));
+  }
+
+  if pos != protocol_name_list_len + 2 {
+    error!("Invalid ALPN extension");
+    return Err(anyhow::anyhow!("Invalid ALPN extension"));
+  }
+
+  Ok(alpn_list)
+}
+
+/* ---------------------------------------------------------- */
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_tls_destinations() {
+    let mut tls_destinations = TlsDestinations::new();
+    tls_destinations.add(&["example.com"], "127.0.0.1");
+    tls_destinations.add(&["example.org"], "192.168.0.1");
+    tls_destinations.add(&[], "1.1.1.1");
+    let mut received = TlsClientHelloInfo {
+      sni: vec!["example.com".to_string()],
+      alpn: Vec::new(),
+    };
+
+    let dest = tls_destinations.find(&received);
+
+    assert_eq!(dest, Some(&"127.0.0.1"));
+
+    received.sni = vec!["example.org".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"192.168.0.1"));
+
+    received.sni = vec!["example.net".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"1.1.1.1"));
+
+    received.sni = vec!["example.io".to_string()];
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest, Some(&"1.1.1.1"));
+  }
 }

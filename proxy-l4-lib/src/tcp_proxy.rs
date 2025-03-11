@@ -165,7 +165,7 @@ impl TcpDestinationMux {
       TcpProxyProtocol::Tls(client_hello_info) => {
         if let Some(dst) = &self.dst_tls {
           debug!("Setting up dest addr specific to TLS");
-          if let Some(found) = dst.find(&client_hello_info.server_name) {
+          if let Some(found) = dst.find(client_hello_info) {
             Ok(found.clone())
           } else {
             Err(ProxyError::NoDestinationAddressForProtocol)
@@ -376,8 +376,8 @@ mod tests {
     );
     // check for example.com tls
     let chi = TlsClientHelloInfo {
-      server_name: "example.com".to_string(),
-      alpn: "".to_string(),
+      sni: vec!["example.com".to_string()],
+      alpn: vec!["".to_string()],
     };
     let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(chi)).unwrap();
     let destination = found.inner.get_destination(&"127.0.0.1:60000".parse().unwrap()).unwrap();
@@ -385,8 +385,8 @@ mod tests {
 
     // check for unspecified tls
     let chi = TlsClientHelloInfo {
-      server_name: "any.com".to_string(),
-      alpn: "".to_string(),
+      sni: vec!["any.com".to_string()],
+      alpn: vec!["".to_string()],
     };
     let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(chi)).unwrap();
     let destination = found.inner.get_destination(&"127.0.0.1:60000".parse().unwrap()).unwrap();

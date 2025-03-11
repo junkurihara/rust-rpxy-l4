@@ -155,7 +155,7 @@ impl UdpDestinationMux {
       UdpProxyProtocol::Quic(client_hello_info) => {
         if let Some(dst) = &self.dst_quic {
           debug!("Setting up dest addr for QUIC proto");
-          if let Some(found) = dst.find(&client_hello_info.server_name) {
+          if let Some(found) = dst.find(client_hello_info) {
             Ok(found.clone())
           } else {
             Err(ProxyError::NoDestinationAddressForProtocol)

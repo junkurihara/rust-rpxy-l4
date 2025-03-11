@@ -79,6 +79,7 @@ server_names = ["example.com", "example.org"]
 ### Example for TLS with ECH support
 [protocols."tls_3"]
 protocol = "tls"
+# TODO: consider if this can be resolved by DNS from the decrypted SNI
 target = ["192.168.122.6:443"]
 load_balance = "source_ip"
 server_names = ["example.net"]
@@ -86,8 +87,13 @@ server_names = ["example.net"]
 # (Optional) Support for encrypted client hello (ECH) for TLS connections, only valid when `protocol = "tls"` or `"quic"` and `server_name` is set.
 # If specified, the proxy will attempts to decrypt the encrypted InnerClientHello contained in the OuterClientHello matched to the SNI-matched connections.
 # For instance, when TLS ClientHello with SNI "example.net" (Outer) is given, the proxy will decrypts the encrypted part of the ClientHello (Inner).
-# Then it forwards the plaintext ClientHello to the target. TODO:
-ech_config = { private_keys = ["/path/to/private.key"] }
+# Then it forwards the plaintext ClientHello to the target. If ech_config.server_names is given, only inner client hello matched to the entry is forwareded.
+# TODO: Implement
+[protocols."tls_3".ech]
+# Path to the private key for ECH decryption
+private_keys = ["/path/to/private.key"]
+# (Optional) Server names that only be routed after ECH decryption towards the target address
+server_names = ["example.org"]
 
 
 #########################

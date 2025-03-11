@@ -1,4 +1,4 @@
-# rpxy-l4: A reverse proxy for the layer 4 (TCP+UDP) with protocol multiplexer, written in Rust
+# rpxy-l4: A reverse proxy for the layer-4 (TCP+UDP) with protocol multiplexer, written in Rust
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Unit Test](https://github.com/junkurihara/rust-rpxy-l4/actions/workflows/ci.yml/badge.svg)
@@ -8,7 +8,7 @@
 
 ## Introduction
 
-`rpxy-l4` is an L4-layer reverse proxy supporting both TCP and UDP protocols, which is designed on the same philosophy as [`rpxy`](https://github.com/junkurihara/rust-rpxy) (HTTP reverse proxy). It is written in Rust and aims to provide a high-performance and easy-to-use reverse proxy for L4-layer protocols.
+`rpxy-l4` is an L4 reverse proxy supporting both TCP and UDP protocols, which is designed on the same philosophy as [`rpxy`](https://github.com/junkurihara/rust-rpxy) (HTTP reverse proxy). It is written in Rust and aims to provide a high-performance and easy-to-use reverse proxy for layer-4 protocols.
 
 ## Features
 
@@ -34,7 +34,7 @@ You can build an executable binary yourself by checking out this Git repository.
 % cargo build --release
 ```
 
-Then you have an executive binary `rust-rpxy/target/release/rpxy`.
+Then you have an executive binary `rust-rpxy/target/release/rpxy-l4`.
 
 ## Usage
 
@@ -43,7 +43,7 @@ Then you have an executive binary `rust-rpxy/target/release/rpxy`.
 You can run `rpxy-l4` with a configuration file like
 
 ```bash
-% ./target/release/rpxy-4 --config config.toml
+% ./target/release/rpxy-l4 --config config.toml
 ```
 
 `rpxy-l4` always tracks the change of `config.toml` in the real-time manner and apply the change immediately without restarting the process.

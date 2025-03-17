@@ -24,6 +24,9 @@ jobs:
           - target: "default"
             dockerfile: ./docker/Dockerfile
             platforms: linux/amd64,linux/arm64
+            build-contexts: |
+              messense/rust-musl-cross:amd64-musl=docker-image://messense/rust-musl-cross:x86_64-musl
+              messense/rust-musl-cross:arm64-musl=docker-image://messense/rust-musl-cross:aarch64-musl
             # Aliases must be used only for release builds
             aliases: |
               jqtype/rpxy-l4:latest
@@ -70,6 +73,7 @@ jobs:
             ${{ env.DH_REGISTRY_NAME }}:nightly
             ${{ env.GHCR }}/${{ env.GHCR_IMAGE_NAME }}:nightly
           file: ${{ matrix.dockerfile }}
+          build-contexts: ${{ matrix.build-contexts }}
           cache-from: type=gha,scope=rpxy-l4-nightly-${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=rpxy-l4-nightly-${{ matrix.target }}
           platforms: ${{ matrix.platforms }}
@@ -96,6 +100,7 @@ jobs:
             ${{ env.GHCR }}/${{ env.GHCR_IMAGE_NAME }}:${{ github.event.pull_request.title }}
             ${{ env.DH_REGISTRY_NAME }}:${{ github.event.pull_request.title }}
           file: ${{ matrix.dockerfile }}
+          build-contexts: ${{ matrix.build-contexts }}
           cache-from: type=gha,scope=rpxy-l4-latest-${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=rpxy-l4-latest-${{ matrix.target }}
           platforms: ${{ matrix.platforms }}

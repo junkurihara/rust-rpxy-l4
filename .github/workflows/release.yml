@@ -27,7 +27,7 @@ jobs:
             platform: linux/arm64
 
     steps:
-      - run: "echo 'The relese triggering workflows passed'"
+      - run: "echo 'The release triggering workflows passed'"
 
       - name: "set env"
         id: "set-env"

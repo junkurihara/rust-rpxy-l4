@@ -23,7 +23,7 @@ jobs:
         include:
           - target: "default"
             dockerfile: ./docker/Dockerfile
-            platforms: linux/amd64,linux/arm64
+            platforms: linux/amd64
             # Aliases must be used only for release builds
             aliases: |
               jqtype/rpxy-l4:latest

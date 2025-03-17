@@ -1,0 +1,203 @@
+rpxy-l4: Logging with level debug
+[2m2025-03-17T10:06:54.908176Z[0m [32m INFO[0m main [2mrpxy_l4[0m[2m:[0m[2m26[0m[2m:[0m Starting rpxy for layer 4
+[2m2025-03-17T10:06:54.909244Z[0m [32m INFO[0m main [2mhot_reload[0m[2m:[0m[2m193[0m[2m:[0m Target reloaded. Disseminate up-to-date value
+[2m2025-03-17T10:06:54.909304Z[0m [34mDEBUG[0m main [2mrpxy_l4[0m[2m:[0m[2m142[0m[2m:[0m Service configuration: ProxyService {
+    runtime_handle: Handle {
+        inner: MultiThread(
+            multi_thread::Handle { ... },
+        ),
+    },
+    listen_port: 8448,
+    listen_ipv6: true,
+    tcp_backlog: Some(
+        1024,
+    ),
+    tcp_max_connections: Some(
+        1024,
+    ),
+    udp_max_connections: Some(
+        2048,
+    ),
+    tcp_proxy_mux: TcpDestinationMux {
+        dst_any: Some(
+            TcpDestination {
+                inner: Destination {
+                    dst_addrs: [
+                        1.1.1.1:53,
+                    ],
+                    load_balance: None,
+                    random: RandomState { .. },
+                },
+            },
+        ),
+        dst_ssh: None,
+        dst_http: Some(
+            TcpDestination {
+                inner: Destination {
+                    dst_addrs: [
+                        1.1.1.1:80,
+                    ],
+                    load_balance: None,
+                    random: RandomState { .. },
+                },
+            },
+        ),
+        dst_tls: Some(
+            TlsDestinations {
+                inner: [
+                    (
+                        TlsMatchingRule {
+                            sni: [
+                                "localhost",
+                            ],
+                            alpn: [
+                                "h2",
+                            ],
+                        },
+                        TcpDestination {
+                            inner: Destination {
+                                dst_addrs: [
+                                    127.0.0.1:4433,
+                                ],
+                                load_balance: SourceIp,
+                                random: RandomState { .. },
+                            },
+                        },
+                    ),
+                    (
+                        TlsMatchingRule {
+                            sni: [],
+                            alpn: [
+                                "dot",
+                            ],
+                        },
+                        TcpDestination {
+                            inner: Destination {
+                                dst_addrs: [
+                                    1.1.1.1:853,
+                                ],
+                                load_balance: SourceIp,
+                                random: RandomState { .. },
+                            },
+                        },
+                    ),
+                ],
+            },
+        ),
+    },
+    udp_proxy_mux: UdpDestinationMux {
+        dst_any: Some(
+            UdpDestination {
+                inner: Destination {
+                    dst_addrs: [
+                        8.8.8.8:53,
+                    ],
+                    load_balance: None,
+                    random: RandomState { .. },
+                },
+                connection_idle_lifetime: 5,
+            },
+        ),
+        dst_wireguard: Some(
+            UdpDestination {
+                inner: Destination {
+                    dst_addrs: [
+                        192.168.1.2:51820,
+                    ],
+                    load_balance: None,
+                    random: RandomState { .. },
+                },
+                connection_idle_lifetime: 30,
+            },
+        ),
+        dst_quic: Some(
+            TlsDestinations {
+                inner: [
+                    (
+                        TlsMatchingRule {
+                            sni: [
+                                "localhost",
+                            ],
+                            alpn: [
+                                "h3",
+                            ],
+                        },
+                        UdpDestination {
+                            inner: Destination {
+                                dst_addrs: [
+                                    127.0.0.1:4433,
+                                ],
+                                load_balance: SourceIp,
+                                random: RandomState { .. },
+                            },
+                            connection_idle_lifetime: 30,
+                        },
+                    ),
+                ],
+            },
+        ),
+    },
+}
+[2m2025-03-17T10:06:54.909534Z[0m [32m INFO[0m rpxy-l4 [2mrpxy_l4_lib::tcp_proxy[0m[2m:[0m[2m285[0m[2m:[0m Starting TCP proxy on 0.0.0.0:8448
+[2m2025-03-17T10:06:54.909654Z[0m [32m INFO[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m256[0m[2m:[0m Starting UDP proxy on 0.0.0.0:8448
+[2m2025-03-17T10:06:54.909678Z[0m [32m INFO[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m256[0m[2m:[0m Starting UDP proxy on [::]:8448
+[2m2025-03-17T10:06:54.909836Z[0m [32m INFO[0m rpxy-l4 [2mrpxy_l4_lib::tcp_proxy[0m[2m:[0m[2m285[0m[2m:[0m Starting TCP proxy on [::]:8448
+[2m2025-03-17T10:07:03.450581Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m295[0m[2m:[0m received 1200 bytes from 172.18.0.1:59256 [source]
+[2m2025-03-17T10:07:03.450626Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m309[0m[2m:[0m No existing connection for 172.18.0.1:59256
+[2m2025-03-17T10:07:03.450639Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m247[0m[2m:[0m DCID: [db, 96, fd, 1a, ca, c, 90, 58, 17, c1, 62, 9a, dc, 41, 66, 60]
+[2m2025-03-17T10:07:03.450643Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m256[0m[2m:[0m SCID: [c9, 7d, 3e, 3, 17, fb, 84, d1, 14, 79, b0, be, 8e, 62, 38, 14, e1, d5, f4, d7]
+[2m2025-03-17T10:07:03.450646Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m101[0m[2m:[0m Token: []
+[2m2025-03-17T10:07:03.450648Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m110[0m[2m:[0m Payload: [24, d9, 73, 46, 8a, 65, 9d, b8, 45, e1, d0, 73, 95, 89, b9, 28, 73, ad, 76, 6d, 7d, f9, cb, ee, cc, ea, cf, 5d, d0, 1d, 5e, da, 52, f9, 9c, be, c5, e4, 10, e, 72, 90, 2b, c2, 64, 79, 45, ae, 66, 33, 27, 64, b8, 7d, 63, 2b, 30, 62, ce, 5e, e, f1, ba, f9, 4d, df, 88, 41, 1a, 5f, e9, 86, b7, ed, 37, 99, e9, a7, 37, 61, 7c, 2e, df, 82, 7b, cb, da, 88, 18, 37, 3e, c3, ba, 92, c0, 7f, 49, 58, a2, d8, c9, 1f, 4e, b5, e4, 1b, 3c, b3, c1, ba, a7, 65, e8, 24, 98, 8b, 55, 70, fe, 66, 76, da, 2d, 15, 91, af, a8, c8, bb, ac, f8, f0, 15, b9, 13, 5b, 5e, 24, a0, 25, 3, 88, e9, 95, b8, ac, c0, a1, e4, ac, 5c, eb, 16, 17, 64, 91, fa, ea, 9e, 61, 14, 69, cb, d4, 2, 60, 95, 5f, 9, c5, 94, 1b, a7, c1, f8, ee, 68, 38, e7, f2, 70, 9a, 30, ed, f1, 76, 39, 47, c5, cd, ab, 34, ef, a7, 8, 2, 92, df, f5, 77, 9d, 56, a6, 23, 2, cf, 20, 25, 7f, 1b, 70, f6, d7, 97, e3, 9f, f4, 8d, 10, 21, 35, ef, bd, 23, 21, 0, 17, 91, 38, f8, db, 78, 1a, af, cb, 4a, 4c, f0, 4e, 5e, 87, 89, d1, cf, cf, b3, 9a, 3a, 4, b, 23, ff, d4, ea, d4, 58, b7, d1, a7, f1, f0, f5, 27, 5c, cf, 4e, dc, 2d]
+[2m2025-03-17T10:07:03.450682Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m166[0m[2m:[0m Header protection mask: [6d, 24, a8, d3, 9d, 37, 41, 61, bb, fe, 31, 8b, 46, 32, b1, 6d]
+[2m2025-03-17T10:07:03.450690Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m176[0m[2m:[0m Packet number length: 1
+[2m2025-03-17T10:07:03.450692Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m182[0m[2m:[0m Packet number: [0]
+[2m2025-03-17T10:07:03.450695Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m190[0m[2m:[0m unprotected_header: [c0, 0, 0, 0, 1, 10, db, 96, fd, 1a, ca, c, 90, 58, 17, c1, 62, 9a, dc, 41, 66, 60, 14, c9, 7d, 3e, 3, 17, fb, 84, d1, 14, 79, b0, be, 8e, 62, 38, 14, e1, d5, f4, d7, 0, 41, c, 0]
+[2m2025-03-17T10:07:03.450699Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m193[0m[2m:[0m encrypted_part: [d9, 73, 46, 8a, 65, 9d, b8, 45, e1, d0, 73, 95, 89, b9, 28, 73, ad, 76, 6d, 7d, f9, cb, ee, cc, ea, cf, 5d, d0, 1d, 5e, da, 52, f9, 9c, be, c5, e4, 10, e, 72, 90, 2b, c2, 64, 79, 45, ae, 66, 33, 27, 64, b8, 7d, 63, 2b, 30, 62, ce, 5e, e, f1, ba, f9, 4d, df, 88, 41, 1a, 5f, e9, 86, b7, ed, 37, 99, e9, a7, 37, 61, 7c, 2e, df, 82, 7b, cb, da, 88, 18, 37, 3e, c3, ba, 92, c0, 7f, 49, 58, a2, d8, c9, 1f, 4e, b5, e4, 1b, 3c, b3, c1, ba, a7, 65, e8, 24, 98, 8b, 55, 70, fe, 66, 76, da, 2d, 15, 91, af, a8, c8, bb, ac, f8, f0, 15, b9, 13, 5b, 5e, 24, a0, 25, 3, 88, e9, 95, b8, ac, c0, a1, e4, ac, 5c, eb, 16, 17, 64, 91, fa, ea, 9e, 61, 14, 69, cb, d4, 2, 60, 95, 5f, 9, c5, 94, 1b, a7, c1, f8, ee, 68, 38, e7, f2, 70, 9a, 30, ed, f1, 76, 39, 47, c5, cd, ab, 34, ef, a7, 8, 2, 92, df, f5, 77, 9d, 56, a6, 23, 2, cf, 20, 25, 7f, 1b, 70, f6, d7, 97, e3, 9f, f4, 8d, 10, 21, 35, ef, bd, 23, 21, 0, 17, 91, 38, f8, db, 78, 1a, af, cb, 4a, 4c, f0, 4e, 5e, 87, 89, d1, cf, cf, b3, 9a, 3a, 4, b, 23, ff, d4, ea, d4, 58, b7, d1, a7, f1, f0, f5, 27, 5c, cf, 4e, dc, 2d]
+[2m2025-03-17T10:07:03.450711Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m226[0m[2m:[0m Candidate packet number: [0, 0, 0, 0, 0, 0, 0, 0]
+[2m2025-03-17T10:07:03.450722Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m121[0m[2m:[0m Expected crypto frame: [6, 0, 40, f7, 1, 0, 0, f3, 3, 3, 68, db, 29, 2f, a7, ca, 30, 44, 9, c5, 1c, c3, d5, a2, bb, 1f, ef, 53, 57, 71, e7, 76, 88, d4, 79, 78, 3e, 2f, 2e, 7a, 18, c5, 0, 0, 6, 13, 1, 13, 2, 13, 3, 1, 0, 0, c4, 0, 0, 0, e, 0, c, 0, 0, 9, 6c, 6f, 63, 61, 6c, 68, 6f, 73, 74, 0, a, 0, 8, 0, 6, 0, 1d, 0, 17, 0, 18, 0, 10, 0, 5, 0, 3, 2, 68, 33, 0, d, 0, 14, 0, 12, 4, 3, 8, 4, 4, 1, 5, 3, 8, 5, 5, 1, 8, 6, 6, 1, 2, 1, 0, 33, 0, 26, 0, 24, 0, 1d, 0, 20, 81, 79, 9d, 63, 24, bd, aa, d0, d8, 2d, cc, 1b, bb, 51, 6e, 76, f8, ec, 6c, 8d, 13, b2, c0, f9, db, 24, a9, dd, 32, fa, c6, 6c, 0, 2d, 0, 2, 1, 1, 0, 2b, 0, 3, 2, 3, 4, 0, 39, 0, 4a, 1, 4, 80, 1, d4, c0, 3, 4, 80, 0, ff, f7, 4, 4, 80, 10, 0, 0, 5, 4, 80, 2, 0, 0, 6, 4, 80, 2, 0, 0, 7, 4, 80, 2, 0, 0, 8, 2, 40, 64, 9, 2, 40, 64, a, 1, 3, b, 1, 19, c, 0, f, 14, c9, 7d, 3e, 3, 17, fb, 84, d1, 14, 79, b0, be, 8e, 62, 38, 14, e1, d5, f4, d7]
+[2m2025-03-17T10:07:03.450737Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::quic[0m[2m:[0m[2m140[0m[2m:[0m Crypto data: [1, 0, 0, f3, 3, 3, 68, db, 29, 2f, a7, ca, 30, 44, 9, c5, 1c, c3, d5, a2, bb, 1f, ef, 53, 57, 71, e7, 76, 88, d4, 79, 78, 3e, 2f, 2e, 7a, 18, c5, 0, 0, 6, 13, 1, 13, 2, 13, 3, 1, 0, 0, c4, 0, 0, 0, e, 0, c, 0, 0, 9, 6c, 6f, 63, 61, 6c, 68, 6f, 73, 74, 0, a, 0, 8, 0, 6, 0, 1d, 0, 17, 0, 18, 0, 10, 0, 5, 0, 3, 2, 68, 33, 0, d, 0, 14, 0, 12, 4, 3, 8, 4, 4, 1, 5, 3, 8, 5, 5, 1, 8, 6, 6, 1, 2, 1, 0, 33, 0, 26, 0, 24, 0, 1d, 0, 20, 81, 79, 9d, 63, 24, bd, aa, d0, d8, 2d, cc, 1b, bb, 51, 6e, 76, f8, ec, 6c, 8d, 13, b2, c0, f9, db, 24, a9, dd, 32, fa, c6, 6c, 0, 2d, 0, 2, 1, 1, 0, 2b, 0, 3, 2, 3, 4, 0, 39, 0, 4a, 1, 4, 80, 1, d4, c0, 3, 4, 80, 0, ff, f7, 4, 4, 80, 10, 0, 0, 5, 4, 80, 2, 0, 0, 6, 4, 80, 2, 0, 0, 7, 4, 80, 2, 0, 0, 8, 2, 40, 64, 9, 2, 40, 64, a, 1, 3, b, 1, 19, c, 0, f, 14, c9, 7d, 3e, 3, 17, fb, 84, d1, 14, 79, b0, be, 8e, 62, 38, 14, e1, d5, f4, d7]
+[2m2025-03-17T10:07:03.450749Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m180[0m[2m:[0m TLS extensions_len: 196
+[2m2025-03-17T10:07:03.450752Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m190[0m[2m:[0m TLS extension_type:  0
+[2m2025-03-17T10:07:03.450754Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m204[0m[2m:[0m Found Server Name Indication extension
+[2m2025-03-17T10:07:03.450757Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m190[0m[2m:[0m TLS extension_type:  a
+[2m2025-03-17T10:07:03.450758Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m190[0m[2m:[0m TLS extension_type: 10
+[2m2025-03-17T10:07:03.450760Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m209[0m[2m:[0m Found Application-Layer Protocol Negotiation extension
+[2m2025-03-17T10:07:03.450762Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m190[0m[2m:[0m TLS extension_type:  d
+[2m2025-03-17T10:07:03.450765Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m190[0m[2m:[0m TLS extension_type: 33
+[2m2025-03-17T10:07:03.450767Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m190[0m[2m:[0m TLS extension_type: 2d
+[2m2025-03-17T10:07:03.450768Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m190[0m[2m:[0m TLS extension_type: 2b
+[2m2025-03-17T10:07:03.450770Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m190[0m[2m:[0m TLS extension_type: 39
+[2m2025-03-17T10:07:03.450772Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::tls[0m[2m:[0m[2m224[0m[2m:[0m TLS ClientHello detected: TlsClientHelloInfo { sni: ["localhost"], alpn: ["h3"] }
+[2m2025-03-17T10:07:03.450775Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m222[0m[2m:[0m IETF QUIC protocol detected
+[2m2025-03-17T10:07:03.450777Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m161[0m[2m:[0m Setting up dest addr for QUIC proto
+[2m2025-03-17T10:07:03.450833Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m202[0m[2m:[0m Connected to the upstream server: 127.0.0.1:4433
+[2m2025-03-17T10:07:03.450898Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m328[0m[2m:[0m Current connection: (local: 1, global: 1) @0.0.0.0:8448
+[2m2025-03-17T10:07:03.450907Z[0m [32m INFO[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m224[0m[2m:[0m UdpConnection from 172.18.0.1:59256 to 127.0.0.1:4433 started
+[2m2025-03-17T10:07:03.450966Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m266[0m[2m:[0m [172.18.0.1:59256 -> 127.0.0.1:4433] received 1200 bytes from downstream
+[2m2025-03-17T10:07:04.451056Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m295[0m[2m:[0m received 1200 bytes from 172.18.0.1:59256 [source]
+[2m2025-03-17T10:07:04.451089Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m119[0m[2m:[0m UdpConnection from 172.18.0.1:59256 to 127.0.0.1:4433 is active for 1 seconds
+[2m2025-03-17T10:07:04.451096Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m302[0m[2m:[0m Found existing connection for 172.18.0.1:59256
+[2m2025-03-17T10:07:04.451104Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m266[0m[2m:[0m [172.18.0.1:59256 -> 127.0.0.1:4433] received 1200 bytes from downstream
+[2m2025-03-17T10:07:04.451110Z[0m [31mERROR[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m275[0m[2m:[0m Error sending packet to upstream: Connection refused (os error 111)
+[2m2025-03-17T10:07:04.911366Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 1) @[::]:8448
+[2m2025-03-17T10:07:04.913240Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m119[0m[2m:[0m UdpConnection from 172.18.0.1:59256 to 127.0.0.1:4433 is active for 0 seconds
+[2m2025-03-17T10:07:04.913286Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 1, global: 1) @0.0.0.0:8448
+[2m2025-03-17T10:07:14.912321Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 1) @[::]:8448
+[2m2025-03-17T10:07:14.915253Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m119[0m[2m:[0m UdpConnection from 172.18.0.1:59256 to 127.0.0.1:4433 is active for 10 seconds
+[2m2025-03-17T10:07:14.915292Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 1, global: 1) @0.0.0.0:8448
+[2m2025-03-17T10:07:24.914517Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 1) @[::]:8448
+[2m2025-03-17T10:07:24.916384Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m119[0m[2m:[0m UdpConnection from 172.18.0.1:59256 to 127.0.0.1:4433 is active for 20 seconds
+[2m2025-03-17T10:07:24.916423Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 1, global: 1) @0.0.0.0:8448
+[2m2025-03-17T10:07:34.917107Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 1) @[::]:8448
+[2m2025-03-17T10:07:34.917235Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m119[0m[2m:[0m UdpConnection from 172.18.0.1:59256 to 127.0.0.1:4433 is active for 30 seconds
+[2m2025-03-17T10:07:34.917247Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m126[0m[2m:[0m UdpConnection from 172.18.0.1:59256 is pruned due to inactivity
+[2m2025-03-17T10:07:34.917277Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @0.0.0.0:8448
+[2m2025-03-17T10:07:34.917373Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_conn[0m[2m:[0m[2m326[0m[2m:[0m UdpConnection cancelled: [172.18.0.1:59256 <- 127.0.0.1:4433]
+[2m2025-03-17T10:07:44.920259Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @0.0.0.0:8448
+[2m2025-03-17T10:07:44.920360Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @[::]:8448
+[2m2025-03-17T10:07:54.921986Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @0.0.0.0:8448
+[2m2025-03-17T10:07:54.922026Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @[::]:8448
+[2m2025-03-17T10:08:04.924548Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @0.0.0.0:8448
+[2m2025-03-17T10:08:04.924663Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @[::]:8448
+[2m2025-03-17T10:08:14.926694Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @[::]:8448
+[2m2025-03-17T10:08:14.926804Z[0m [34mDEBUG[0m rpxy-l4 [2mrpxy_l4_lib::udp_proxy[0m[2m:[0m[2m365[0m[2m:[0m Current connection: (local: 0, global: 0) @0.0.0.0:8448

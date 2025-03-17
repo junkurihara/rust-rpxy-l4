@@ -1,0 +1,25 @@
+services:
+  rpxy-l4:
+    image: jqtype/rpxy-l4:latest
+    container_name: rpxy-l4
+    init: true
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:8448:8448
+      - 127.0.0.1:8448:8448/udp
+    build: # Uncomment if you build yourself
+      context: ../
+      dockerfile: ./docker/Dockerfile
+    environment:
+      - LOG_LEVEL=debug
+      - LOG_TO_FILE=true
+      - HOST_USER=jun
+      - HOST_UID=501
+      - HOST_GID=501
+    tty: false
+    volumes:
+      - ./log:/rpxy-l4/log:rw
+      - ../config.example.toml:/etc/rpxy-l4.toml:ro
+      # NOTE: To correctly enable "watch" in docker,
+      # ** you should mount not a file but a dir mapped to /rpxy-l4/config including "config.toml" due to the limitation of docker **
+      # e.g, - ./rpxy-config:/rpxy-l4/config

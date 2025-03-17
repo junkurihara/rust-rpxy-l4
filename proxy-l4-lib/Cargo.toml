@@ -27,7 +27,7 @@ thiserror = { version = "2.0.12" }
 tracing = { version = "0.1.41" }
 
 # async runtime
-tokio = { version = "1.44.0", default-features = false, features = [
+tokio = { version = "1.44.1", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",
@@ -35,7 +35,7 @@ tokio = { version = "1.44.0", default-features = false, features = [
   "macros",
   "io-util",
 ] }
-tokio-util = { version = "0.7.13", default-features = false }
+tokio-util = { version = "0.7.14", default-features = false }
 
 # network
 socket2 = { version = "0.5.8" }

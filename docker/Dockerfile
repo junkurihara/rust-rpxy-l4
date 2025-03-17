@@ -9,7 +9,7 @@ WORKDIR /tmp
 
 COPY . /tmp/
 
-ENV RUSTFLAGS "-C link-arg=-s"
+ENV RUSTFLAGS="-C link-arg=-s"
 
 RUN echo "Building rpxy-l4 from source" && \
   cargo update && \
@@ -21,7 +21,7 @@ RUN echo "Building rpxy-l4 from source" && \
 FROM alpine:latest AS runner
 LABEL maintainer="Jun Kurihara"
 
-ENV RUNTIME_DEPS logrotate ca-certificates su-exec
+ENV RUNTIME_DEPS="logrotate ca-certificates su-exec"
 
 RUN apk add --no-cache ${RUNTIME_DEPS} && \
   update-ca-certificates && \

@@ -2,6 +2,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Unit Test](https://github.com/junkurihara/rust-rpxy-l4/actions/workflows/ci.yml/badge.svg)
+![Container Build](https://github.com/junkurihara/rust-rpxy-l4/actions/workflows/docker.yml/badge.svg)
+![Release](https://github.com/junkurihara/rust-rpxy-l4/actions/workflows/release.yml/badge.svg)
+[![Docker Image Size (latest by date)](https://img.shields.io/docker/image-size/jqtype/rpxy-l4)](https://hub.docker.com/r/jqtype/rpxy-l4)
 
 > **WIP project, early stage of development.** This project just started from the owner's personal interest and research activity. Not recommended for production use yet.
 
@@ -53,7 +56,12 @@ TBD!
 
 ## Containerization
 
-TBD!
+The container, docker, image is available at Docker Hub and Github Container Registry.
+
+- Docker Hub: [jqtype/rpxy-l4](https://hub.docker.com/r/jqtype/rpxy-l4)
+- Github Container Registry: [ghcr.io/junkurihara/rust-rpxy-l4](https://ghcr.io/junkurihara/rust-rpxy-l4)
+
+The detailed configuration of the container can be found at [./docker](./docker) directory.
 
 ## Caveats
 

@@ -1,5 +1,5 @@
 ########################################
-FROM messense/rust-musl-cross:x86_64-musl AS builder
+FROM --platform=$BUILDPLATFORM messense/rust-musl-cross:x86_64-musl AS builder
 
 LABEL maintainer="Jun Kurihara"
 
@@ -9,13 +9,24 @@ WORKDIR /tmp
 
 COPY . /tmp/
 
+ARG TARGETARCH
+
+RUN if [ $TARGETARCH = "amd64" ]; then \
+  echo "x86_64" > /arch; \
+  elif [ $TARGETARCH = "arm64" ]; then \
+  echo "aarch64" > /arch; \
+  else \
+  echo "Unsupported platform: $TARGETARCH"; \
+  exit 1; \
+  fi
+
 ENV RUSTFLAGS="-C link-arg=-s"
 
 RUN echo "Building rpxy-l4 from source" && \
   cargo update && \
-  cargo build --release --target x86_64-unknown-linux-musl && \
-  musl-strip --strip-all /tmp/target/x86_64-unknown-linux-musl/release/rpxy-l4 && \
-  cp /tmp/target/x86_64-unknown-linux-musl/release/rpxy-l4 /tmp/target/release/rpxy-l4
+  cargo build --release --target $(cat /arch)-unknown-linux-musl&& \
+  musl-strip --strip-all /tmp/target/$(cat /arch)-unknown-linux-musl/release/rpxy-l4 && \
+  cp /tmp/target/$(cat /arch)-unknown-linux-musl/release/rpxy-l4 /tmp/target/release/rpxy-l4
 
 ########################################
 FROM alpine:latest AS runner

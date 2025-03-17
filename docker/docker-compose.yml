@@ -10,6 +10,9 @@ services:
     build: # Uncomment if you build yourself
       context: ../
       dockerfile: ./docker/Dockerfile
+      platforms: # Choose your platforms
+        - "linux/amd64"
+        # - "linux/arm64"
     environment:
       - LOG_LEVEL=debug
       - LOG_TO_FILE=true

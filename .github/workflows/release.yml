@@ -23,8 +23,8 @@ jobs:
           - target: "musl"
             platform: linux/amd64
 
-          # - target: "musl"
-          #   platform: linux/arm64
+          - target: "musl"
+            platform: linux/arm64
 
     steps:
       - run: "echo 'The release triggering workflows passed'"

@@ -83,9 +83,17 @@ const TLS_RECORD_HEADER_LEN: usize = 5;
 const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
+/// Probe result
+pub(crate) enum TlsProbeResult {
+  /// Success to probe TLS ClientHello
+  Success(TlsClientHelloInfo),
+  /// Not enough buffer to probe
+  PeekMore,
+}
+
 /// Check if the buffer is a TLS handshake
 /// This is inspired by https://github.com/yrutschle/sslh/blob/master/tls.c
-pub(crate) fn probe_tls_handshake(buf: &[u8]) -> Option<TlsClientHelloInfo> {
+pub(crate) fn probe_tls_handshake(buf: &[u8]) -> Option<TlsProbeResult> {
   // TLS record header is 5 bytes
   if buf.len() < TLS_RECORD_HEADER_LEN {
     return None;
@@ -108,11 +116,11 @@ pub(crate) fn probe_tls_handshake(buf: &[u8]) -> Option<TlsClientHelloInfo> {
   let payload_len = ((buf[3] as usize) << 8) + buf[4] as usize;
   if buf.len() < TLS_RECORD_HEADER_LEN + payload_len {
     debug!("Peek buffer for TLS handshake detection is not enough");
-    return None;
+    return Some(TlsProbeResult::PeekMore);
   }
   debug!("TLS Payload length: {}", payload_len);
 
-  probe_tls_client_hello(&buf[TLS_RECORD_HEADER_LEN..], tls_version_major, tls_version_minor)
+  probe_tls_client_hello(&buf[TLS_RECORD_HEADER_LEN..], tls_version_major, tls_version_minor).map(TlsProbeResult::Success)
 }
 
 /// Check if the buffer is a TLS ClientHello, called from TLS and QUIC

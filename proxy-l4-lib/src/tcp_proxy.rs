@@ -4,7 +4,7 @@ use crate::{
   destination::{Destination, DestinationBuilder, LoadBalance},
   error::ProxyError,
   socket::bind_tcp_socket,
-  tls::{probe_tls_handshake, TlsClientHelloInfo},
+  tls::{probe_tls_handshake, TlsClientHelloInfo, TlsProbeResult},
   trace::*,
 };
 use std::{net::SocketAddr, sync::Arc};
@@ -212,24 +212,30 @@ impl std::fmt::Display for TcpProxyProtocol {
   }
 }
 
+/// Peek the incoming TCP stream to detect the protocol
+async fn peek_tcp_stream(incoming_stream: &TcpStream, buf: &mut [u8]) -> Result<usize, ProxyError> {
+  let Ok(res) = timeout(
+    Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
+    incoming_stream.peek(buf),
+  )
+  .await
+  else {
+    error!("Failed to detect protocol: timeout");
+    return Err(ProxyError::TimeOutToReadTcpStream);
+  };
+  let read_len = res?;
+  if read_len == 0 {
+    error!("No data received");
+    return Err(ProxyError::NoDataReceivedTcpStream);
+  }
+  Ok(read_len)
+}
+
 impl TcpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
   pub(crate) async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
     let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
-    let Ok(res) = timeout(
-      Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
-      incoming_stream.peek(&mut buf),
-    )
-    .await
-    else {
-      error!("Failed to detect protocol: timeout");
-      return Err(ProxyError::TimeOutToReadTcpStream);
-    };
-    let read_len = res?;
-    if read_len == 0 {
-      error!("No data received");
-      return Err(ProxyError::NoDataReceivedTcpStream);
-    }
+    let read_len = peek_tcp_stream(incoming_stream, &mut buf).await?;
 
     // TODO: Add more protocol detection
     if buf.starts_with(b"SSH-") {
@@ -237,9 +243,23 @@ impl TcpProxyProtocol {
       return Ok(Self::Ssh);
     }
 
-    if let Some(info) = probe_tls_handshake(buf.as_slice()) {
-      debug!("TLS connection detected");
-      return Ok(Self::Tls(info));
+    if let Some(res) = probe_tls_handshake(&buf.as_slice()[..read_len]) {
+      let read_again_len = match res {
+        TlsProbeResult::Success(info) => {
+          debug!("TLS connection detected");
+          return Ok(Self::Tls(info));
+        }
+        TlsProbeResult::PeekMore => {
+          debug!("TLS connection detected, but need more data");
+          peek_tcp_stream(incoming_stream, &mut buf).await?
+        }
+      };
+      let res = probe_tls_handshake(&buf.as_slice()[..read_again_len]);
+      if let Some(TlsProbeResult::Success(info)) = res {
+        debug!("TLS connection detected");
+        return Ok(Self::Tls(info));
+      }
+      debug!("Peeked again, but failed to get enough data of TLS Client Hello");
     }
 
     if buf.windows(4).any(|w| w.eq(b"HTTP")) {

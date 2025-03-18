@@ -90,6 +90,9 @@ The above configuration works as the following manner.
 `rpxy-l4` allows you to distribute incoming TCP/UDP packets to multiple backend servers based on the several simple load balancing algorithms. For the multiple TCP/UDP targets, you can set the load balancing algorithm as follows.
 
 ```toml
+# Listen port, must be set
+listen_port = 8448
+
 # Default targets for TCP connections. [default: empty]
 tcp_target = ["192.168.0.2:8000", "192.168.0.3:8000"]
 
@@ -112,15 +115,104 @@ Currently, `rpxy-l4` supports the following load balancing algorithms:
 
 ### 3. Second step: Protocol multiplexing
 
-TBD!
+Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocol.<service_name>]` filed in the configuration file as follows.
+
+```toml
+listen_port = 8448
+...
+
+# Set for each multiplexed service
+[protocol."http_service"]
+...
+```
+
+Currently, `rpxy-l4` supports the following protocols for multiplexing:
+
+- TCP: HTTP (cleartext), TLS, SSH
+- UDP: QUIC (IETF [RFC9000](https://datatracker.ietf.org/doc/html/rfc9000)), WireGuard
 
 #### 3.1. Example of TLS/QUIC multiplexer with SNI/ALPN
 
+`rpxy-l4` can detect and multiplex TLS/QUIC streams by probing the TLS ClientHello message and IETF QUIC Initial packet (containing ClientHello). The following example demonstrates the scenario that any TLS/QUIC is forwarded to the appropriate backend that are different from the default targets.
+
+```toml
+listen_port = 8448
+tcp_target = ["192.168.0.2:8000"]
+udp_target = ["192.168.0.3:4000"]
+
+# TLS
+[protocol."tls_service"]
+# Name of protocol tls|ssh|http|wireguard|quic
+protocol = "tls"
+
+# Target for connections detected as TLS.
+target = ["192.168.0.5:443"]
+
+# (Optional) Load balancing method specific to this connections [default: none]
+load_balance = "source_ip"
+
+#####################
+# IETF QUIC
+[protocol."quic_service"]
+# Name of protocol tls|ssh|http|wireguard|quic
+protocol = "quic"
+
+# Target for connections detected as QUIC.
+target = ["192.168.0.6:443"]
+
+# Load balancing method for QUIC connections [default: none]
+load_balance = "source_socket"
+
+# Idle lifetime for QUIC connections in seconds [default: 30]
+idle_lifetime = 30
+```
+
+> [!NOTE]
+> Since IETF-QUIC is a UDP-based protocol, the `idle_lifetime` field is available for `protocol="quic"` to adjust the idle lifetime of the pseudo connection only valid for QUIC streams.
+
+Additionally, you can set the `tls_alpn` and `tls_sni` fields for the case where `protocol="tls"` or `protocol="quic"`. These are additional filters for the TLS/QUIC multiplexer to route the stream to the appropriate backend server based on the Application Layer Protocol Negotiation (ALPN) and Server Name Indication (SNI) values. This means that only streams with the specified ALPN and SNI values are forwarded to the target.
+
+```toml
+[protocol."tls_service"]
+protocol = "tls"
+target = ["192.168.0.5:443"]
+load_balance = "source_ip"
+
+# (Optional) SNI-based routing for TLS/QUIC connections.
+# If specified, only TLS/QUIC connections matched to the given SNI(s) are forwarded to the target.
+# Format: ["<server_name>", "<server_name>", ...]
+server_names = ["example.com", "example.org"]
+
+# (Optional) ALPN-based routing for TLS/QUIC connections.
+# If specified, only TLS/QUIC connections matched to the given ALPN(s) are forwarded to the target.
+# Format: ["<alpn>", "<alpn>", ...]
+alpns = ["h2", "http/1.1"]
+
+```
+
+> [!NOTE]
+> If both `server_names` and `alpns` are specified, the proxy forwards connections that match simultaneously both of them.
+
 #### 3.2. Example of WireGuard multiplexer
+
+`rpxy-l4` can detect and multiplex WireGuard packets by probing the initial handshake packet. The following example demonstrates the scenario that any WireGuard packets are forwarded to the appropriate backend that are different from the default targets as well.
+
+```toml
+[protocols."wireguard_service"]
+protocol = "wireguard"
+target = ["192.168.0.10:51820"]
+load_balance = "none"
+# longer than the keepalive interval of the wireguard tunnel
+idle_lifetime = 30
+```
+
+> [!NOTE]
+> As well as QUIC, WireGuard is a UDP-based protocol. The `idle_lifetime` field is available for `protocol="wireguard"`. You should adjust the value according to your WireGuard configuration, especially the keep-alive interval.
 
 #### 3.3. Passing through only the expected protocols (protocol sanitization)
 
-TBD!
+This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
+
 
 ## Containerization
 
@@ -132,6 +224,12 @@ The container, docker, image is available at Docker Hub and Github Container Reg
 The detailed configuration of the container can be found at [./docker](./docker) directory.
 
 ## Caveats
+
+### `UDP` pseudo connection management
+
+As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from each clients based on the socket address. Also, `rpxy-l4` identifies specific protocols by probing their initial/handshake packets. These means that if the idle lifetime of pseudo connections is too short and the client sends packets in a long interval, the pseudo connection would be removed even during the communication. Then, the subsequent packets from the client, i.e., NOT the initial/handshake packets, are *routed not the protocol-specific target but to the default target (or dropped if there is no default target)*. To avoid this, you should set the `idle_lifetime` value of UDP-based protocol multiplexer to be longer than the interval of the client's packet sending.
+
+### Others
 
 TBD!
 

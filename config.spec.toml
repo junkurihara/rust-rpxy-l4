@@ -129,7 +129,7 @@ load_balance = "source_ip"
 idle_lifetime = 30
 
 # server_names = ["example.com", "example.org"]
-# ech_config = { private_keys = ["/path/to/private.key"] }
+# ech = { private_keys = ["/path/to/private.key"], server_names = ["example.org"] }
 
 #########################
 ### Example for SSH

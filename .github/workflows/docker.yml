@@ -15,6 +15,10 @@ env:
 
 jobs:
   build_and_push:
+    permissions:
+      contents: read
+      packages: write
+
     runs-on: ubuntu-22.04
     if: ${{ github.event_name == 'push' }} || ${{ github.event_name == 'pull_request' && github.event.pull_request.merged == true }}
     strategy:

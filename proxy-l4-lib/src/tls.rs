@@ -280,6 +280,11 @@ pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
 pub(crate) fn parse_alpn(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
   let mut pos = 0;
 
+  if buf.len() < 2 {
+    error!("Invalid ALPN extension");
+    return Err(anyhow::anyhow!("Invalid ALPN extension"));
+  }
+
   // byte length of the protocol name list payload
   let protocol_name_list_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
   pos += 2;

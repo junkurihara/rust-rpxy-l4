@@ -213,7 +213,6 @@ idle_lifetime = 30
 
 This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
 
-
 ## Containerization
 
 The container, docker, image is available at Docker Hub and Github Container Registry.
@@ -239,10 +238,11 @@ TBD!
 
 - [`sslh`](https://github.com/yrutschle/sslh): `rpxy-l4` is strongly inspired by `sslh` for its protocol multiplexer feature.
 - [`tokio`](https://github.com/tokio-rs/tokio): Great async runtime for Rust.
+- [`RustCrypto`](https://github.com/RustCrypto): Pure Rust implementations of various cryptographic algorithms, used in `rpxy-l4` for TLS/QUIC cryptographic operations.
 
 ## License
 
-`rpxy` is free, open-source software licensed under MIT License.
+`rpxy-l4` is free, open-source software licensed under MIT License.
 
 You can open issues for bugs you've found or features you think are missing. You can also submit pull requests to this repository.
 

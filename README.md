@@ -226,7 +226,7 @@ The detailed configuration of the container can be found at [./docker](./docker)
 
 ### `UDP` pseudo connection management
 
-As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from each clients based on the socket address. Also, `rpxy-l4` identifies specific protocols by probing their initial/handshake packets. These means that if the idle lifetime of pseudo connections is too short and the client sends packets in a long interval, the pseudo connection would be removed even during the communication. Then, the subsequent packets from the client, i.e., NOT the initial/handshake packets, are *routed not the protocol-specific target but to the default target (or dropped if there is no default target)*. To avoid this, you should set the `idle_lifetime` value of UDP-based protocol multiplexer to be longer than the interval of the client's packet sending.
+As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from each clients based on the socket address. Also, `rpxy-l4` identifies specific protocols by probing their initial/handshake packets. These means that if the idle lifetime of pseudo connections is too short and the client sends packets in a long interval, the pseudo connection would be removed even during the communication. Then, the subsequent packets from the client, i.e., NOT the initial/handshake packets, are *routed not to the protocol-specific target but to the default target (or dropped if there is no default target)*. To avoid this, you should set the `idle_lifetime` value of UDP-based protocol multiplexer to be longer than the interval of the client's packet sending.
 
 ### Others
 

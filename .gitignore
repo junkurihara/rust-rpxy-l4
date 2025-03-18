@@ -26,3 +26,4 @@ Cargo.lock
 .vscode
 .private
 .log
+log

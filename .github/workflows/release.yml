@@ -27,7 +27,7 @@ jobs:
             platform: linux/arm64
 
     steps:
-      - run: "echo 'The relese triggering workflows passed'"
+      - run: "echo 'The release triggering workflows passed'"
 
       - name: "set env"
         id: "set-env"
@@ -81,7 +81,7 @@ jobs:
         if: ${{ steps.regex-match.outputs.match != ''}}
         run: |
           mkdir /tmp/assets
-          cd /tmp/rpxy
+          cd /tmp/rpxy-l4
           for i in ./*; do sh -c "cd $i && tar zcvf $i.tar.gz $i && mv $i.tar.gz /tmp/assets/"; done
           ls -lha /tmp/assets
 

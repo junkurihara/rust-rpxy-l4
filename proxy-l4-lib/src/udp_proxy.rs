@@ -313,7 +313,10 @@ impl UdpProxy {
           continue;
         }
         let protocol = UdpProxyProtocol::detect_protocol(&udp_buf[..buf_size]).await?;
-        let udp_dst = self.destination_mux.get_destination(&protocol)?;
+        let Ok(udp_dst) = self.destination_mux.get_destination(&protocol) else {
+          error!("No destination address found for protocol: {}", protocol);
+          continue;
+        };
         let Ok(conn) = udp_connection_pool
           .create_new_connection(&src_addr, &udp_dst, udp_socket_tx.clone())
           .await

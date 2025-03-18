@@ -230,6 +230,11 @@ pub(crate) fn probe_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_vers
 pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
   let mut pos = 0;
 
+  if buf.len() < 2 {
+    error!("Invalid SNI extension");
+    return Err(anyhow::anyhow!("Invalid SNI extension"));
+  }
+
   // byte length of the server name list payload
   let server_name_list_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
   pos += 2;

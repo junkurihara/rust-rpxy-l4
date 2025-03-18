@@ -233,6 +233,12 @@ async fn peek_tcp_stream(incoming_stream: &TcpStream, buf: &mut [u8]) -> Result<
 
 impl TcpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
+  /// TODO: This currently peeks the first bytes and hence we can't control the received data size.
+  /// TODO: So, typically in TLS, we need to fetch more data again to detect the protocol.
+  /// TODO: But this might happen more than twice since we cannot control the peekable data size.
+  /// TODO: In TLS, we can get the length of ClientHello payload from its header.
+  /// TODO: Thus, we should use `stream.read_exact` method for the fetching.
+  /// TODO: This consumes the stream queue, and hence we need change the handling of the first packets of all types TCP stream.
   pub(crate) async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
     let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
     let read_len = peek_tcp_stream(incoming_stream, &mut buf).await?;
@@ -243,6 +249,7 @@ impl TcpProxyProtocol {
       return Ok(Self::Ssh);
     }
 
+    // TODO: Refactor this part to get the exact length of the ClientHello payload
     if let Some(res) = probe_tls_handshake(&buf.as_slice()[..read_len]) {
       let read_again_len = match res {
         TlsProbeResult::Success(info) => {

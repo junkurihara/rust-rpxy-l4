@@ -3,13 +3,15 @@ use crate::{
   count::ConnectionCount,
   destination::{Destination, DestinationBuilder, LoadBalance},
   error::ProxyError,
+  probe::ProbeResult,
   socket::bind_tcp_socket,
-  tls::{probe_tls_handshake, TlsClientHelloInfo, TlsProbeResult},
+  tls::{probe_tls_handshake, TlsClientHelloInfo},
   trace::*,
 };
+use bytes::BytesMut;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
-  io::copy_bidirectional,
+  io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt},
   net::TcpStream,
   time::{timeout, Duration},
 };
@@ -213,17 +215,8 @@ impl std::fmt::Display for TcpProxyProtocol {
 }
 
 /// Peek the incoming TCP stream to detect the protocol
-async fn peek_tcp_stream(incoming_stream: &TcpStream, buf: &mut [u8]) -> Result<usize, ProxyError> {
-  let Ok(res) = timeout(
-    Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
-    incoming_stream.peek(buf),
-  )
-  .await
-  else {
-    error!("Failed to detect protocol: timeout");
-    return Err(ProxyError::TimeOutToReadTcpStream);
-  };
-  let read_len = res?;
+async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<usize, ProxyError> {
+  let read_len = incoming_stream.read_buf(buf).await?;
   if read_len == 0 {
     error!("No data received");
     return Err(ProxyError::NoDataReceivedTcpStream);
@@ -239,36 +232,38 @@ impl TcpProxyProtocol {
   /// TODO: In TLS, we can get the length of ClientHello payload from its header.
   /// TODO: Thus, we should use `stream.read_exact` method for the fetching.
   /// TODO: This consumes the stream queue, and hence we need change the handling of the first packets of all types TCP stream.
-  pub(crate) async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
-    let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
-    let read_len = peek_tcp_stream(incoming_stream, &mut buf).await?;
+  async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<Self, ProxyError> {
+    // Read the first several bytes to probe
+    let _read_len = read_tcp_stream(incoming_stream, buf).await?;
 
     // TODO: Add more protocol detection
+    // SSH
     if buf.starts_with(b"SSH-") {
       debug!("SSH connection detected");
       return Ok(Self::Ssh);
     }
 
-    // TODO: Refactor this part to get the exact length of the ClientHello payload
-    if let Some(res) = probe_tls_handshake(&buf.as_slice()[..read_len]) {
-      let read_again_len = match res {
-        TlsProbeResult::Success(info) => {
+    // TLS
+    loop {
+      match probe_tls_handshake(buf) {
+        ProbeResult::Failure => {
+          break;
+        }
+        ProbeResult::Success(info) => {
           debug!("TLS connection detected");
           return Ok(Self::Tls(info));
         }
-        TlsProbeResult::PeekMore => {
-          debug!("TLS connection detected, but need more data");
-          peek_tcp_stream(incoming_stream, &mut buf).await?
+        ProbeResult::PollNext => {
+          debug!("TLS connection detected, but need more data. Polling next.");
+          let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+          let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
+
+          buf.extend_from_slice(&next_buf[..]);
         }
-      };
-      let res = probe_tls_handshake(&buf.as_slice()[..read_again_len]);
-      if let Some(TlsProbeResult::Success(info)) = res {
-        debug!("TLS connection detected");
-        return Ok(Self::Tls(info));
       }
-      debug!("Peeked again, but failed to get enough data of TLS Client Hello");
     }
 
+    // HTTP
     if buf.windows(4).any(|w| w.eq(b"HTTP")) {
       debug!("HTTP connection detected");
       return Ok(Self::Http);
@@ -337,7 +332,17 @@ impl TcpProxy {
           let dst_mux = Arc::clone(&self.destination_mux);
           let connection_count = self.connection_count.clone();
           async move {
-            let protocol = match TcpProxyProtocol::detect_protocol(&incoming_stream).await {
+            let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+            let Ok(probe_result) = timeout(
+              Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
+              TcpProxyProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
+            )
+            .await
+            else {
+              error!("Timeout to probe the incoming TCP stream");
+              return;
+            };
+            let protocol = match probe_result {
               Ok(p) => p,
               Err(e) => {
                 error!("Failed to detect protocol: {e}");
@@ -364,6 +369,13 @@ impl TcpProxy {
               connection_count.decrement();
               return;
             };
+            // Write the initial buffer to the outgoing stream
+            if let Err(e) = outgoing_stream.write_all(&initial_buf).await {
+              error!("Failed to write the initial buffer to the outgoing stream: {e}");
+              connection_count.decrement();
+              return;
+            }
+            // Then, copy bidirectional
             if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
               warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
             }

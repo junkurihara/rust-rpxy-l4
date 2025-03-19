@@ -9,7 +9,7 @@ use crate::{
 };
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
-  io::copy_bidirectional,
+  io::{copy_bidirectional, AsyncReadExt},
   net::TcpStream,
   time::{timeout, Duration},
 };
@@ -239,40 +239,43 @@ impl TcpProxyProtocol {
   /// TODO: In TLS, we can get the length of ClientHello payload from its header.
   /// TODO: Thus, we should use `stream.read_exact` method for the fetching.
   /// TODO: This consumes the stream queue, and hence we need change the handling of the first packets of all types TCP stream.
-  pub(crate) async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
-    let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
-    let read_len = peek_tcp_stream(incoming_stream, &mut buf).await?;
+  pub(crate) async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut [u8]) -> Result<Self, ProxyError> {
+    // Read the first several byte
+    let red_len = incoming_stream.read(buf).await?;
 
-    // TODO: Add more protocol detection
-    if buf.starts_with(b"SSH-") {
-      debug!("SSH connection detected");
-      return Ok(Self::Ssh);
-    }
+    // let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
+    // let read_len = peek_tcp_stream(incoming_stream, &mut buf).await?;
 
-    // TODO: Refactor this part to get the exact length of the ClientHello payload
-    if let Some(res) = probe_tls_handshake(&buf.as_slice()[..read_len]) {
-      let read_again_len = match res {
-        TlsProbeResult::Success(info) => {
-          debug!("TLS connection detected");
-          return Ok(Self::Tls(info));
-        }
-        TlsProbeResult::PeekMore => {
-          debug!("TLS connection detected, but need more data");
-          peek_tcp_stream(incoming_stream, &mut buf).await?
-        }
-      };
-      let res = probe_tls_handshake(&buf.as_slice()[..read_again_len]);
-      if let Some(TlsProbeResult::Success(info)) = res {
-        debug!("TLS connection detected");
-        return Ok(Self::Tls(info));
-      }
-      debug!("Peeked again, but failed to get enough data of TLS Client Hello");
-    }
+    // // TODO: Add more protocol detection
+    // if buf.starts_with(b"SSH-") {
+    //   debug!("SSH connection detected");
+    //   return Ok(Self::Ssh);
+    // }
 
-    if buf.windows(4).any(|w| w.eq(b"HTTP")) {
-      debug!("HTTP connection detected");
-      return Ok(Self::Http);
-    }
+    // // TODO: Refactor this part to get the exact length of the ClientHello payload
+    // if let Some(res) = probe_tls_handshake(&buf.as_slice()[..read_len]) {
+    //   let read_again_len = match res {
+    //     TlsProbeResult::Success(info) => {
+    //       debug!("TLS connection detected");
+    //       return Ok(Self::Tls(info));
+    //     }
+    //     TlsProbeResult::PeekMore => {
+    //       debug!("TLS connection detected, but need more data");
+    //       peek_tcp_stream(incoming_stream, &mut buf).await?
+    //     }
+    //   };
+    //   let res = probe_tls_handshake(&buf.as_slice()[..read_again_len]);
+    //   if let Some(TlsProbeResult::Success(info)) = res {
+    //     debug!("TLS connection detected");
+    //     return Ok(Self::Tls(info));
+    //   }
+    //   debug!("Peeked again, but failed to get enough data of TLS Client Hello");
+    // }
+
+    // if buf.windows(4).any(|w| w.eq(b"HTTP")) {
+    //   debug!("HTTP connection detected");
+    //   return Ok(Self::Http);
+    // }
 
     debug!("Untyped TCP connection");
     Ok(Self::Any)
@@ -337,7 +340,8 @@ impl TcpProxy {
           let dst_mux = Arc::clone(&self.destination_mux);
           let connection_count = self.connection_count.clone();
           async move {
-            let protocol = match TcpProxyProtocol::detect_protocol(&incoming_stream).await {
+            let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
+            let protocol = match TcpProxyProtocol::detect_protocol(&mut incoming_stream, &mut buf).await {
               Ok(p) => p,
               Err(e) => {
                 error!("Failed to detect protocol: {e}");

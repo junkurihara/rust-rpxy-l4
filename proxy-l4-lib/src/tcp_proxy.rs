@@ -240,7 +240,7 @@ impl TcpProxyProtocol {
   /// TODO: Thus, we should use `stream.read_exact` method for the fetching.
   /// TODO: This consumes the stream queue, and hence we need change the handling of the first packets of all types TCP stream.
   pub(crate) async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut [u8]) -> Result<Self, ProxyError> {
-    // Read the first several byte
+    // Read the first several bytes to probe
     let red_len = incoming_stream.read(buf).await?;
 
     // let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];

@@ -109,7 +109,7 @@ pub(crate) fn probe_tls_handshake(buf: &BytesMut) -> ProbeResult<TlsClientHelloI
   }
   let payload_len = ((buf[3] as usize) << 8) + buf[4] as usize;
   if buf.len() < TLS_RECORD_HEADER_LEN + payload_len {
-    debug!("Peek buffer for TLS handshake detection is not enough");
+    debug!("Read buffer for TLS handshake detection is not enough");
     return ProbeResult::PollNext;
   }
   debug!("TLS Payload length: {}", payload_len);

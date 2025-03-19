@@ -226,12 +226,6 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
 
 impl TcpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
-  /// TODO: This currently peeks the first bytes and hence we can't control the received data size.
-  /// TODO: So, typically in TLS, we need to fetch more data again to detect the protocol.
-  /// TODO: But this might happen more than twice since we cannot control the peekable data size.
-  /// TODO: In TLS, we can get the length of ClientHello payload from its header.
-  /// TODO: Thus, we should use `stream.read_exact` method for the fetching.
-  /// TODO: This consumes the stream queue, and hence we need change the handling of the first packets of all types TCP stream.
   async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<Self, ProxyError> {
     // Read the first several bytes to probe
     let _read_len = read_tcp_stream(incoming_stream, buf).await?;
@@ -244,6 +238,7 @@ impl TcpProxyProtocol {
     }
 
     // TLS
+    // TODO: Should we use `stream.read_exact` method for the fetching instead of read_buf inside loop?
     loop {
       match probe_tls_handshake(buf) {
         ProbeResult::Failure => {

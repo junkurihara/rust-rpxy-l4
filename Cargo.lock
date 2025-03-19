@@ -827,6 +827,7 @@ dependencies = [
  "aes-gcm",
  "ahash",
  "anyhow",
+ "bytes",
  "dashmap",
  "derive_builder",
  "hkdf",

@@ -1,4 +1,6 @@
-use crate::trace::*;
+use bytes::BytesMut;
+
+use crate::{probe::ProbeResult, trace::*};
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, Default)]
@@ -83,20 +85,12 @@ const TLS_RECORD_HEADER_LEN: usize = 5;
 const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
-/// Probe result
-pub(crate) enum TlsProbeResult {
-  /// Success to probe TLS ClientHello
-  Success(TlsClientHelloInfo),
-  /// Not enough buffer to probe
-  PeekMore,
-}
-
 /// Check if the buffer is a TLS handshake
 /// This is inspired by https://github.com/yrutschle/sslh/blob/master/tls.c
-pub(crate) fn probe_tls_handshake(buf: &[u8]) -> Option<TlsProbeResult> {
+pub(crate) fn probe_tls_handshake(buf: &BytesMut) -> ProbeResult<TlsClientHelloInfo> {
   // TLS record header is 5 bytes
   if buf.len() < TLS_RECORD_HEADER_LEN {
-    return None;
+    return ProbeResult::Failure;
   }
   // TLS record header: https://tools.ietf.org/html/rfc5246#section-6.2 , https://datatracker.ietf.org/doc/html/rfc8446#section-5.1
   // - content type: 1 byte
@@ -104,23 +98,26 @@ pub(crate) fn probe_tls_handshake(buf: &[u8]) -> Option<TlsProbeResult> {
   // - length: 2 bytes
   // content type should be 0x16 (handshake)
   if !buf[0].eq(&TLS_HANDSHAKE_CONTENT_TYPE) {
-    return None;
+    return ProbeResult::Failure;
   }
   // Initial client hello possibly has the legacy versions for interoperability, like 0x03 0x01 = TLS 1.0
   let tls_version_major = buf[1];
   let tls_version_minor = buf[2];
   if tls_version_major < 3 {
     // Omit the legacy SSL
-    return None;
+    return ProbeResult::Failure;
   }
   let payload_len = ((buf[3] as usize) << 8) + buf[4] as usize;
   if buf.len() < TLS_RECORD_HEADER_LEN + payload_len {
     debug!("Peek buffer for TLS handshake detection is not enough");
-    return Some(TlsProbeResult::PeekMore);
+    return ProbeResult::PollNext;
   }
   debug!("TLS Payload length: {}", payload_len);
 
-  probe_tls_client_hello(&buf[TLS_RECORD_HEADER_LEN..], tls_version_major, tls_version_minor).map(TlsProbeResult::Success)
+  match probe_tls_client_hello(&buf[TLS_RECORD_HEADER_LEN..], tls_version_major, tls_version_minor) {
+    Some(client_hello_info) => ProbeResult::Success(client_hello_info),
+    None => ProbeResult::Failure,
+  }
 }
 
 /// Check if the buffer is a TLS ClientHello, called from TLS and QUIC

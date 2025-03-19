@@ -3,6 +3,7 @@ mod constants;
 mod count;
 mod destination;
 mod error;
+mod probe;
 mod proto;
 mod quic;
 mod socket;

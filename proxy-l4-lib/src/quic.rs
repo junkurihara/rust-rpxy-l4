@@ -104,7 +104,8 @@ fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
     return None;
   };
 
-  if ptr + payload_len >= buf.len() {
+  if ptr + payload_len > buf.len() {
+    debug!("Buffer too short for payload");
     return None;
   }
   debug!("Payload: {:x?}", &buf[ptr..ptr + payload_len]);

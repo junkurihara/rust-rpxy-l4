@@ -119,6 +119,9 @@ fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
   let Ok(expected_crypto_frame) = unprotect(buf, &dcid, ptr, payload_len) else {
     return None;
   };
+  // TODO:
+  // TODO: We have to consider crypto frames split into multiple packets.
+  // TODO: reassemble the crypto frames and check if it is a TLS ClientHello!!
   debug!("Expected crypto frame: {:x?}", expected_crypto_frame);
   let mut ptr = 0;
   // Frame type
@@ -139,6 +142,7 @@ fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
   }
   let crypto_data = &expected_crypto_frame[ptr..ptr + crypto_data_len];
   debug!("Crypto data: {:x?}", crypto_data);
+  // TODO: After reassembling the crypto frames, check if it is a TLS ClientHello.
   probe_tls_client_hello(crypto_data, 3, 2)
 }
 

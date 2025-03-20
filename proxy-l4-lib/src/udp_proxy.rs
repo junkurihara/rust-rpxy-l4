@@ -305,6 +305,10 @@ impl UdpProxy {
           continue;
         }
 
+        // TODO: Spawn the packet buffering service for source socket address to handle multiple packets for detection
+        // This might be managed as another connection pool-like structure? Buffered ones are queued before establishing a connection.
+        // This is required to handle quic initial packets.
+
         // Handle case there is no existing connection
         debug!("No existing connection for {}", src_addr);
         // Check the connection limit

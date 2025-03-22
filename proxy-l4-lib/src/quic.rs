@@ -116,34 +116,116 @@ fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
 
   // So far, the buffer is consistent with a QUIC initial packet.
   // Now, try to decrypt the packet and check if it is a TLS ClientHello.
-  let Ok(expected_crypto_frame) = unprotect(buf, &dcid, ptr, payload_len) else {
+  let Ok(unprotected_payload) = unprotect(buf, &dcid, ptr, payload_len) else {
     return None;
   };
   // TODO:
   // TODO: We have to consider crypto frames split into multiple packets.
   // TODO: reassemble the crypto frames and check if it is a TLS ClientHello!!
-  debug!("Expected crypto frame: {:x?}", expected_crypto_frame);
-  let mut ptr = 0;
-  // Frame type
-  if expected_crypto_frame[ptr] != 0x06 {
-    return None;
+  debug!("Decrypted initial packet payload: {:x?}", unprotected_payload);
+
+  // Parse QUIC frames of the unprotected payload in initial packet.
+  match parse_quic_frames(&unprotected_payload) {
+    Err(e) => {
+      error!("Failed to parse QUIC frames: {:?}", e);
+      return None;
+    }
+    Ok(crypto_frames) => {
+      debug!("Parsed QUIC frames: {:?}", crypto_frames);
+    }
   }
-  ptr += 1;
-  // Frame offset
-  let Ok(_frame_offset) = variable_length_int(&expected_crypto_frame, &mut ptr) else {
-    return None;
-  };
-  // Crypto data length
-  let Ok(crypto_data_len) = variable_length_int(&expected_crypto_frame, &mut ptr) else {
-    return None;
-  };
-  if ptr + crypto_data_len > expected_crypto_frame.len() {
-    return None;
-  }
-  let crypto_data = &expected_crypto_frame[ptr..ptr + crypto_data_len];
-  debug!("Crypto data: {:x?}", crypto_data);
+
+  Some(TlsClientHelloInfo {
+    sni: vec![],
+    alpn: vec![],
+  })
   // TODO: After reassembling the crypto frames, check if it is a TLS ClientHello.
-  probe_tls_client_hello(crypto_data, 3, 2)
+  // probe_tls_client_hello(crypto_data, 3, 2)
+}
+
+/* ---------------------------------------------------- */
+#[derive(Debug)]
+/// Struct for CRYPTO Frame, type 0x06
+struct CryptoFrame<'a> {
+  frame_offset: usize,
+  crypto_data_len: usize,
+  crypto_data: &'a [u8],
+}
+/// Extract CRYPTO frames from QUIC unprotected payload of the initial packet.
+/// https://www.rfc-editor.org/rfc/rfc9000.html#section-17.2.2
+/// Initial packet can contain CRYPTO (0x06), ACK (0x02, 0x03), PING (0x01), PADDING (0x00), and CONNECTION_CLOSE (only 0x1c).
+fn parse_quic_frames(buf: &[u8]) -> Result<Vec<CryptoFrame<'_>>, anyhow::Error> {
+  let mut ptr = 0;
+  let mut crypto_frames = Vec::new();
+  while ptr < buf.len() {
+    let frame_type = buf[ptr];
+    ptr += 1;
+    match frame_type {
+      0x06 => {
+        let crypto_frame = parse_crypto_frame(buf, &mut ptr)?;
+        crypto_frames.push(crypto_frame);
+      }
+      0x02 | 0x03 => parse_ack_frame(frame_type, buf, &mut ptr)?,
+      0x1c => parse_cc_frame(buf, &mut ptr)?,
+      0x01 => continue, // PING frame
+      0x00 => continue, // PADDING frame
+      _ => return Err(anyhow::anyhow!("Prohibited frame type in initial packets: {:x}", frame_type)),
+    }
+  }
+  Ok(crypto_frames)
+}
+
+// parse crypto frame
+fn parse_crypto_frame<'a>(buf: &'a [u8], ptr: &mut usize) -> Result<CryptoFrame<'a>, anyhow::Error> {
+  let frame_offset = variable_length_int(buf, ptr)?;
+  let crypto_data_len = variable_length_int(buf, ptr)?;
+  if *ptr + crypto_data_len > buf.len() {
+    return Err(anyhow::anyhow!("Buffer too short"));
+  }
+  let crypto_data = &buf[*ptr..*ptr + crypto_data_len];
+  *ptr += crypto_data_len;
+
+  let crypto_frame = CryptoFrame {
+    frame_offset,
+    crypto_data_len,
+    crypto_data,
+  };
+  Ok(crypto_frame)
+}
+
+// parse ack frame
+fn parse_ack_frame(ack_type: u8, buf: &[u8], ptr: &mut usize) -> Result<(), anyhow::Error> {
+  let _largest_ack = variable_length_int(buf, ptr)?;
+  let _ack_delay = variable_length_int(buf, ptr)?;
+  let _ack_range_count = variable_length_int(buf, ptr)?;
+  let _first_ack_range = variable_length_int(buf, ptr)?;
+  for _ in 0.._ack_range_count {
+    let _gap = variable_length_int(buf, ptr)?;
+    let _ack_range_length = variable_length_int(buf, ptr)?;
+  }
+  if ack_type == 0x03 {
+    let _ect01_count = variable_length_int(buf, ptr)?;
+    let _ect02_count = variable_length_int(buf, ptr)?;
+    let _ecn_ce_count = variable_length_int(buf, ptr)?;
+  }
+  Ok(())
+}
+
+// parse connection close frame
+fn parse_cc_frame(buf: &[u8], ptr: &mut usize) -> Result<(), anyhow::Error> {
+  let _error_code = variable_length_int(buf, ptr)?;
+  if *ptr >= buf.len() {
+    return Err(anyhow::anyhow!("Buffer too short"));
+  }
+  let _frame_type = buf[*ptr];
+  *ptr += 1;
+  let reason_phrase_len = variable_length_int(buf, ptr)?;
+  if *ptr + reason_phrase_len > buf.len() {
+    return Err(anyhow::anyhow!("Buffer too short"));
+  }
+  let _reason_phrase = &buf[*ptr..*ptr + reason_phrase_len];
+  *ptr += reason_phrase_len;
+  Ok(())
 }
 
 /* ---------------------------------------------------- */

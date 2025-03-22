@@ -10,6 +10,7 @@ mod socket;
 mod tcp_proxy;
 mod tls;
 mod trace;
+mod udp_buf_pool;
 mod udp_conn;
 mod udp_proxy;
 

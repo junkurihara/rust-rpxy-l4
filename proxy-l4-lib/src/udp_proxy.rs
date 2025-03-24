@@ -5,12 +5,16 @@ use crate::{
   error::ProxyError,
   quic::probe_quic_packet,
   socket::bind_udp_socket,
+  time_util::get_since_the_epoch,
   tls::{TlsClientHelloInfo, TlsDestinations},
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
   LoadBalance,
 };
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+  net::SocketAddr,
+  sync::{atomic::AtomicU64, Arc},
+};
 use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -201,24 +205,26 @@ impl std::fmt::Display for UdpProxyProtocol {
 
 impl UdpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming packet
-  pub(crate) async fn detect_protocol(incoming_buf: &[u8]) -> Result<Self, ProxyError> {
+  async fn detect_protocol(initial_packets: &UdpInitialPackets) -> Result<Self, ProxyError> {
+    let initial_packets = &initial_packets.inner[0]; //TODO: FIX ME
+
     /* ------ */
     // Wireguard protocol 'initiation' detection [only Handshake]
     // Thus this may not be a reliable way to detect Wireguard protocol
     // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
     // https://www.wireguard.com/protocol/
-    if incoming_buf.len() == 148
-      && incoming_buf[0] == 0x01
-      && incoming_buf[1] == 0x00
-      && incoming_buf[2] == 0x00
-      && incoming_buf[3] == 0x00
+    if initial_packets.len() == 148
+      && initial_packets[0] == 0x01
+      && initial_packets[1] == 0x00
+      && initial_packets[2] == 0x00
+      && initial_packets[3] == 0x00
     {
       debug!("Wireguard protocol (initiator to responder first message) detected");
       return Ok(Self::Wireguard);
     }
     /* ------ */
     // IETF QUIC handshake protocol detection
-    if let Some(info) = probe_quic_packet(incoming_buf) {
+    if let Some(info) = probe_quic_packet(initial_packets) {
       debug!("IETF QUIC protocol detected");
       return Ok(Self::Quic(info));
     }
@@ -275,7 +281,7 @@ impl UdpProxy {
 
     /* ----------------- */
     // Start the initial packets buffer pool service
-    let udp_initial_packets_buffer_pool = UdpInitialPacketsBufferPool::new((&self, &udp_socket_tx, &udp_connection_pool));
+    let udp_initial_packets_buffer_pool = UdpInitialPacketsBufferPool::new((self, &udp_socket_tx, &udp_connection_pool));
     let udp_initial_packets_tx = udp_initial_packets_buffer_pool.spawn_service(cancel_token.clone());
 
     /* ----------------- */
@@ -305,7 +311,7 @@ impl UdpProxy {
         if let Some(conn) = udp_connection_pool.get(&src_addr) {
           // Handle case there is an existing connection
           debug!("Found existing connection for {}", src_addr);
-          let _ = conn.send(udp_buf[..buf_size].to_vec()).await;
+          let _ = conn.send(&udp_buf[..buf_size]).await;
           // here we ignore the error, as the connection might be closed
           continue;
         }
@@ -406,6 +412,8 @@ type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 struct UdpInitialPackets {
   /// inner buffer of multiple UDP packet payloads
   inner: Vec<Vec<u8>>,
+  /// created at
+  created_at: Arc<AtomicU64>,
 }
 
 /* ---------------------------------------------------------- */
@@ -463,24 +471,43 @@ impl UdpInitialPacketsBufferPool {
           warn!("UDP buffering channel closed");
           break;
         };
+        // Prune expired packet buffers
+        self_clone.inner.retain(|_, v| {
+          let elapsed = get_since_the_epoch() - v.created_at.load(std::sync::atomic::Ordering::Relaxed);
+          if elapsed < crate::constants::UDP_INITIAL_BUFFER_LIFETIME {
+            debug!("Pruning expired packet buffer for {}", src_addr);
+          }
+          elapsed < crate::constants::UDP_INITIAL_BUFFER_LIFETIME
+        });
 
-        // // Check the initial packet buffer
-        // let previous_packets = match self_clone.inner.get(&src_addr) {
-        //   Some(p) => p,
-        //   None => {
-        //     continue;
-        //   }
-        // };
+        // Check the initial packet buffer
+        let previous_packets = match self_clone.inner.get(&src_addr) {
+          Some(p) => {
+            debug!("Found existing packet buffer for {}", src_addr);
+            p.clone()
+          }
+          None => {
+            // Check the connection limit
+            if self_clone.max_connections > 0 && self_clone.connection_count.current() >= self_clone.max_connections {
+              warn!("UDP connection limit reached: {}", self_clone.max_connections);
+              continue;
+            }
+            debug!("No existing initial packet buffer for {}", src_addr);
+            UdpInitialPackets {
+              inner: vec![udp_packet],
+              created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+            }
+          }
+        };
 
-        // Check the connection limit
-        if self_clone.max_connections > 0 && self_clone.connection_count.current() >= self_clone.max_connections {
-          warn!("UDP connection limit reached: {}", self_clone.max_connections);
-          continue;
-        }
-        let Ok(protocol) = UdpProxyProtocol::detect_protocol(udp_packet.as_slice()).await else {
+        let Ok(protocol) = UdpProxyProtocol::detect_protocol(&previous_packets).await else {
           error!("Failed to detect protocol from the incoming packet");
           continue;
         };
+        // Delete entry from the buffer pool
+        debug!("Release the packet buffer for {}", src_addr);
+        self_clone.inner.remove(&src_addr);
+
         let Ok(udp_dst) = self_clone.destination_mux.get_destination(&protocol) else {
           error!("No destination address found for protocol: {}", protocol);
           continue;
@@ -492,7 +519,8 @@ impl UdpInitialPacketsBufferPool {
         else {
           continue;
         };
-        let _ = conn.send(udp_packet).await;
+
+        let _ = conn.send_many(&previous_packets.inner).await;
         // here we ignore the error, as the connection might be closed
         self_clone
           .connection_count

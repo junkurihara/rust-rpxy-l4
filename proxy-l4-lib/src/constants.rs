@@ -33,3 +33,6 @@ pub const UDP_CONNECTION_IDLE_LIFETIME: u32 = 30;
 
 /// Periodic interval to prune inactive UDP connections
 pub const UDP_CONNECTION_PRUNE_INTERVAL: u64 = 10;
+
+/// UDP initial buffer packet lifetime in seconds
+pub const UDP_INITIAL_BUFFER_LIFETIME: u64 = 1;

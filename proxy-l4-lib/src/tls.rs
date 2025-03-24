@@ -1,6 +1,5 @@
+use crate::{probe::ProbeResult, tcp_proxy::TcpProxyProtocol, trace::*};
 use bytes::BytesMut;
-
-use crate::{probe::ProbeResult, trace::*};
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, Default)]
@@ -69,8 +68,9 @@ impl<T> TlsDestinations<T> {
     filtered.map(|(_, dest)| dest)
   }
 }
+
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Probed TLS ClientHello information
 pub(crate) struct TlsClientHelloInfo {
   /// SNI
@@ -82,14 +82,15 @@ pub(crate) struct TlsClientHelloInfo {
 }
 /* ---------------------------------------------------------- */
 const TLS_RECORD_HEADER_LEN: usize = 5;
+const TLS_HANDSHAKE_MESSAGE_HEADER_LEN: usize = 4;
 const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
 /// Check if the buffer is a TLS handshake
 /// This is inspired by https://github.com/yrutschle/sslh/blob/master/tls.c
-pub(crate) fn probe_tls_handshake(buf: &BytesMut) -> ProbeResult<TlsClientHelloInfo> {
-  // TLS record header is 5 bytes
-  if buf.len() < TLS_RECORD_HEADER_LEN {
+pub(crate) fn probe_tls_handshake(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
+  // TLS record header (5) + handshake type (1) + body length (3)
+  if buf.len() < TLS_RECORD_HEADER_LEN + TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
     return ProbeResult::Failure;
   }
   // TLS record header: https://tools.ietf.org/html/rfc5246#section-6.2 , https://datatracker.ietf.org/doc/html/rfc8446#section-5.1
@@ -114,32 +115,45 @@ pub(crate) fn probe_tls_handshake(buf: &BytesMut) -> ProbeResult<TlsClientHelloI
   }
   debug!("TLS Payload length: {}", payload_len);
 
-  match probe_tls_client_hello(&buf[TLS_RECORD_HEADER_LEN..], tls_version_major, tls_version_minor) {
-    Some(client_hello_info) => ProbeResult::Success(client_hello_info),
+  // Check if the buffer is a TLS handshake
+  // https://datatracker.ietf.org/doc/html/rfc8446#page-24
+  // https://tools.ietf.org/html/rfc5246#section-7.4
+  // -- Handshake message header --
+  //  - 1 Handshake Type msg_type
+  //  - 3 Length
+  let pos = TLS_RECORD_HEADER_LEN;
+  if buf[pos] != TLS_HANDSHAKE_TYPE_CLIENT_HELLO {
+    return ProbeResult::Failure;
+  }
+  let client_hello_body_len = ((buf[pos + 1] as usize) << 16) + ((buf[pos + 2] as usize) << 8) + (buf[pos + 3] as usize);
+  debug!("TLS ClientHello body length: {}", client_hello_body_len);
+  if buf.len() < client_hello_body_len + TLS_RECORD_HEADER_LEN + TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
+    return ProbeResult::PollNext;
+  }
+
+  match probe_tls_client_hello_body(
+    &buf[TLS_RECORD_HEADER_LEN + TLS_HANDSHAKE_MESSAGE_HEADER_LEN..],
+    tls_version_major,
+    tls_version_minor,
+  ) {
+    Some(client_hello_info) => ProbeResult::Success(TcpProxyProtocol::Tls(client_hello_info)),
     None => ProbeResult::Failure,
   }
 }
 
+/* ---------------------------------------------------------- */
 /// Check if the buffer is a TLS ClientHello, called from TLS and QUIC
-pub(crate) fn probe_tls_client_hello(buf: &[u8], tls_version_major: u8, tls_version_minor: u8) -> Option<TlsClientHelloInfo> {
+pub(crate) fn probe_tls_client_hello_body(
+  buf: &[u8],
+  tls_version_major: u8,
+  tls_version_minor: u8,
+) -> Option<TlsClientHelloInfo> {
   let mut pos = 0;
-
-  // Check if the buffer is a TLS handshake
-  // https://datatracker.ietf.org/doc/html/rfc8446#page-24
-  // https://tools.ietf.org/html/rfc5246#section-7.4
-  // let mut pos = TLS_RECORD_HEADER_LEN;
-  if buf[pos] != TLS_HANDSHAKE_TYPE_CLIENT_HELLO {
-    return None;
-  }
-  // Skip past fixed length records:
-  // -- Handshake --
-  //  - 1 Handshake Type msg_type
-  //  - 3 Length
-  // -- if msg_type == Client Hello --
+  // -- Handshake message body if msg_type == Client Hello --
   //  - 2	Version (again)
   //  - 32	Random
   //  - to	Session ID Length
-  pos += 38;
+  pos += 34;
   if buf.len() < pos {
     return None;
   }

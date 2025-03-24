@@ -1,5 +1,5 @@
 use crate::{
-  tls::{probe_tls_client_hello, TlsClientHelloInfo},
+  tls::{probe_tls_client_hello_body, TlsClientHelloInfo},
   trace::*,
 };
 

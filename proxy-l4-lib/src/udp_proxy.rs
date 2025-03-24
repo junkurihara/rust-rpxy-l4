@@ -280,7 +280,7 @@ impl UdpProxy {
     let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
 
     /* ----------------- */
-    // Start the initial packets buffer pool service
+    // Start the initial packets buffer pool service for source socket address to handle multiple packets for detection
     let udp_initial_packets_buffer_pool = UdpInitialPacketsBufferPool::new((self, &udp_socket_tx, &udp_connection_pool));
     let udp_initial_packets_tx = udp_initial_packets_buffer_pool.spawn_service(cancel_token.clone());
 
@@ -324,10 +324,6 @@ impl UdpProxy {
           error!("Failed to buffer the initial packet: {e}");
           continue;
         }
-
-        // TODO: Spawn the packet buffering service for source socket address to handle multiple packets for detection
-        // This might be managed as another connection pool-like structure? Buffered ones are queued before establishing a connection.
-        // This is required to handle quic initial packets.
 
         // // Check the connection limit
         // if self.max_connections > 0 && self.connection_count.current() >= self.max_connections {
@@ -481,10 +477,12 @@ impl UdpInitialPacketsBufferPool {
         });
 
         // Check the initial packet buffer
-        let previous_packets = match self_clone.inner.get(&src_addr) {
-          Some(p) => {
+        let initial_packets = match self_clone.inner.get(&src_addr) {
+          Some(packets) => {
             debug!("Found existing packet buffer for {}", src_addr);
-            p.clone()
+            let mut packets = packets.clone();
+            packets.inner.push(udp_packet);
+            packets
           }
           None => {
             // Check the connection limit
@@ -500,8 +498,11 @@ impl UdpInitialPacketsBufferPool {
           }
         };
 
-        let Ok(protocol) = UdpProxyProtocol::detect_protocol(&previous_packets).await else {
+        // TODO: Handle with probe result
+        let Ok(protocol) = UdpProxyProtocol::detect_protocol(&initial_packets).await else {
           error!("Failed to detect protocol from the incoming packet");
+          // add the packet buffer back to the buffer pool
+          self_clone.inner.insert(src_addr, initial_packets);
           continue;
         };
         // Delete entry from the buffer pool
@@ -520,7 +521,7 @@ impl UdpInitialPacketsBufferPool {
           continue;
         };
 
-        let _ = conn.send_many(&previous_packets.inner).await;
+        let _ = conn.send_many(&initial_packets.inner).await;
         // here we ignore the error, as the connection might be closed
         self_clone
           .connection_count

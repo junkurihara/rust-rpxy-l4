@@ -1,15 +1,15 @@
 use crate::{
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
-  destination::{Destination, DestinationBuilder},
+  destination::{Destination, DestinationBuilder, LoadBalance},
   error::ProxyError,
+  probe::ProbeResult,
   quic::probe_quic_packet,
   socket::bind_udp_socket,
   time_util::get_since_the_epoch,
   tls::{TlsClientHelloInfo, TlsDestinations},
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
-  LoadBalance,
 };
 use std::{
   net::SocketAddr,
@@ -205,7 +205,7 @@ impl std::fmt::Display for UdpProxyProtocol {
 
 impl UdpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming packet
-  async fn detect_protocol(initial_packets: &UdpInitialPackets) -> Result<Self, ProxyError> {
+  async fn detect_protocol(initial_packets: &UdpInitialPackets) -> Result<ProbeResult<Self>, ProxyError> {
     let initial_packets = &initial_packets.inner[0]; //TODO: FIX ME
 
     /* ------ */
@@ -220,18 +220,18 @@ impl UdpProxyProtocol {
       && initial_packets[3] == 0x00
     {
       debug!("Wireguard protocol (initiator to responder first message) detected");
-      return Ok(Self::Wireguard);
+      return Ok(ProbeResult::Success(Self::Wireguard));
     }
     /* ------ */
     // IETF QUIC handshake protocol detection
     if let Some(info) = probe_quic_packet(initial_packets) {
       debug!("IETF QUIC protocol detected");
-      return Ok(Self::Quic(info));
+      return Ok(ProbeResult::Success(Self::Quic(info)));
     }
 
     // TODO: Add more protocol detection patterns
     debug!("Untyped UDP connection detected");
-    Ok(Self::Any)
+    Ok(ProbeResult::Success(Self::Any))
   }
 }
 
@@ -498,13 +498,21 @@ impl UdpInitialPacketsBufferPool {
           }
         };
 
-        // TODO: Handle with probe result
-        let Ok(protocol) = UdpProxyProtocol::detect_protocol(&initial_packets).await else {
-          error!("Failed to detect protocol from the incoming packet");
-          // add the packet buffer back to the buffer pool
-          self_clone.inner.insert(src_addr, initial_packets);
+        // Handle with probe result
+        let Ok(probe_result) = UdpProxyProtocol::detect_protocol(&initial_packets).await else {
+          error!("Failed to probe protocol from the incoming packet");
           continue;
         };
+        let protocol = match probe_result {
+          ProbeResult::Success(protocol) => protocol,
+          ProbeResult::PollNext => {
+            // add the packet buffer back to the buffer pool
+            self_clone.inner.insert(src_addr, initial_packets);
+            continue;
+          }
+          ProbeResult::Failure => unreachable!(),
+        };
+
         // Delete entry from the buffer pool
         debug!("Release the packet buffer for {}", src_addr);
         self_clone.inner.remove(&src_addr);

@@ -411,11 +411,7 @@ impl TcpProxy {
             };
             let protocol = match probe_result {
               Ok(ProbeResult::Success(p)) => p,
-              Ok(_) => {
-                // Unreachable!
-                connection_count.decrement();
-                return;
-              }
+              Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
               Err(e) => {
                 error!("Failed to detect protocol: {e}");
                 connection_count.decrement();

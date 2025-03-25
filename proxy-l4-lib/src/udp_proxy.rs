@@ -11,6 +11,7 @@ use crate::{
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
 };
+use bytes::BytesMut;
 use std::{
   net::SocketAddr,
   sync::{atomic::AtomicU64, Arc},
@@ -201,6 +202,26 @@ impl std::fmt::Display for UdpProxyProtocol {
       // TODO: and more...
     }
   }
+}
+
+fn is_wireguard(initial_packets: &UdpInitialPackets) -> ProbeResult<UdpProxyProtocol> {
+  /* ------ */
+  // Wireguard protocol 'initiation' detection [only Handshake]
+  // Thus this may not be a reliable way to detect Wireguard protocol
+  // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
+  // https://www.wireguard.com/protocol/
+  // if initial_packets.len() == 148
+  //   && initial_packets[0] == 0x01
+  //   && initial_packets[1] == 0x00
+  //   && initial_packets[2] == 0x00
+  //   && initial_packets[3] == 0x00
+  // {
+  //   debug!("Wireguard protocol (initiator to responder first message) detected");
+  //   ProbeResult::Success(Self::Wireguard)
+  // } else {
+  //   ProbeResult::Failure
+  // }
+  todo!()
 }
 
 impl UdpProxyProtocol {

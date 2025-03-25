@@ -252,7 +252,7 @@ fn is_http(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
 
 impl TcpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
-  async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<Self, ProxyError> {
+  async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<Self>, ProxyError> {
     let mut probe_fns = vec![is_ssh, is_http, probe_tls_handshake];
 
     while !probe_fns.is_empty() {
@@ -275,12 +275,9 @@ impl TcpProxyProtocol {
         .unzip();
 
       // If any of them returns Success, return the protocol.
-      if let Some(p) = probe_res.into_iter().find_map(|r| match r {
-        ProbeResult::Success(p) => Some(p),
-        _ => None,
-      }) {
-        return Ok(p);
-      }
+      if let Some(probe_success) = probe_res.into_iter().find(|r| matches!(r, ProbeResult::Success(_))) {
+        return Ok(probe_success);
+      };
 
       // If the rest returned PollNext, fetch more data
       probe_fns = new_probe_fns;
@@ -340,7 +337,7 @@ impl TcpProxyProtocol {
     // }
 
     debug!("Untyped TCP connection");
-    Ok(Self::Any)
+    Ok(ProbeResult::Success(Self::Any))
   }
 }
 
@@ -413,7 +410,12 @@ impl TcpProxy {
               return;
             };
             let protocol = match probe_result {
-              Ok(p) => p,
+              Ok(ProbeResult::Success(p)) => p,
+              Ok(_) => {
+                // Unreachable!
+                connection_count.decrement();
+                return;
+              }
               Err(e) => {
                 error!("Failed to detect protocol: {e}");
                 connection_count.decrement();

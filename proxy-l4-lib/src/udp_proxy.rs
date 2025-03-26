@@ -4,14 +4,13 @@ use crate::{
   destination::{Destination, DestinationBuilder, LoadBalance},
   error::ProxyError,
   probe::ProbeResult,
-  quic::probe_quic_packet,
+  quic::probe_quic_packets,
   socket::bind_udp_socket,
   time_util::get_since_the_epoch,
   tls::{TlsClientHelloInfo, TlsDestinations},
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
 };
-use bytes::BytesMut;
 use std::{
   net::SocketAddr,
   sync::{atomic::AtomicU64, Arc},
@@ -181,7 +180,7 @@ impl UdpDestinationMux {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TCP proxy protocol, specific protocols like SSH, and default is "any".
 pub(crate) enum UdpProxyProtocol {
   /// any, default
@@ -204,53 +203,95 @@ impl std::fmt::Display for UdpProxyProtocol {
   }
 }
 
-fn is_wireguard(initial_packets: &UdpInitialPackets) -> ProbeResult<UdpProxyProtocol> {
-  /* ------ */
+/* ------ */
+/// Is Wireguard protocol?
+fn is_wireguard(initial_packets: &mut UdpInitialPackets) -> ProbeResult<UdpProxyProtocol> {
   // Wireguard protocol 'initiation' detection [only Handshake]
   // Thus this may not be a reliable way to detect Wireguard protocol
   // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
   // https://www.wireguard.com/protocol/
-  // if initial_packets.len() == 148
-  //   && initial_packets[0] == 0x01
-  //   && initial_packets[1] == 0x00
-  //   && initial_packets[2] == 0x00
-  //   && initial_packets[3] == 0x00
-  // {
-  //   debug!("Wireguard protocol (initiator to responder first message) detected");
-  //   ProbeResult::Success(Self::Wireguard)
-  // } else {
-  //   ProbeResult::Failure
-  // }
-  todo!()
+  let Some(first) = initial_packets.first() else {
+    return ProbeResult::Failure; // unreachable. just in case.
+  };
+
+  if first.len() == 148 && first[0] == 0x01 && first[1] == 0x00 && first[2] == 0x00 && first[3] == 0x00 {
+    debug!("Wireguard protocol (initiator to responder first message) detected");
+    ProbeResult::Success(UdpProxyProtocol::Wireguard)
+  } else {
+    ProbeResult::Failure
+  }
+}
+
+/// Is QUIC protocol?
+fn is_quic_initial(initial_packets: &mut UdpInitialPackets) -> ProbeResult<UdpProxyProtocol> {
+  let initial_packets_inner = initial_packets.inner.as_slice();
+  let res = probe_quic_packets(initial_packets_inner);
+  if matches!(res, ProbeResult::PollNext) {
+    initial_packets
+      .probed_as_pollnext
+      .insert(UdpProxyProtocol::Quic(Default::default()));
+  }
+  res
 }
 
 impl UdpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming packet
-  async fn detect_protocol(initial_packets: &UdpInitialPackets) -> Result<ProbeResult<Self>, ProxyError> {
-    let initial_packets = &initial_packets.inner[0]; //TODO: FIX ME
-
-    /* ------ */
-    // Wireguard protocol 'initiation' detection [only Handshake]
-    // Thus this may not be a reliable way to detect Wireguard protocol
-    // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
-    // https://www.wireguard.com/protocol/
-    if initial_packets.len() == 148
-      && initial_packets[0] == 0x01
-      && initial_packets[1] == 0x00
-      && initial_packets[2] == 0x00
-      && initial_packets[3] == 0x00
-    {
-      debug!("Wireguard protocol (initiator to responder first message) detected");
-      return Ok(ProbeResult::Success(Self::Wireguard));
-    }
-    /* ------ */
-    // IETF QUIC handshake protocol detection
-    if let Some(info) = probe_quic_packet(initial_packets) {
-      debug!("IETF QUIC protocol detected");
-      return Ok(ProbeResult::Success(Self::Quic(info)));
-    }
-
+  async fn detect_protocol(initial_packets: &mut UdpInitialPackets) -> Result<ProbeResult<Self>, ProxyError> {
     // TODO: Add more protocol detection patterns
+
+    // Probe functions
+    let probe_fns = if initial_packets.probed_as_pollnext.is_empty() {
+      // No candidate probed as PollNext, i.e., Round 1
+      vec![is_wireguard, is_quic_initial]
+    } else {
+      // Round 2 or later
+      initial_packets
+        .probed_as_pollnext
+        .iter()
+        .map(|p| match p {
+          UdpProxyProtocol::Wireguard => is_wireguard,
+          UdpProxyProtocol::Quic(_) => is_quic_initial,
+          _ => unreachable!(),
+        })
+        .collect()
+    };
+
+    let probe_res = probe_fns.into_iter().map(|f| f(initial_packets)).collect::<Vec<_>>();
+
+    // In case any of the probe results is a success, return it
+    if let Some(probe_success) = probe_res.iter().find(|r| matches!(r, ProbeResult::Success(_))) {
+      return Ok(probe_success.clone());
+    };
+
+    // In case any of the probe results is PollNext, return it
+    if let Some(probe_pollnext) = probe_res.iter().find(|r| matches!(r, ProbeResult::PollNext)) {
+      return Ok(probe_pollnext.to_owned());
+    };
+
+    // let initial_packets = &initial_packets.inner[0]; //TODO: FIX ME
+
+    // /* ------ */
+    // // Wireguard protocol 'initiation' detection [only Handshake]
+    // // Thus this may not be a reliable way to detect Wireguard protocol
+    // // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
+    // // https://www.wireguard.com/protocol/
+    // if initial_packets.len() == 148
+    //   && initial_packets[0] == 0x01
+    //   && initial_packets[1] == 0x00
+    //   && initial_packets[2] == 0x00
+    //   && initial_packets[3] == 0x00
+    // {
+    //   debug!("Wireguard protocol (initiator to responder first message) detected");
+    //   return Ok(ProbeResult::Success(Self::Wireguard));
+    // }
+    // /* ------ */
+    // // IETF QUIC handshake protocol detection
+    // if let Some(info) = probe_quic_packet(initial_packets) {
+    //   debug!("IETF QUIC protocol detected");
+    //   return Ok(ProbeResult::Success(Self::Quic(info)));
+    // }
+
+    // All detection finished as failure
     debug!("Untyped UDP connection detected");
     Ok(ProbeResult::Success(Self::Any))
   }
@@ -431,6 +472,15 @@ struct UdpInitialPackets {
   inner: Vec<Vec<u8>>,
   /// created at
   created_at: Arc<AtomicU64>,
+  /// Protocols that were detected as 'poll_next'
+  probed_as_pollnext: std::collections::HashSet<UdpProxyProtocol>,
+}
+
+impl UdpInitialPackets {
+  /// Get the first packet
+  fn first(&self) -> Option<&[u8]> {
+    self.inner.first().map(|v| v.as_slice())
+  }
 }
 
 /* ---------------------------------------------------------- */
@@ -498,7 +548,7 @@ impl UdpInitialPacketsBufferPool {
         });
 
         // Check the initial packet buffer
-        let initial_packets = match self_clone.inner.get(&src_addr) {
+        let mut initial_packets = match self_clone.inner.get(&src_addr) {
           Some(packets) => {
             debug!("Found existing packet buffer for {}", src_addr);
             let mut packets = packets.clone();
@@ -515,12 +565,13 @@ impl UdpInitialPacketsBufferPool {
             UdpInitialPackets {
               inner: vec![udp_packet],
               created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+              probed_as_pollnext: Default::default(),
             }
           }
         };
 
         // Handle with probe result
-        let Ok(probe_result) = UdpProxyProtocol::detect_protocol(&initial_packets).await else {
+        let Ok(probe_result) = UdpProxyProtocol::detect_protocol(&mut initial_packets).await else {
           error!("Failed to probe protocol from the incoming packet");
           continue;
         };

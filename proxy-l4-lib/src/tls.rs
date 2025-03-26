@@ -70,7 +70,7 @@ impl<T> TlsDestinations<T> {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 /// Probed TLS ClientHello information
 pub(crate) struct TlsClientHelloInfo {
   /// SNI
@@ -88,7 +88,7 @@ const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
 /// Check if the buffer is a TLS handshake
 /// This is inspired by https://github.com/yrutschle/sslh/blob/master/tls.c
-pub(crate) fn probe_tls_handshake(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
+pub(crate) fn is_tls_handshake(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
   // TLS record header (5) + handshake type (1) + body length (3)
   if buf.len() < TLS_RECORD_HEADER_LEN + TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
     return ProbeResult::Failure;
@@ -122,38 +122,46 @@ pub(crate) fn probe_tls_handshake(buf: &BytesMut) -> ProbeResult<TcpProxyProtoco
   //  - 1 Handshake Type msg_type
   //  - 3 Length
   let pos = TLS_RECORD_HEADER_LEN;
+  let header_probe_res = probe_tls_client_hello_header(buf, pos);
+  match header_probe_res {
+    ProbeResult::PollNext => return ProbeResult::PollNext,
+    ProbeResult::Failure => return ProbeResult::Failure,
+    ProbeResult::Success(_) => {}
+  }
+
+  match probe_tls_client_hello_body(&buf[TLS_RECORD_HEADER_LEN..], tls_version_major, tls_version_minor) {
+    Some(client_hello_info) => ProbeResult::Success(TcpProxyProtocol::Tls(client_hello_info)),
+    None => ProbeResult::Failure,
+  }
+}
+/* ---------------------------------------------------------- */
+/// Check if the buffer has a valid header as a TLS ClientHello, called from TLS and QUIC
+pub(crate) fn probe_tls_client_hello_header(buf: &[u8], pos: usize) -> ProbeResult<()> {
   if buf[pos] != TLS_HANDSHAKE_TYPE_CLIENT_HELLO {
     return ProbeResult::Failure;
   }
   let client_hello_body_len = ((buf[pos + 1] as usize) << 16) + ((buf[pos + 2] as usize) << 8) + (buf[pos + 3] as usize);
   debug!("TLS ClientHello body length: {}", client_hello_body_len);
-  if buf.len() < client_hello_body_len + TLS_RECORD_HEADER_LEN + TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
+  if buf[pos..].len() < client_hello_body_len + TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
     return ProbeResult::PollNext;
   }
-
-  match probe_tls_client_hello_body(
-    &buf[TLS_RECORD_HEADER_LEN + TLS_HANDSHAKE_MESSAGE_HEADER_LEN..],
-    tls_version_major,
-    tls_version_minor,
-  ) {
-    Some(client_hello_info) => ProbeResult::Success(TcpProxyProtocol::Tls(client_hello_info)),
-    None => ProbeResult::Failure,
-  }
+  ProbeResult::Success(())
 }
 
 /* ---------------------------------------------------------- */
-/// Check if the buffer is a TLS ClientHello, called from TLS and QUIC
+/// Check if the buffer is a TLS ClientHello body, called from TLS and QUIC
 pub(crate) fn probe_tls_client_hello_body(
   buf: &[u8],
   tls_version_major: u8,
   tls_version_minor: u8,
 ) -> Option<TlsClientHelloInfo> {
   let mut pos = 0;
+  // -- Handshake message header (4 bytes) --
   // -- Handshake message body if msg_type == Client Hello --
   //  - 2	Version (again)
   //  - 32	Random
   //  - to	Session ID Length
-  pos += 34;
+  pos += 38;
   if buf.len() < pos {
     return None;
   }

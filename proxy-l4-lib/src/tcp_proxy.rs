@@ -5,7 +5,7 @@ use crate::{
   error::ProxyError,
   probe::ProbeResult,
   socket::bind_tcp_socket,
-  tls::{probe_tls_handshake, TlsClientHelloInfo},
+  tls::{is_tls_handshake, TlsClientHelloInfo},
   trace::*,
 };
 use bytes::BytesMut;
@@ -253,7 +253,7 @@ fn is_http(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
 impl TcpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
   async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<Self>, ProxyError> {
-    let mut probe_fns = vec![is_ssh, is_http, probe_tls_handshake];
+    let mut probe_fns = vec![is_ssh, is_http, is_tls_handshake];
 
     while !probe_fns.is_empty() {
       // Read the first several bytes to probe. at the first loop, the buffer is empty.

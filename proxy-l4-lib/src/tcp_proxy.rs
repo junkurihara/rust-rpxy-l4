@@ -283,59 +283,6 @@ impl TcpProxyProtocol {
       probe_fns = new_probe_fns;
     }
 
-    // loop {
-    //   let mut found = false;
-    //   for prob_fn in prob_fns.iter() {
-    //     match prob_fn(&buf) {
-    //       ProbeResult::Failure => {
-    //         continue;
-    //       }
-    //       ProbeResult::Success(_) => {
-    //         found = true;
-    //         break;
-    //       }
-    //       ProbeResult::PollNext => {
-    //         return Ok(Self::Any);
-    //       }
-    //     }
-    //   }
-    //   if found {
-    //     break;
-    //   }
-    // }
-    // TODO: Add more protocol detection
-    // // SSH
-    // if buf.starts_with(b"SSH-") {
-    //   debug!("SSH connection detected");
-    //   return Ok(Self::Ssh);
-    // }
-
-    // // HTTP
-    // if buf.windows(4).any(|w| w.eq(b"HTTP")) {
-    //   debug!("HTTP connection detected");
-    //   return Ok(Self::Http);
-    // }
-
-    // // TLS
-    // loop {
-    //   match probe_tls_handshake(buf) {
-    //     ProbeResult::Failure => {
-    //       break;
-    //     }
-    //     ProbeResult::Success(info) => {
-    //       debug!("TLS connection detected");
-    //       return Ok(info);
-    //     }
-    //     ProbeResult::PollNext => {
-    //       debug!("TLS connection detected, but need more data. Polling next.");
-    //       let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
-    //       let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
-
-    //       buf.extend_from_slice(&next_buf[..]);
-    //     }
-    //   }
-    // }
-
     debug!("Untyped TCP connection");
     Ok(ProbeResult::Success(Self::Any))
   }

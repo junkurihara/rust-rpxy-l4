@@ -17,13 +17,14 @@ mod udp_proxy;
 pub use config::{Config, ProtocolConfig};
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
+pub use error::ProxyError;
 pub use proto::ProtocolType;
 pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProxy, TcpProxyBuilder};
 pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpProxyBuilder};
 
 /* ---------------------------------------- */
 /// Build TCP and UDP multiplexers from the configuration
-pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDestinationMux), anyhow::Error> {
+pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDestinationMux), ProxyError> {
   let mut tcp_mux_builder = TcpDestinationMuxBuilder::default();
   let mut udp_mux_builder = UdpDestinationMuxBuilder::default();
 
@@ -43,7 +44,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
   for (key, spec) in config.protocols.iter() {
     let target: &[_] = spec.target.as_ref();
     if target.is_empty() {
-      return Err(anyhow::anyhow!("target is empty for key: {key}"));
+      return Err(ProxyError::BuildMultiplexersError(format!("target is empty for key: {key}")));
     }
     match spec.protocol {
       ProtocolType::Http => {

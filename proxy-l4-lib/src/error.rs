@@ -20,4 +20,16 @@ pub enum ProxyError {
 
   #[error("Destination builder error: {0}")]
   DestinationBuilderError(anyhow::Error),
+
+  /// Multiplexer builder error UDP
+  #[error("UDP destination mux error: {0}")]
+  UdpDestinationMuxError(#[from] crate::udp_proxy::UdpDestinationMuxBuilderError),
+
+  /// Multiplexer builder error TCP
+  #[error("TCP destination mux error: {0}")]
+  TcpDestinationMuxError(#[from] crate::tcp_proxy::TcpDestinationMuxBuilderError),
+
+  /// Both TCP UDP mux builder error called from the top level
+  #[error("Build error for multiplexers: {0}")]
+  BuildMultiplexersError(String),
 }

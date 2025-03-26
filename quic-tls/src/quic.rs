@@ -192,6 +192,7 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<
   };
   let expected_client_hello = match reassemble_res {
     ReassembleResult::MissingFrames => {
+      debug!("Missing frames to reassemble the QUIC crypto frames");
       return Err(TlsProbeFailure::PollNext);
     }
     ReassembleResult::CompleteFromGivenFrames(content) => content,

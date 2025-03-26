@@ -1,4 +1,5 @@
 use crate::{trace::*, TlsProbeFailure};
+use anyhow::anyhow;
 
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
@@ -135,12 +136,12 @@ pub(crate) fn probe_tls_client_hello_body(
 
 /// Parse server name from the SNI extension
 /// https://datatracker.ietf.org/doc/html/rfc6066#section-3
-pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
+fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
   let mut pos = 0;
 
   if buf.len() < 2 {
     error!("Invalid SNI extension");
-    return Err(anyhow::anyhow!("Invalid SNI extension"));
+    return Err(anyhow!("Invalid SNI extension"));
   }
 
   // byte length of the server name list payload
@@ -153,7 +154,7 @@ pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
     let len = ((buf[pos + 1] as usize) << 8) + buf[pos + 2] as usize;
     if buf.len() < pos + 3 + len {
       error!("Invalid SNI extension");
-      return Err(anyhow::anyhow!("Invalid SNI extension"));
+      return Err(anyhow!("Invalid SNI extension"));
     }
     match name_type {
       0x00 => {
@@ -172,12 +173,12 @@ pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
 
   if sni_list.is_empty() {
     error!("No SNI found");
-    return Err(anyhow::anyhow!("No SNI found"));
+    return Err(anyhow!("No SNI found"));
   }
 
   if pos != server_name_list_len + 2 {
     error!("Invalid SNI extension");
-    return Err(anyhow::anyhow!("Invalid SNI extension"));
+    return Err(anyhow!("Invalid SNI extension"));
   }
 
   Ok(sni_list)
@@ -185,12 +186,12 @@ pub(crate) fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
 
 /// Parse ALPN extension
 /// https://datatracker.ietf.org/doc/html/rfc7301
-pub(crate) fn parse_alpn(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
+fn parse_alpn(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
   let mut pos = 0;
 
   if buf.len() < 2 {
     error!("Invalid ALPN extension");
-    return Err(anyhow::anyhow!("Invalid ALPN extension"));
+    return Err(anyhow!("Invalid ALPN extension"));
   }
 
   // byte length of the protocol name list payload
@@ -203,7 +204,7 @@ pub(crate) fn parse_alpn(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
     if buf.len() < pos + 1 + len || len == 0 {
       // 0-length protocol name is invalid
       error!("Invalid ALPN extension");
-      return Err(anyhow::anyhow!("Invalid ALPN extension"));
+      return Err(anyhow!("Invalid ALPN extension"));
     }
     let name_payload = &buf[pos + 1..pos + 1 + len];
     let protocol_name = String::from_utf8_lossy(name_payload).to_ascii_lowercase();
@@ -213,12 +214,12 @@ pub(crate) fn parse_alpn(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
 
   if alpn_list.is_empty() {
     error!("No ALPN found");
-    return Err(anyhow::anyhow!("No ALPN found"));
+    return Err(anyhow!("No ALPN found"));
   }
 
   if pos != protocol_name_list_len + 2 {
     error!("Invalid ALPN extension");
-    return Err(anyhow::anyhow!("Invalid ALPN extension"));
+    return Err(anyhow!("Invalid ALPN extension"));
   }
 
   Ok(alpn_list)

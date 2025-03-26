@@ -30,7 +30,8 @@ pub fn probe_quic_initial_packets(packets: &[Vec<u8>]) -> Result<TlsClientHelloI
   }
   // We consider initial packets only since only communication initiated from the client is expected.
   // Version negotiation packet is sent by the server as a response to the client
-  if packets.iter().any(|p| p[0] & 0xf0 != 0xc0) {
+  // Check either QUICv1 or QUICv2 initial packets
+  if packets.iter().any(|p| p[0] & 0xf0 != 0xc0 && p[0] & 0xf0 != 0xd0) {
     return Err(TlsProbeFailure::Failure);
   }
 
@@ -97,8 +98,9 @@ struct QuicPacket {
 }
 
 /// Check if the buffer contains a QUIC initial packet with TLS ClientHello.
-/// https://www.rfc-editor.org/rfc/rfc9000.html
-/// https://www.rfc-editor.org/rfc/rfc9001.html
+/// https://www.rfc-editor.org/rfc/rfc9000.html (v1)
+/// https://www.rfc-editor.org/rfc/rfc9001.html (QUIC-TLS)
+/// https://www.rfc-editor.org/rfc/rfc9369.html (v2)
 /// https://quic.xargs.org
 /// - First checks if the buffer is consistent with a QUIC initial packet.
 /// - Then derive the header protection key and decrypt the packet.
@@ -112,9 +114,11 @@ fn probe_quic_initial_packet_header(buf: &[u8]) -> Option<QuicPacket> {
   // with protected packet number field length ([0000])
   // omitting the protected part.
   if buf[0] & 0xf0 != 0xc0 {
+    //TODO: support v2
     return None;
   }
   // Version
+  //TODO: support v2
   if !buf[1..5].eq(QUIC_VERSION) {
     return None;
   }
@@ -149,6 +153,7 @@ fn probe_quic_initial_packet_header(buf: &[u8]) -> Option<QuicPacket> {
 
   // So far, the buffer is consistent with a QUIC initial packet.
   // Now, try to decrypt the packet and check if it is a TLS ClientHello.
+  //TODO: support v2
   let Ok(unprotected_payload) = unprotect(buf, &dcid, ptr, payload_len) else {
     return None;
   };

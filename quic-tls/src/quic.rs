@@ -3,6 +3,7 @@ use crate::{
   error::TlsProbeFailure,
   trace::*,
 };
+use anyhow::anyhow;
 
 const QUIC_VERSION: &[u8] = &[0x00, 0x00, 0x00, 0x01];
 const INITIAL_SALT: &[u8] = &[
@@ -240,7 +241,7 @@ fn reassemble_crypto_frames(crypto_frames: &[CryptoFrame]) -> Result<ReassembleR
       return Ok(ReassembleResult::MissingFrames);
     }
     if frame.frame_offset < offset {
-      return Err(anyhow::anyhow!("Overlapping crypto frames! Invalid QUIC packet"));
+      return Err(anyhow!("Overlapping crypto frames! Invalid QUIC packet"));
     }
     reassembled.extend_from_slice(frame.crypto_data);
     offset += frame.crypto_data_len;
@@ -267,7 +268,7 @@ fn extract_quic_crypto_frames(buf: &[u8]) -> Result<Vec<CryptoFrame<'_>>, anyhow
       0x1c => parse_cc_frame(buf, &mut ptr)?,
       0x01 => continue, // PING frame
       0x00 => continue, // PADDING frame
-      _ => return Err(anyhow::anyhow!("Prohibited frame type in initial packets: {:x}", frame_type)),
+      _ => return Err(anyhow!("Prohibited frame type in initial packets: {:x}", frame_type)),
     }
   }
   Ok(crypto_frames)
@@ -278,7 +279,7 @@ fn parse_crypto_frame<'a>(buf: &'a [u8], ptr: &mut usize) -> Result<CryptoFrame<
   let frame_offset = variable_length_int(buf, ptr)?;
   let crypto_data_len = variable_length_int(buf, ptr)?;
   if *ptr + crypto_data_len > buf.len() {
-    return Err(anyhow::anyhow!("Buffer too short"));
+    return Err(anyhow!("Buffer too short"));
   }
   let crypto_data = &buf[*ptr..*ptr + crypto_data_len];
   *ptr += crypto_data_len;
@@ -313,13 +314,13 @@ fn parse_ack_frame(ack_type: u8, buf: &[u8], ptr: &mut usize) -> Result<(), anyh
 fn parse_cc_frame(buf: &[u8], ptr: &mut usize) -> Result<(), anyhow::Error> {
   let _error_code = variable_length_int(buf, ptr)?;
   if *ptr >= buf.len() {
-    return Err(anyhow::anyhow!("Buffer too short"));
+    return Err(anyhow!("Buffer too short"));
   }
   let _frame_type = buf[*ptr];
   *ptr += 1;
   let reason_phrase_len = variable_length_int(buf, ptr)?;
   if *ptr + reason_phrase_len > buf.len() {
-    return Err(anyhow::anyhow!("Buffer too short"));
+    return Err(anyhow!("Buffer too short"));
   }
   let _reason_phrase = &buf[*ptr..*ptr + reason_phrase_len];
   *ptr += reason_phrase_len;
@@ -339,7 +340,7 @@ use aes_gcm::{
 fn unprotect(buf: &[u8], dcid: &[u8], pn_offset: usize, payload_len: usize) -> Result<Vec<u8>, anyhow::Error> {
   // Try to decrypt the protected fields
   let Ok(protection_values) = derive_initial_protection_values(dcid) else {
-    return Err(anyhow::anyhow!("Failed to derive protection values"));
+    return Err(anyhow!("Failed to derive protection values"));
   };
 
   // Generate mask for header protection
@@ -356,7 +357,7 @@ fn unprotect(buf: &[u8], dcid: &[u8], pn_offset: usize, payload_len: usize) -> R
   let plain_first_byte = buf[0] ^ (mask[0] & 0x0f);
   let pn_length = (plain_first_byte & 0x0f) as usize + 1;
   if payload_len < pn_length || pn_offset + pn_length > buf.len() {
-    return Err(anyhow::anyhow!("Payload length too short"));
+    return Err(anyhow!("Payload length too short"));
   }
   debug!("Packet number length: {}", pn_length);
   let packet_number = &buf[pn_offset..pn_offset + pn_length]
@@ -387,7 +388,7 @@ fn unprotect(buf: &[u8], dcid: &[u8], pn_offset: usize, payload_len: usize) -> R
   let cipher = Aes128Gcm::new(key);
   let Ok(decrypted) = cipher.decrypt(nonce, payload) else {
     error!("Failed to decrypt");
-    return Err(anyhow::anyhow!("Failed to decrypt"));
+    return Err(anyhow!("Failed to decrypt"));
   };
 
   Ok(decrypted)
@@ -426,7 +427,7 @@ fn dcid_scid(buf: &[u8], ptr: &mut usize) -> Result<(Vec<u8>, Vec<u8>), anyhow::
   let dcid_len = buf[*ptr] as usize;
   *ptr += 1 + dcid_len;
   if *ptr >= buf.len() {
-    return Err(anyhow::anyhow!("Buffer too short"));
+    return Err(anyhow!("Buffer too short"));
   }
   let dcid = buf[*ptr - dcid_len..*ptr].to_vec();
   debug!("DCID: {:x?}", dcid);
@@ -435,7 +436,7 @@ fn dcid_scid(buf: &[u8], ptr: &mut usize) -> Result<(Vec<u8>, Vec<u8>), anyhow::
   let scid_len = buf[*ptr] as usize;
   *ptr += 1 + scid_len;
   if *ptr >= buf.len() {
-    return Err(anyhow::anyhow!("Buffer too short"));
+    return Err(anyhow!("Buffer too short"));
   }
   let scid = buf[*ptr - scid_len..*ptr].to_vec();
   debug!("SCID: {:x?}", scid);
@@ -459,12 +460,12 @@ fn derive_initial_protection_values(dcid: &[u8]) -> Result<ProtectionValues, any
   let mut client_secret = [0u8; 32];
   if let Err(e) = hk.expand(CLIENT_IN, &mut client_secret) {
     error!("Failed to derive client secret: {:?}", e);
-    return Err(anyhow::anyhow!("Failed to derive client secret"));
+    return Err(anyhow!("Failed to derive client secret"));
   }
 
   // Client specific key derivation below
   let Ok(hk) = hkdf::Hkdf::<sha2::Sha256>::from_prk(&client_secret) else {
-    return Err(anyhow::anyhow!("Failed to derive HKDF from PRK"));
+    return Err(anyhow!("Failed to derive HKDF from PRK"));
   };
   let mut client_key = [0u8; 16];
   let mut client_iv = [0u8; 12];
@@ -472,15 +473,15 @@ fn derive_initial_protection_values(dcid: &[u8]) -> Result<ProtectionValues, any
 
   if let Err(e) = hk.expand(QUIC_KEY, &mut client_key) {
     error!("Failed to derive client key: {:?}", e);
-    return Err(anyhow::anyhow!("Failed to derive client key"));
+    return Err(anyhow!("Failed to derive client key"));
   }
   if let Err(e) = hk.expand(QUIC_IV, &mut client_iv) {
     error!("Failed to derive client IV: {:?}", e);
-    return Err(anyhow::anyhow!("Failed to derive client IV"));
+    return Err(anyhow!("Failed to derive client IV"));
   }
   if let Err(e) = hk.expand(QUIC_HP, &mut client_hp) {
     error!("Failed to derive client HP: {:?}", e);
-    return Err(anyhow::anyhow!("Failed to derive client HP"));
+    return Err(anyhow!("Failed to derive client HP"));
   }
   Ok(ProtectionValues {
     key: client_key,
@@ -499,7 +500,7 @@ fn variable_length_int(buf: &[u8], pos: &mut usize) -> Result<usize, anyhow::Err
   let len = 1 << two_msb;
   if *pos + len > buf.len() {
     debug!("buffer too short as variable-length integer");
-    return Err(anyhow::anyhow!("Buffer too short"));
+    return Err(anyhow!("Buffer too short"));
   }
   let mut val = (buf[*pos] as usize) & 0x3f;
   *pos += 1;

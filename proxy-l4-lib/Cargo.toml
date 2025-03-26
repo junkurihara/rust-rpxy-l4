@@ -21,7 +21,6 @@ dashmap = { version = "6.1.0" }
 ahash = { version = "0.8.11" }
 
 # error handling
-anyhow = { version = "1.0.97" }
 thiserror = { version = "2.0.12" }
 
 # traces and logs

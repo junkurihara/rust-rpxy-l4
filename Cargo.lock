@@ -823,22 +823,32 @@ dependencies = [
 name = "rpxy-l4-lib"
 version = "0.0.1"
 dependencies = [
- "aes",
- "aes-gcm",
  "ahash",
  "anyhow",
  "bytes",
  "dashmap",
  "derive_builder",
- "hkdf",
  "rand",
- "sha2",
+ "rpxy-l4-quic-tls",
  "socket2",
  "thiserror 2.0.12",
  "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "rpxy-l4-quic-tls"
+version = "0.0.1"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "anyhow",
+ "hkdf",
+ "sha2",
+ "thiserror 2.0.12",
+ "tracing",
 ]
 
 [[package]]

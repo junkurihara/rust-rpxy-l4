@@ -4,13 +4,12 @@ use crate::{
   destination::{Destination, DestinationBuilder, LoadBalance},
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
-  quic::probe_quic_packets,
   socket::bind_udp_socket,
   time_util::get_since_the_epoch,
-  tls::{TlsClientHelloInfo, TlsDestinations},
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
 };
+use quic_tls::{probe_quic_initial_packets, TlsClientHelloInfo, TlsProbeFailure};
 use std::{
   net::SocketAddr,
   sync::{atomic::AtomicU64, Arc},
@@ -19,7 +18,7 @@ use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
 /// Type alias for QUIC destinations
-type QuicDestinations = TlsDestinations<UdpDestination>;
+type QuicDestinations = crate::destination::TlsDestinations<UdpDestination>;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
@@ -114,7 +113,7 @@ impl UdpDestinationMuxBuilder {
 
     let udp_dest = udp_dest.unwrap();
     let mut current = if self.dst_quic.as_ref().is_none_or(|d| d.is_none()) {
-      TlsDestinations::<UdpDestination>::new()
+      QuicDestinations::new()
     } else {
       self.dst_quic.as_ref().unwrap().as_ref().unwrap().clone()
     };
@@ -221,13 +220,17 @@ fn is_wireguard(initial_packets: &mut UdpInitialPackets) -> ProbeResult<UdpProxy
 /// Is QUIC protocol?
 fn is_quic_initial(initial_packets: &mut UdpInitialPackets) -> ProbeResult<UdpProxyProtocol> {
   let initial_packets_inner = initial_packets.inner.as_slice();
-  let res = probe_quic_packets(initial_packets_inner);
-  if matches!(res, ProbeResult::PollNext) {
-    initial_packets
-      .probed_as_pollnext
-      .insert(UdpProxyProtocol::Quic(Default::default()));
+
+  match probe_quic_initial_packets(initial_packets_inner) {
+    Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
+    Err(TlsProbeFailure::PollNext) => {
+      initial_packets
+        .probed_as_pollnext
+        .insert(UdpProxyProtocol::Quic(Default::default()));
+      ProbeResult::PollNext
+    }
+    Ok(client_hello_info) => ProbeResult::Success(UdpProxyProtocol::Quic(client_hello_info)),
   }
-  res
 }
 
 impl UdpProxyProtocol {

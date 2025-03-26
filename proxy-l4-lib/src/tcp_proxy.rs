@@ -5,10 +5,10 @@ use crate::{
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   socket::bind_tcp_socket,
-  tls::{is_tls_handshake, TlsClientHelloInfo},
   trace::*,
 };
 use bytes::BytesMut;
+use quic_tls::{probe_tls_handshake, TlsClientHelloInfo, TlsProbeFailure};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
   io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt},
@@ -18,7 +18,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 /// Type alias for TLS destinations
-type TlsDestinations = crate::tls::TlsDestinations<TcpDestination>;
+type TlsDestinations = crate::destination::TlsDestinations<TcpDestination>;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
@@ -221,7 +221,7 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
 }
 
 /// Is SSH
-fn is_ssh(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
+fn is_ssh(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
   if buf.len() < 4 {
     return ProbeResult::PollNext;
   }
@@ -234,7 +234,7 @@ fn is_ssh(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
 }
 
 /// Is HTTP
-fn is_http(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
+fn is_http(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
   if buf.len() < 4 {
     return ProbeResult::PollNext;
   }
@@ -243,6 +243,15 @@ fn is_http(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
     ProbeResult::Success(TcpProxyProtocol::Http)
   } else {
     ProbeResult::Failure
+  }
+}
+
+/// Is TLS handshake
+fn is_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
+  match probe_tls_handshake(buf) {
+    Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
+    Err(TlsProbeFailure::PollNext) => ProbeResult::PollNext,
+    Ok(chi) => ProbeResult::Success(TcpProxyProtocol::Tls(chi)),
   }
 }
 
@@ -259,7 +268,7 @@ impl TcpProxyProtocol {
 
       // Check probe functions
       #[allow(clippy::type_complexity)]
-      let (new_probe_fns, probe_res): (Vec<fn(&BytesMut) -> ProbeResult<_>>, Vec<_>) = probe_fns
+      let (new_probe_fns, probe_res): (Vec<fn(&[u8]) -> ProbeResult<_>>, Vec<_>) = probe_fns
         .into_iter()
         .filter_map(|f| {
           let res = f(buf);

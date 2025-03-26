@@ -23,6 +23,7 @@ pub(crate) fn probe_tls_client_hello_header(buf: &[u8], pos: usize) -> Result<()
   let client_hello_body_len = ((buf[pos + 1] as usize) << 16) + ((buf[pos + 2] as usize) << 8) + (buf[pos + 3] as usize);
   debug!("TLS ClientHello body length: {}", client_hello_body_len);
   if buf[pos..].len() < client_hello_body_len + 4 {
+    debug!("TLS ClientHello body is not fully received");
     return Err(TlsProbeFailure::PollNext);
   }
   Ok(())

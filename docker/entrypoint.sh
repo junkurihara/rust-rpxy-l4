@@ -89,6 +89,9 @@ if [ $(whoami) != "root" -o $(id -u) -ne 0 -a $(id -g) -ne 0 ]; then
   exit 1
 fi
 
+# Setup Alpine Linux
+setup_alpine
+
 # Add user CAs to OS trusted CA store (does not affect webpki)
 update-ca-certificates
 

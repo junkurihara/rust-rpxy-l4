@@ -2,7 +2,7 @@ use crate::{
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
   destination::{Destination, DestinationBuilder, LoadBalance},
-  error::ProxyError,
+  error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   quic::probe_quic_packets,
   socket::bind_udp_socket,
@@ -33,7 +33,7 @@ pub(crate) struct UdpDestination {
 }
 
 impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestination {
-  type Error = ProxyError;
+  type Error = ProxyBuildError;
   fn try_from(
     (dst_addrs, load_balance, connection_idle_lifetime): (&[SocketAddr], Option<&LoadBalance>, Option<u32>),
   ) -> Result<Self, Self::Error> {
@@ -44,8 +44,7 @@ impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestinat
     let inner = DestinationBuilder::default()
       .dst_addrs(dst_addrs.to_vec())
       .load_balance(*load_balance)
-      .build()
-      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+      .build()?;
     Ok(Self {
       inner,
       connection_idle_lifetime,
@@ -56,10 +55,7 @@ impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestinat
 impl UdpDestination {
   /// Get the destination socket address
   pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
-    self
-      .inner
-      .get_destination(src_addr)
-      .map_err(ProxyError::DestinationBuilderError)
+    self.inner.get_destination(src_addr)
   }
   /// Get the connection idle lifetime
   pub(crate) fn get_connection_idle_lifetime(&self) -> u32 {

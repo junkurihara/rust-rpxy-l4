@@ -1,8 +1,16 @@
+/// Errors that happens during the proxy operation
 #[derive(thiserror::Error, Debug)]
 pub enum ProxyError {
+  /* --------------------------------------- */
   #[error("IO error: {0}")]
   IoError(#[from] std::io::Error),
 
+  /* --------------------------------------- */
+  /// Single destination: failed to get destination address
+  #[error("No destination address, possibly empty destination list")]
+  NoDestinationAddress,
+
+  /* --------------------------------------- */
   #[error("No destination address for the protocol")]
   NoDestinationAddressForProtocol,
 
@@ -17,10 +25,25 @@ pub enum ProxyError {
 
   #[error("Broken UDP connection")]
   BrokenUdpConnection,
+}
 
+/// Errors that happens during building the proxy
+#[derive(thiserror::Error, Debug)]
+pub enum ProxyBuildError {
+  /* --------------------------------------- */
+  /// Configuration error: protocol
+  #[error("Unsupported protocol: {0}")]
+  UnsupportedProtocol(String),
+
+  /// Configuration error: load balance
+  #[error("Invalid load balance: {0}")]
+  InvalidLoadBalance(String),
+
+  /// Single destination builder error
   #[error("Destination builder error: {0}")]
-  DestinationBuilderError(anyhow::Error),
+  DestinationBuilderError(#[from] crate::destination::DestinationBuilderError),
 
+  /* --------------------------------------- */
   /// Multiplexer builder error UDP
   #[error("UDP destination mux error: {0}")]
   UdpDestinationMuxError(#[from] crate::udp_proxy::UdpDestinationMuxBuilderError),

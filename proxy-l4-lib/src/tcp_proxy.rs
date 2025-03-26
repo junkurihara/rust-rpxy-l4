@@ -2,7 +2,7 @@ use crate::{
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
   destination::{Destination, DestinationBuilder, LoadBalance},
-  error::ProxyError,
+  error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   socket::bind_tcp_socket,
   tls::{is_tls_handshake, TlsClientHelloInfo},
@@ -29,15 +29,14 @@ pub(crate) struct TcpDestination {
 }
 
 impl TryFrom<(&[SocketAddr], Option<&LoadBalance>)> for TcpDestination {
-  type Error = ProxyError;
+  type Error = ProxyBuildError;
   fn try_from((dst_addrs, load_balance): (&[SocketAddr], Option<&LoadBalance>)) -> Result<Self, Self::Error> {
     let binding = LoadBalance::default();
     let load_balance = load_balance.unwrap_or(&binding);
     let inner = DestinationBuilder::default()
       .dst_addrs(dst_addrs.to_vec())
       .load_balance(*load_balance)
-      .build()
-      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+      .build()?;
     Ok(Self { inner })
   }
 }
@@ -45,10 +44,7 @@ impl TryFrom<(&[SocketAddr], Option<&LoadBalance>)> for TcpDestination {
 impl TcpDestination {
   /// Get the destination socket address
   pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
-    self
-      .inner
-      .get_destination(src_addr)
-      .map_err(ProxyError::DestinationBuilderError)
+    self.inner.get_destination(src_addr)
   }
 }
 

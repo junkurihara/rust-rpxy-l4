@@ -1,3 +1,4 @@
+use crate::error::{ProxyBuildError, ProxyError};
 use rand::Rng;
 use std::net::SocketAddr;
 
@@ -24,14 +25,14 @@ pub enum LoadBalance {
 }
 
 impl TryFrom<&str> for LoadBalance {
-  type Error = anyhow::Error;
+  type Error = ProxyBuildError;
   fn try_from(value: &str) -> Result<Self, Self::Error> {
     match value {
       "source_ip" => Ok(LoadBalance::SourceIp),
       "source_socket" => Ok(LoadBalance::SourceSocket),
       "random" => Ok(LoadBalance::Random),
       "none" => Ok(LoadBalance::None),
-      _ => Err(anyhow::anyhow!("Invalid load balance: {}", value)),
+      _ => Err(ProxyBuildError::InvalidLoadBalance(value.to_string())),
     }
   }
 }
@@ -40,7 +41,7 @@ impl TryFrom<&str> for LoadBalance {
 #[derive(Debug, Clone, derive_builder::Builder)]
 #[builder(build_fn(validate = "Self::validate"))]
 /// Destination inner struct, contained in TcpDestination and UdpDestination
-pub(crate) struct Destination {
+pub struct Destination {
   /// Destination socket address
   dst_addrs: Vec<SocketAddr>,
 
@@ -65,7 +66,7 @@ impl DestinationBuilder {
 }
 impl Destination {
   /// Get the destination socket address according to the given load balancing policy
-  pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, anyhow::Error> {
+  pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
     let index = match self.load_balance {
       LoadBalance::SourceIp => {
         let src_ip = src_addr.ip();
@@ -79,10 +80,7 @@ impl Destination {
       LoadBalance::Random => rand::rng().random_range(0..self.dst_addrs.len()),
       LoadBalance::None => 0,
     };
-    self
-      .dst_addrs
-      .get(index)
-      .ok_or_else(|| anyhow::anyhow!("No destination address"))
+    self.dst_addrs.get(index).ok_or(ProxyError::NoDestinationAddress)
   }
 }
 

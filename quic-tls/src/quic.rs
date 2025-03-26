@@ -1,8 +1,7 @@
 use crate::{
-  probe::ProbeResult,
-  tls::{probe_tls_client_hello_body, probe_tls_client_hello_header},
+  client_hello::{probe_tls_client_hello_body, probe_tls_client_hello_header, TlsClientHelloInfo},
+  error::TlsProbeFailure,
   trace::*,
-  udp_proxy::UdpProxyProtocol,
 };
 
 const QUIC_VERSION: &[u8] = &[0x00, 0x00, 0x00, 0x01];
@@ -24,14 +23,14 @@ const QUIC_HP: &[u8] = &[
 
 /* ---------------------------------------------------- */
 /// Is QUIC initial packets?
-pub(crate) fn probe_quic_packets(packets: &[Vec<u8>]) -> ProbeResult<UdpProxyProtocol> {
+pub fn probe_quic_initial_packets(packets: &[Vec<u8>]) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
   if packets.is_empty() || packets.iter().any(|p| p.is_empty()) {
-    return ProbeResult::Failure;
+    return Err(TlsProbeFailure::Failure);
   }
   // We consider initial packets only since only communication initiated from the client is expected.
   // Version negotiation packet is sent by the server as a response to the client
   if packets.iter().any(|p| p[0] & 0xf0 != 0xc0) {
-    return ProbeResult::Failure;
+    return Err(TlsProbeFailure::Failure);
   }
 
   // Check if the packets are QUIC initial packets, and unprotect the header and payload.
@@ -40,7 +39,7 @@ pub(crate) fn probe_quic_packets(packets: &[Vec<u8>]) -> ProbeResult<UdpProxyPro
     .map(|p| probe_quic_initial_packet_header(p))
     .collect::<Vec<_>>();
   if unprotected.iter().any(|p| p.is_none()) {
-    return ProbeResult::Failure;
+    return Err(TlsProbeFailure::Failure);
   }
   let unprotected = unprotected.into_iter().map(|p| p.unwrap()).collect::<Vec<_>>();
 
@@ -52,7 +51,7 @@ pub(crate) fn probe_quic_packets(packets: &[Vec<u8>]) -> ProbeResult<UdpProxyPro
     .iter()
     .any(|p| p.scid != scid || p.dcid != dcid || p.token != token)
   {
-    return ProbeResult::Failure;
+    return Err(TlsProbeFailure::Failure);
   }
 
   probe_quic_unprotected_frames(&unprotected)
@@ -165,7 +164,7 @@ fn probe_quic_initial_packet_header(buf: &[u8]) -> Option<QuicPacket> {
 /* ---------------------------------------------------- */
 /// Extract CRYPTO frame from unprotected QUIC initial packet.
 /// Reassemble the CRYPTO frames and check if it is a TLS ClientHello.
-fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> ProbeResult<UdpProxyProtocol> {
+fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
   // We have to consider crypto frames split into multiple packets.
   // reassemble the crypto frames and check if it is a TLS ClientHello!!
 
@@ -177,7 +176,7 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> ProbeRe
   {
     Err(e) => {
       error!("Failed to parse QUIC frames: {:?}", e);
-      return ProbeResult::Failure;
+      return Err(TlsProbeFailure::Failure);
     }
     Ok(crypto_frames) => {
       debug!("Parsed QUIC frames: {:?}", crypto_frames);
@@ -189,30 +188,25 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> ProbeRe
   // Reassemble the crypto frames
   let Ok(reassemble_res) = reassemble_crypto_frames(&flatten_crypto_frames) else {
     error!("Failed to reassemble crypto frames");
-    return ProbeResult::Failure;
+    return Err(TlsProbeFailure::Failure);
   };
   let expected_client_hello = match reassemble_res {
     ReassembleResult::MissingFrames => {
-      return ProbeResult::PollNext;
+      return Err(TlsProbeFailure::PollNext);
     }
     ReassembleResult::CompleteFromGivenFrames(content) => content,
   };
 
   // Check client hello header
   let pos = 0;
-  let header_probe_res = probe_tls_client_hello_header(&expected_client_hello, pos);
-  match header_probe_res {
-    ProbeResult::PollNext => return ProbeResult::PollNext,
-    ProbeResult::Failure => return ProbeResult::Failure,
-    ProbeResult::Success(_) => {}
-  }
+  probe_tls_client_hello_header(&expected_client_hello, pos)?;
 
   // Check client hello body
   let Some(body_probe_res) = probe_tls_client_hello_body(&expected_client_hello, 3, 2) else {
-    return ProbeResult::Failure;
+    return Err(TlsProbeFailure::Failure);
   };
 
-  ProbeResult::Success(UdpProxyProtocol::Quic(body_probe_res))
+  Ok(body_probe_res)
 }
 
 /* ---------------------------------------------------- */

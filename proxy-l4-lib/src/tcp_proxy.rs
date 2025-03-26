@@ -5,10 +5,10 @@ use crate::{
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   socket::bind_tcp_socket,
-  tls::{is_tls_handshake, TlsClientHelloInfo},
   trace::*,
 };
 use bytes::BytesMut;
+use quic_tls::{probe_tls_handshake, TlsClientHelloInfo, TlsProbeFailure};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
   io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt},
@@ -18,7 +18,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 /// Type alias for TLS destinations
-type TlsDestinations = crate::tls::TlsDestinations<TcpDestination>;
+type TlsDestinations = crate::destination::TlsDestinations<TcpDestination>;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
@@ -243,6 +243,15 @@ fn is_http(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
     ProbeResult::Success(TcpProxyProtocol::Http)
   } else {
     ProbeResult::Failure
+  }
+}
+
+/// Is TLS handshake
+fn is_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
+  match probe_tls_handshake(buf) {
+    Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
+    Err(TlsProbeFailure::PollNext) => ProbeResult::PollNext,
+    Ok(chi) => ProbeResult::Success(TcpProxyProtocol::Tls(chi)),
   }
 }
 

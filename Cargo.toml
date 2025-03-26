@@ -10,7 +10,7 @@ categories = ["asynchronous", "network-programming", "command-line-utilities"]
 publish = false
 
 [workspace]
-members = ["proxy-l4-lib", "proxy-l4"]
+members = ["proxy-l4-lib", "proxy-l4", "quic-tls"]
 # exclude = ["submodules"]
 resolver = "2"
 

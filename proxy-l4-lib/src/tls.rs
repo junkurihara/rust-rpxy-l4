@@ -1,5 +1,4 @@
 use crate::{probe::ProbeResult, tcp_proxy::TcpProxyProtocol, trace::*};
-use bytes::BytesMut;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, Default)]
@@ -88,7 +87,7 @@ const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
 /// Check if the buffer is a TLS handshake
 /// This is inspired by https://github.com/yrutschle/sslh/blob/master/tls.c
-pub(crate) fn is_tls_handshake(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
+pub(crate) fn is_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
   // TLS record header (5) + handshake type (1) + body length (3)
   if buf.len() < TLS_RECORD_HEADER_LEN + TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
     return ProbeResult::Failure;

@@ -2,7 +2,7 @@ use crate::{
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
   destination::{Destination, DestinationBuilder, LoadBalance},
-  error::ProxyError,
+  error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   quic::probe_quic_packets,
   socket::bind_udp_socket,
@@ -33,7 +33,7 @@ pub(crate) struct UdpDestination {
 }
 
 impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestination {
-  type Error = ProxyError;
+  type Error = ProxyBuildError;
   fn try_from(
     (dst_addrs, load_balance, connection_idle_lifetime): (&[SocketAddr], Option<&LoadBalance>, Option<u32>),
   ) -> Result<Self, Self::Error> {
@@ -44,8 +44,7 @@ impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestinat
     let inner = DestinationBuilder::default()
       .dst_addrs(dst_addrs.to_vec())
       .load_balance(*load_balance)
-      .build()
-      .map_err(|e| ProxyError::DestinationBuilderError(e.into()))?;
+      .build()?;
     Ok(Self {
       inner,
       connection_idle_lifetime,
@@ -56,10 +55,7 @@ impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestinat
 impl UdpDestination {
   /// Get the destination socket address
   pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
-    self
-      .inner
-      .get_destination(src_addr)
-      .map_err(ProxyError::DestinationBuilderError)
+    self.inner.get_destination(src_addr)
   }
   /// Get the connection idle lifetime
   pub(crate) fn get_connection_idle_lifetime(&self) -> u32 {
@@ -268,29 +264,6 @@ impl UdpProxyProtocol {
       return Ok(probe_pollnext.to_owned());
     };
 
-    // let initial_packets = &initial_packets.inner[0]; //TODO: FIX ME
-
-    // /* ------ */
-    // // Wireguard protocol 'initiation' detection [only Handshake]
-    // // Thus this may not be a reliable way to detect Wireguard protocol
-    // // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
-    // // https://www.wireguard.com/protocol/
-    // if initial_packets.len() == 148
-    //   && initial_packets[0] == 0x01
-    //   && initial_packets[1] == 0x00
-    //   && initial_packets[2] == 0x00
-    //   && initial_packets[3] == 0x00
-    // {
-    //   debug!("Wireguard protocol (initiator to responder first message) detected");
-    //   return Ok(ProbeResult::Success(Self::Wireguard));
-    // }
-    // /* ------ */
-    // // IETF QUIC handshake protocol detection
-    // if let Some(info) = probe_quic_packet(initial_packets) {
-    //   debug!("IETF QUIC protocol detected");
-    //   return Ok(ProbeResult::Success(Self::Quic(info)));
-    // }
-
     // All detection finished as failure
     debug!("Untyped UDP connection detected");
     Ok(ProbeResult::Success(Self::Any))
@@ -386,34 +359,6 @@ impl UdpProxy {
           error!("Failed to buffer the initial packet: {e}");
           continue;
         }
-
-        // // Check the connection limit
-        // if self.max_connections > 0 && self.connection_count.current() >= self.max_connections {
-        //   warn!("UDP connection limit reached: {}", self.max_connections);
-        //   continue;
-        // }
-        // let protocol = UdpProxyProtocol::detect_protocol(&udp_buf[..buf_size]).await?;
-        // let Ok(udp_dst) = self.destination_mux.get_destination(&protocol) else {
-        //   error!("No destination address found for protocol: {}", protocol);
-        //   continue;
-        // };
-        // let Ok(conn) = udp_connection_pool
-        //   .create_new_connection(&src_addr, &udp_dst, udp_socket_tx.clone())
-        //   .await
-        // else {
-        //   continue;
-        // };
-        // let _ = conn.send(udp_buf[..buf_size].to_vec()).await;
-        // // here we ignore the error, as the connection might be closed
-        // self
-        //   .connection_count
-        //   .set(self.listen_on, udp_connection_pool.local_pool_size());
-        // debug!(
-        //   "Current connection: (local: {}, global: {}) @{}",
-        //   udp_connection_pool.local_pool_size(),
-        //   self.connection_count.current(),
-        //   self.listen_on,
-        // );
       }
       Ok(()) as Result<(), ProxyError>
     };

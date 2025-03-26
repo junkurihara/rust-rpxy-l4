@@ -1,3 +1,5 @@
+use crate::error::ProxyBuildError;
+
 /// L5--L7 Protocol specific types
 pub enum ProtocolType {
   /// TCP: cleartext HTTP
@@ -13,7 +15,7 @@ pub enum ProtocolType {
 }
 
 impl TryFrom<&str> for ProtocolType {
-  type Error = anyhow::Error;
+  type Error = ProxyBuildError;
   fn try_from(value: &str) -> Result<Self, Self::Error> {
     match value {
       "http" => Ok(ProtocolType::Http),
@@ -21,7 +23,7 @@ impl TryFrom<&str> for ProtocolType {
       "ssh" => Ok(ProtocolType::Ssh),
       "wireguard" => Ok(ProtocolType::Wireguard),
       "quic" => Ok(ProtocolType::Quic),
-      _ => Err(anyhow::anyhow!("Invalid protocol type: {}", value)),
+      _ => Err(ProxyBuildError::UnsupportedProtocol(value.to_string())),
     }
   }
 }

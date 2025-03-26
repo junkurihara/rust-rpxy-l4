@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// Probe result
 pub(crate) enum ProbeResult<T> {
   /// Success to probe TLS ClientHello

@@ -2,6 +2,7 @@ use crate::{
   constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
   error::ProxyError,
   socket::bind_udp_socket,
+  time_util::get_since_the_epoch,
   trace::*,
   udp_proxy::UdpDestination,
 };
@@ -11,7 +12,6 @@ use std::{
     atomic::{AtomicU64, Ordering},
     Arc, OnceLock,
   },
-  time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{net::UdpSocket, runtime::Handle, sync::mpsc};
 use tokio_util::sync::CancellationToken;
@@ -142,8 +142,8 @@ pub(crate) struct UdpConnection {
 
 impl UdpConnection {
   /// Send a packet to the UdpConnection
-  pub(crate) async fn send(&self, packet: Vec<u8>) -> Result<(), ProxyError> {
-    if let Err(e) = self.tx.send(packet).await {
+  pub(crate) async fn send(&self, packet: &[u8]) -> Result<(), ProxyError> {
+    if let Err(e) = self.tx.send(packet.to_owned()).await {
       error!("Error sending packet to UdpConnection: {e}");
       error!(
         "Stopping UdpConnection from {} to {}",
@@ -151,6 +151,13 @@ impl UdpConnection {
       );
       self.inner.cancel_token.cancel(); // cancellation will remove the connection from the pool
       return Err(ProxyError::BrokenUdpConnection);
+    }
+    Ok(())
+  }
+  /// Send a packet to the UdpConnection
+  pub(crate) async fn send_many(&self, packets: &[Vec<u8>]) -> Result<(), ProxyError> {
+    for packet in packets.iter() {
+      self.send(packet).await?;
     }
     Ok(())
   }
@@ -328,14 +335,6 @@ impl UdpConnectionInner {
       }
     }
   }
-}
-
-#[inline]
-fn get_since_the_epoch() -> u64 {
-  SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .expect("Time went backwards!!! Check system time.")
-    .as_secs()
 }
 
 /* ---------------------------------------------------------- */

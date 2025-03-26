@@ -1,6 +1,8 @@
 use crate::{
-  tls::{probe_tls_client_hello, TlsClientHelloInfo},
+  probe::ProbeResult,
+  tls::{probe_tls_client_hello_body, probe_tls_client_hello_header},
   trace::*,
+  udp_proxy::UdpProxyProtocol,
 };
 
 const QUIC_VERSION: &[u8] = &[0x00, 0x00, 0x00, 0x01];
@@ -21,16 +23,39 @@ const QUIC_HP: &[u8] = &[
 ];
 
 /* ---------------------------------------------------- */
-pub(crate) fn probe_quic_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
-  if buf.is_empty() {
-    return None;
+/// Is QUIC initial packets?
+pub(crate) fn probe_quic_packets(packets: &[Vec<u8>]) -> ProbeResult<UdpProxyProtocol> {
+  if packets.is_empty() || packets.iter().any(|p| p.is_empty()) {
+    return ProbeResult::Failure;
   }
-  // We consider version initial packet only since only communication initiated from the client is expected.
-  match buf[0] {
-    0x80..=0xbf => None, // version negotiation packet, but it is sent by the server as a response to the client
-    0xc0..=0xcf => probe_quic_initial_packet(buf),
-    _ => None,
+  // We consider initial packets only since only communication initiated from the client is expected.
+  // Version negotiation packet is sent by the server as a response to the client
+  if packets.iter().any(|p| p[0] & 0xf0 != 0xc0) {
+    return ProbeResult::Failure;
   }
+
+  // Check if the packets are QUIC initial packets, and unprotect the header and payload.
+  let unprotected = packets
+    .iter()
+    .map(|p| probe_quic_initial_packet_header(p))
+    .collect::<Vec<_>>();
+  if unprotected.iter().any(|p| p.is_none()) {
+    return ProbeResult::Failure;
+  }
+  let unprotected = unprotected.into_iter().map(|p| p.unwrap()).collect::<Vec<_>>();
+
+  // Check if all unprotected packets contains the same SCID, DCID, and Token.
+  let scid = unprotected[0].scid.clone();
+  let dcid = unprotected[0].dcid.clone();
+  let token = unprotected[0].token.clone();
+  if unprotected
+    .iter()
+    .any(|p| p.scid != scid || p.dcid != dcid || p.token != token)
+  {
+    return ProbeResult::Failure;
+  }
+
+  probe_quic_unprotected_frames(&unprotected)
 }
 
 // /* ---------------------------------------------------- */
@@ -63,14 +88,21 @@ pub(crate) fn probe_quic_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
 // }
 
 /* ---------------------------------------------------- */
+/// Parsed and unprotected QUIC packet
+struct QuicPacket {
+  dcid: Vec<u8>,
+  scid: Vec<u8>,
+  token: Vec<u8>,
+  payload: Vec<u8>,
+}
+
 /// Check if the buffer contains a QUIC initial packet with TLS ClientHello.
 /// https://www.rfc-editor.org/rfc/rfc9000.html
 /// https://www.rfc-editor.org/rfc/rfc9001.html
 /// https://quic.xargs.org
 /// - First checks if the buffer is consistent with a QUIC initial packet.
 /// - Then derive the header protection key and decrypt the packet.
-/// - Finally, check if the decrypted packet is consistent with a QUIC TLS ClientHello.
-fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
+fn probe_quic_initial_packet_header(buf: &[u8]) -> Option<QuicPacket> {
   // header(1), version(4), DCID length(1), SCID length(1)
   if buf.len() < 7 {
     return None;
@@ -87,7 +119,7 @@ fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
     return None;
   }
   let mut ptr = 5;
-  let Ok((dcid, _scid)) = dcid_scid(buf, &mut ptr) else {
+  let Ok((dcid, scid)) = dcid_scid(buf, &mut ptr) else {
     return None;
   };
   // Token length
@@ -98,7 +130,8 @@ fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
   if ptr >= buf.len() {
     return None;
   }
-  debug!("Token: {:x?}", &buf[ptr - token_len..ptr]);
+  let token = buf[ptr - token_len..ptr].to_vec();
+  debug!("Token: {:x?}", &token);
   // Payload length
   let Ok(payload_len) = variable_length_int(buf, &mut ptr) else {
     return None;
@@ -116,30 +149,186 @@ fn probe_quic_initial_packet(buf: &[u8]) -> Option<TlsClientHelloInfo> {
 
   // So far, the buffer is consistent with a QUIC initial packet.
   // Now, try to decrypt the packet and check if it is a TLS ClientHello.
-  let Ok(expected_crypto_frame) = unprotect(buf, &dcid, ptr, payload_len) else {
+  let Ok(unprotected_payload) = unprotect(buf, &dcid, ptr, payload_len) else {
     return None;
   };
-  debug!("Expected crypto frame: {:x?}", expected_crypto_frame);
+  debug!("Decrypted initial packet payload: {:x?}", unprotected_payload);
+
+  Some(QuicPacket {
+    dcid,
+    scid,
+    token,
+    payload: unprotected_payload,
+  })
+}
+
+/* ---------------------------------------------------- */
+/// Extract CRYPTO frame from unprotected QUIC initial packet.
+/// Reassemble the CRYPTO frames and check if it is a TLS ClientHello.
+fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> ProbeResult<UdpProxyProtocol> {
+  // We have to consider crypto frames split into multiple packets.
+  // reassemble the crypto frames and check if it is a TLS ClientHello!!
+
+  // Parse QUIC frames of the unprotected payload in initial packet.
+  let crypto_frames = match unprotected_payloads
+    .iter()
+    .map(|packet| extract_quic_crypto_frames(&packet.payload))
+    .collect::<Result<Vec<_>, _>>()
+  {
+    Err(e) => {
+      error!("Failed to parse QUIC frames: {:?}", e);
+      return ProbeResult::Failure;
+    }
+    Ok(crypto_frames) => {
+      debug!("Parsed QUIC frames: {:?}", crypto_frames);
+      crypto_frames
+    }
+  };
+  let flatten_crypto_frames = crypto_frames.into_iter().flatten().collect::<Vec<_>>();
+
+  // Reassemble the crypto frames
+  let Ok(reassemble_res) = reassemble_crypto_frames(&flatten_crypto_frames) else {
+    error!("Failed to reassemble crypto frames");
+    return ProbeResult::Failure;
+  };
+  let expected_client_hello = match reassemble_res {
+    ReassembleResult::MissingFrames => {
+      return ProbeResult::PollNext;
+    }
+    ReassembleResult::CompleteFromGivenFrames(content) => content,
+  };
+
+  // Check client hello header
+  let pos = 0;
+  let header_probe_res = probe_tls_client_hello_header(&expected_client_hello, pos);
+  match header_probe_res {
+    ProbeResult::PollNext => return ProbeResult::PollNext,
+    ProbeResult::Failure => return ProbeResult::Failure,
+    ProbeResult::Success(_) => {}
+  }
+
+  // Check client hello body
+  let Some(body_probe_res) = probe_tls_client_hello_body(&expected_client_hello, 3, 2) else {
+    return ProbeResult::Failure;
+  };
+
+  ProbeResult::Success(UdpProxyProtocol::Quic(body_probe_res))
+}
+
+/* ---------------------------------------------------- */
+#[derive(Debug, Clone)]
+/// Struct for CRYPTO Frame, type 0x06
+struct CryptoFrame<'a> {
+  frame_offset: usize,
+  crypto_data_len: usize,
+  crypto_data: &'a [u8],
+}
+
+/// Reassemble result
+enum ReassembleResult {
+  /// Reassembled crypto frames from given frames, maybe incomplete by checking the content
+  CompleteFromGivenFrames(Vec<u8>),
+  /// Some frames are missing to reassemble the content
+  MissingFrames,
+}
+
+/// Reassemble CYRPTO frames
+fn reassemble_crypto_frames(crypto_frames: &[CryptoFrame]) -> Result<ReassembleResult, anyhow::Error> {
+  // First sort the crypto frames by frame_offset
+  let mut sorted = crypto_frames.to_vec();
+  sorted.sort_by_key(|f| f.frame_offset);
+
+  let mut reassembled = Vec::new();
+  let mut offset = 0;
+  for frame in sorted {
+    if frame.frame_offset > offset {
+      return Ok(ReassembleResult::MissingFrames);
+    }
+    if frame.frame_offset < offset {
+      return Err(anyhow::anyhow!("Overlapping crypto frames! Invalid QUIC packet"));
+    }
+    reassembled.extend_from_slice(frame.crypto_data);
+    offset += frame.crypto_data_len;
+  }
+
+  Ok(ReassembleResult::CompleteFromGivenFrames(reassembled))
+}
+
+/// Extract CRYPTO frames from QUIC unprotected payload of the initial packet.
+/// https://www.rfc-editor.org/rfc/rfc9000.html#section-17.2.2
+/// Initial packet can contain CRYPTO (0x06), ACK (0x02, 0x03), PING (0x01), PADDING (0x00), and CONNECTION_CLOSE (only 0x1c).
+fn extract_quic_crypto_frames(buf: &[u8]) -> Result<Vec<CryptoFrame<'_>>, anyhow::Error> {
   let mut ptr = 0;
-  // Frame type
-  if expected_crypto_frame[ptr] != 0x06 {
-    return None;
+  let mut crypto_frames = Vec::new();
+  while ptr < buf.len() {
+    let frame_type = buf[ptr];
+    ptr += 1;
+    match frame_type {
+      0x06 => {
+        let crypto_frame = parse_crypto_frame(buf, &mut ptr)?;
+        crypto_frames.push(crypto_frame);
+      }
+      0x02 | 0x03 => parse_ack_frame(frame_type, buf, &mut ptr)?,
+      0x1c => parse_cc_frame(buf, &mut ptr)?,
+      0x01 => continue, // PING frame
+      0x00 => continue, // PADDING frame
+      _ => return Err(anyhow::anyhow!("Prohibited frame type in initial packets: {:x}", frame_type)),
+    }
   }
-  ptr += 1;
-  // Frame offset
-  let Ok(_frame_offset) = variable_length_int(&expected_crypto_frame, &mut ptr) else {
-    return None;
-  };
-  // Crypto data length
-  let Ok(crypto_data_len) = variable_length_int(&expected_crypto_frame, &mut ptr) else {
-    return None;
-  };
-  if ptr + crypto_data_len > expected_crypto_frame.len() {
-    return None;
+  Ok(crypto_frames)
+}
+
+// parse crypto frame
+fn parse_crypto_frame<'a>(buf: &'a [u8], ptr: &mut usize) -> Result<CryptoFrame<'a>, anyhow::Error> {
+  let frame_offset = variable_length_int(buf, ptr)?;
+  let crypto_data_len = variable_length_int(buf, ptr)?;
+  if *ptr + crypto_data_len > buf.len() {
+    return Err(anyhow::anyhow!("Buffer too short"));
   }
-  let crypto_data = &expected_crypto_frame[ptr..ptr + crypto_data_len];
-  debug!("Crypto data: {:x?}", crypto_data);
-  probe_tls_client_hello(crypto_data, 3, 2)
+  let crypto_data = &buf[*ptr..*ptr + crypto_data_len];
+  *ptr += crypto_data_len;
+
+  let crypto_frame = CryptoFrame {
+    frame_offset,
+    crypto_data_len,
+    crypto_data,
+  };
+  Ok(crypto_frame)
+}
+
+// parse ack frame
+fn parse_ack_frame(ack_type: u8, buf: &[u8], ptr: &mut usize) -> Result<(), anyhow::Error> {
+  let _largest_ack = variable_length_int(buf, ptr)?;
+  let _ack_delay = variable_length_int(buf, ptr)?;
+  let _ack_range_count = variable_length_int(buf, ptr)?;
+  let _first_ack_range = variable_length_int(buf, ptr)?;
+  for _ in 0.._ack_range_count {
+    let _gap = variable_length_int(buf, ptr)?;
+    let _ack_range_length = variable_length_int(buf, ptr)?;
+  }
+  if ack_type == 0x03 {
+    let _ect01_count = variable_length_int(buf, ptr)?;
+    let _ect02_count = variable_length_int(buf, ptr)?;
+    let _ecn_ce_count = variable_length_int(buf, ptr)?;
+  }
+  Ok(())
+}
+
+// parse connection close frame
+fn parse_cc_frame(buf: &[u8], ptr: &mut usize) -> Result<(), anyhow::Error> {
+  let _error_code = variable_length_int(buf, ptr)?;
+  if *ptr >= buf.len() {
+    return Err(anyhow::anyhow!("Buffer too short"));
+  }
+  let _frame_type = buf[*ptr];
+  *ptr += 1;
+  let reason_phrase_len = variable_length_int(buf, ptr)?;
+  if *ptr + reason_phrase_len > buf.len() {
+    return Err(anyhow::anyhow!("Buffer too short"));
+  }
+  let _reason_phrase = &buf[*ptr..*ptr + reason_phrase_len];
+  *ptr += reason_phrase_len;
+  Ok(())
 }
 
 /* ---------------------------------------------------- */

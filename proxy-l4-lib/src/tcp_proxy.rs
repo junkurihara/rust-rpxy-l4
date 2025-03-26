@@ -5,7 +5,7 @@ use crate::{
   error::ProxyError,
   probe::ProbeResult,
   socket::bind_tcp_socket,
-  tls::{probe_tls_handshake, TlsClientHelloInfo},
+  tls::{is_tls_handshake, TlsClientHelloInfo},
   trace::*,
 };
 use bytes::BytesMut;
@@ -188,7 +188,7 @@ impl TcpDestinationMux {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// TCP proxy protocol, specific protocols like SSH, and default is "any".
 pub(crate) enum TcpProxyProtocol {
   /// any, default
@@ -224,48 +224,120 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
   Ok(read_len)
 }
 
+/// Is SSH
+fn is_ssh(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
+  if buf.len() < 4 {
+    return ProbeResult::PollNext;
+  }
+  if buf.starts_with(b"SSH-") {
+    debug!("SSH connection detected");
+    ProbeResult::Success(TcpProxyProtocol::Ssh)
+  } else {
+    ProbeResult::Failure
+  }
+}
+
+/// Is HTTP
+fn is_http(buf: &BytesMut) -> ProbeResult<TcpProxyProtocol> {
+  if buf.len() < 4 {
+    return ProbeResult::PollNext;
+  }
+  if buf.windows(4).any(|w| w.eq(b"HTTP")) {
+    debug!("HTTP connection detected");
+    ProbeResult::Success(TcpProxyProtocol::Http)
+  } else {
+    ProbeResult::Failure
+  }
+}
+
 impl TcpProxyProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
-  async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<Self, ProxyError> {
-    // Read the first several bytes to probe
-    let _read_len = read_tcp_stream(incoming_stream, buf).await?;
+  async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<Self>, ProxyError> {
+    let mut probe_fns = vec![is_ssh, is_http, is_tls_handshake];
 
+    while !probe_fns.is_empty() {
+      // Read the first several bytes to probe. at the first loop, the buffer is empty.
+      let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+      let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
+      buf.extend_from_slice(&next_buf[..]);
+
+      // Check probe functions
+      #[allow(clippy::type_complexity)]
+      let (new_probe_fns, probe_res): (Vec<fn(&BytesMut) -> ProbeResult<_>>, Vec<_>) = probe_fns
+        .into_iter()
+        .filter_map(|f| {
+          let res = f(buf);
+          match res {
+            ProbeResult::Success(_) | ProbeResult::PollNext => Some((f, res)),
+            _ => None,
+          }
+        })
+        .unzip();
+
+      // If any of them returns Success, return the protocol.
+      if let Some(probe_success) = probe_res.into_iter().find(|r| matches!(r, ProbeResult::Success(_))) {
+        return Ok(probe_success);
+      };
+
+      // If the rest returned PollNext, fetch more data
+      probe_fns = new_probe_fns;
+    }
+
+    // loop {
+    //   let mut found = false;
+    //   for prob_fn in prob_fns.iter() {
+    //     match prob_fn(&buf) {
+    //       ProbeResult::Failure => {
+    //         continue;
+    //       }
+    //       ProbeResult::Success(_) => {
+    //         found = true;
+    //         break;
+    //       }
+    //       ProbeResult::PollNext => {
+    //         return Ok(Self::Any);
+    //       }
+    //     }
+    //   }
+    //   if found {
+    //     break;
+    //   }
+    // }
     // TODO: Add more protocol detection
-    // SSH
-    if buf.starts_with(b"SSH-") {
-      debug!("SSH connection detected");
-      return Ok(Self::Ssh);
-    }
+    // // SSH
+    // if buf.starts_with(b"SSH-") {
+    //   debug!("SSH connection detected");
+    //   return Ok(Self::Ssh);
+    // }
 
-    // TLS
-    // TODO: Should we use `stream.read_exact` method for the fetching instead of read_buf inside loop?
-    loop {
-      match probe_tls_handshake(buf) {
-        ProbeResult::Failure => {
-          break;
-        }
-        ProbeResult::Success(info) => {
-          debug!("TLS connection detected");
-          return Ok(Self::Tls(info));
-        }
-        ProbeResult::PollNext => {
-          debug!("TLS connection detected, but need more data. Polling next.");
-          let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
-          let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
+    // // HTTP
+    // if buf.windows(4).any(|w| w.eq(b"HTTP")) {
+    //   debug!("HTTP connection detected");
+    //   return Ok(Self::Http);
+    // }
 
-          buf.extend_from_slice(&next_buf[..]);
-        }
-      }
-    }
+    // // TLS
+    // loop {
+    //   match probe_tls_handshake(buf) {
+    //     ProbeResult::Failure => {
+    //       break;
+    //     }
+    //     ProbeResult::Success(info) => {
+    //       debug!("TLS connection detected");
+    //       return Ok(info);
+    //     }
+    //     ProbeResult::PollNext => {
+    //       debug!("TLS connection detected, but need more data. Polling next.");
+    //       let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+    //       let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
 
-    // HTTP
-    if buf.windows(4).any(|w| w.eq(b"HTTP")) {
-      debug!("HTTP connection detected");
-      return Ok(Self::Http);
-    }
+    //       buf.extend_from_slice(&next_buf[..]);
+    //     }
+    //   }
+    // }
 
     debug!("Untyped TCP connection");
-    Ok(Self::Any)
+    Ok(ProbeResult::Success(Self::Any))
   }
 }
 
@@ -338,7 +410,8 @@ impl TcpProxy {
               return;
             };
             let protocol = match probe_result {
-              Ok(p) => p,
+              Ok(ProbeResult::Success(p)) => p,
+              Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
               Err(e) => {
                 error!("Failed to detect protocol: {e}");
                 connection_count.decrement();

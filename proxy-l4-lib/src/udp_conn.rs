@@ -9,8 +9,8 @@ use crate::{
 use std::{
   net::SocketAddr,
   sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, OnceLock,
+    atomic::{AtomicU64, Ordering},
   },
 };
 use tokio::{net::UdpSocket, runtime::Handle, sync::mpsc};
@@ -110,7 +110,7 @@ impl UdpConnectionPool {
   }
 
   /// Prune inactive connections
-  /// This must be called when a new UDP packet is received.
+  /// This must be called when a new UDP datagram is received.
   pub(crate) fn prune_inactive_connections(&self) {
     self.inner.retain(|_, conn| {
       let last_active = conn.inner.last_active.load(Ordering::Acquire);
@@ -141,10 +141,10 @@ pub(crate) struct UdpConnection {
 }
 
 impl UdpConnection {
-  /// Send a packet to the UdpConnection
-  pub(crate) async fn send(&self, packet: &[u8]) -> Result<(), ProxyError> {
-    if let Err(e) = self.tx.send(packet.to_owned()).await {
-      error!("Error sending packet to UdpConnection: {e}");
+  /// Send a datagram to the UdpConnection
+  pub(crate) async fn send(&self, datagram: &[u8]) -> Result<(), ProxyError> {
+    if let Err(e) = self.tx.send(datagram.to_owned()).await {
+      error!("Error sending datagram to UdpConnection: {e}");
       error!(
         "Stopping UdpConnection from {} to {}",
         self.inner.src_addr, self.inner.dst_addr
@@ -154,10 +154,10 @@ impl UdpConnection {
     }
     Ok(())
   }
-  /// Send a packet to the UdpConnection
-  pub(crate) async fn send_many(&self, packets: &[Vec<u8>]) -> Result<(), ProxyError> {
-    for packet in packets.iter() {
-      self.send(packet).await?;
+  /// Send multiple datagrams to the UdpConnection
+  pub(crate) async fn send_many(&self, datagrams: &[Vec<u8>]) -> Result<(), ProxyError> {
+    for dg in datagrams.iter() {
+      self.send(dg).await?;
     }
     Ok(())
   }
@@ -257,29 +257,29 @@ impl UdpConnectionInner {
     }
   }
 
-  /// Service to forward packets to the upstream
+  /// Service to forward datagrams to the upstream
   async fn service_forward_upstream(
     &self,
     mut channel_rx: mpsc::Receiver<Vec<u8>>,
     udp_socket_to_upstream_tx: Arc<UdpSocket>,
   ) -> Result<(), ProxyError> {
     let service = async move {
-      // Handle multiple packets from the same source
+      // Handle multiple datagrams from the same source
       loop {
-        let Some(packet) = channel_rx.recv().await else {
-          error!("Error receiving packet from channel");
+        let Some(datagram) = channel_rx.recv().await else {
+          error!("Error receiving datagram from channel");
           return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
         };
         debug!(
           "[{} -> {}] received {} bytes from downstream",
           self.src_addr,
           self.dst_addr,
-          packet.len()
+          datagram.len()
         );
         self.update_last_active();
 
-        if let Err(e) = udp_socket_to_upstream_tx.send(packet.as_slice()).await {
-          error!("Error sending packet to upstream: {e}");
+        if let Err(e) = udp_socket_to_upstream_tx.send(datagram.as_slice()).await {
+          error!("Error sending datagram to upstream: {e}");
           return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
         };
       }
@@ -294,9 +294,9 @@ impl UdpConnectionInner {
     }
   }
 
-  /// Service to forward packets to the downstream
+  /// Service to forward datagrams to the downstream
   async fn service_forward_downstream(&self, udp_socket_to_upstream_rx: Arc<UdpSocket>) -> Result<(), ProxyError> {
-    // Handle multiple packets sent back from the upstream as responses
+    // Handle multiple datagrams sent back from the upstream as responses
     let service = async {
       loop {
         let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
@@ -321,7 +321,7 @@ impl UdpConnectionInner {
           .send_to(response.as_slice(), self.src_addr)
           .await
         {
-          error!("Error sending packet to downstream: {e}");
+          error!("Error sending datagram to downstream: {e}");
           return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
         };
       }

@@ -9,10 +9,10 @@ use crate::{
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
 };
-use quic_tls::{probe_quic_initial_packets, TlsClientHelloInfo, TlsProbeFailure};
+use quic_tls::{TlsClientHelloInfo, TlsProbeFailure, probe_quic_initial_packets};
 use std::{
   net::SocketAddr,
-  sync::{atomic::AtomicU64, Arc},
+  sync::{Arc, atomic::AtomicU64},
 };
 use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_util::sync::CancellationToken;
@@ -200,12 +200,12 @@ impl std::fmt::Display for UdpProxyProtocol {
 
 /* ------ */
 /// Is Wireguard protocol?
-fn is_wireguard(initial_packets: &mut UdpInitialPackets) -> ProbeResult<UdpProxyProtocol> {
+fn is_wireguard(initial_datagrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProxyProtocol> {
   // Wireguard protocol 'initiation' detection [only Handshake]
   // Thus this may not be a reliable way to detect Wireguard protocol
   // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
   // https://www.wireguard.com/protocol/
-  let Some(first) = initial_packets.first() else {
+  let Some(first) = initial_datagrams.first() else {
     return ProbeResult::Failure; // unreachable. just in case.
   };
 
@@ -218,13 +218,13 @@ fn is_wireguard(initial_packets: &mut UdpInitialPackets) -> ProbeResult<UdpProxy
 }
 
 /// Is QUIC protocol?
-fn is_quic_initial(initial_packets: &mut UdpInitialPackets) -> ProbeResult<UdpProxyProtocol> {
-  let initial_packets_inner = initial_packets.inner.as_slice();
+fn is_quic_initial(initial_dagatgrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProxyProtocol> {
+  let initial_datagrams_inner = initial_dagatgrams.inner.as_slice();
 
-  match probe_quic_initial_packets(initial_packets_inner) {
+  match probe_quic_initial_packets(initial_datagrams_inner) {
     Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
     Err(TlsProbeFailure::PollNext) => {
-      initial_packets
+      initial_dagatgrams
         .probed_as_pollnext
         .insert(UdpProxyProtocol::Quic(Default::default()));
       ProbeResult::PollNext
@@ -234,17 +234,17 @@ fn is_quic_initial(initial_packets: &mut UdpInitialPackets) -> ProbeResult<UdpPr
 }
 
 impl UdpProxyProtocol {
-  /// Detect the protocol from the first few bytes of the incoming packet
-  async fn detect_protocol(initial_packets: &mut UdpInitialPackets) -> Result<ProbeResult<Self>, ProxyError> {
+  /// Detect the protocol from the first few bytes of the incoming datagram
+  async fn detect_protocol(initial_datagrams: &mut UdpInitialDatagrams) -> Result<ProbeResult<Self>, ProxyError> {
     // TODO: Add more protocol detection patterns
 
     // Probe functions
-    let probe_fns = if initial_packets.probed_as_pollnext.is_empty() {
+    let probe_fns = if initial_datagrams.probed_as_pollnext.is_empty() {
       // No candidate probed as PollNext, i.e., Round 1
       vec![is_wireguard, is_quic_initial]
     } else {
       // Round 2 or later
-      initial_packets
+      initial_datagrams
         .probed_as_pollnext
         .iter()
         .map(|p| match p {
@@ -255,7 +255,7 @@ impl UdpProxyProtocol {
         .collect()
     };
 
-    let probe_res = probe_fns.into_iter().map(|f| f(initial_packets)).collect::<Vec<_>>();
+    let probe_res = probe_fns.into_iter().map(|f| f(initial_datagrams)).collect::<Vec<_>>();
 
     // In case any of the probe results is a success, return it
     if let Some(probe_success) = probe_res.iter().find(|r| matches!(r, ProbeResult::Success(_))) {
@@ -302,7 +302,7 @@ impl UdpProxy {
     // bind the socket to listen on the given address
     let udp_socket = UdpSocket::from_std(bind_udp_socket(&self.listen_on)?)?;
 
-    // Channel to receive incoming packets from the source
+    // Channel to receive incoming datagram from the source
     let udp_socket_rx = Arc::new(udp_socket);
 
     // clone for sending back upstream responses to the original source by each individual spawned task
@@ -318,9 +318,9 @@ impl UdpProxy {
     let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
 
     /* ----------------- */
-    // Start the initial packets buffer pool service for source socket address to handle multiple packets for detection
-    let udp_initial_packets_buffer_pool = UdpInitialPacketsBufferPool::new((self, &udp_socket_tx, &udp_connection_pool));
-    let udp_initial_packets_tx = udp_initial_packets_buffer_pool.spawn_service(cancel_token.clone());
+    // Start the initial datagram buffer pool service for source socket address to handle multiple datagrams for detection
+    let udp_initial_datagrams_buffer_pool = UdpInitialDatagramsBufferPool::new((self, &udp_socket_tx, &udp_connection_pool));
+    let udp_initial_datagrams_tx = udp_initial_datagrams_buffer_pool.spawn_service(cancel_token.clone());
 
     /* ----------------- */
     // Prune inactive connections periodically
@@ -357,9 +357,9 @@ impl UdpProxy {
         // Handle case there is no existing connection
         debug!("No existing connection for {}", src_addr);
 
-        // Buffer the initial packet
-        if let Err(e) = udp_initial_packets_tx.send((src_addr, udp_buf[..buf_size].to_vec())).await {
-          error!("Failed to buffer the initial packet: {e}");
+        // Buffer the initial datagram
+        if let Err(e) = udp_initial_datagrams_tx.send((src_addr, udp_buf[..buf_size].to_vec())).await {
+          error!("Failed to buffer the initial UDP datagram: {e}");
           continue;
         }
       }
@@ -415,8 +415,8 @@ async fn connection_pruner_service(
 type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 
 #[derive(Clone)]
-struct UdpInitialPackets {
-  /// inner buffer of multiple UDP packet payloads
+struct UdpInitialDatagrams {
+  /// inner buffer of multiple UDP datagram payloads
   inner: Vec<Vec<u8>>,
   /// created at
   created_at: Arc<AtomicU64>,
@@ -424,8 +424,8 @@ struct UdpInitialPackets {
   probed_as_pollnext: std::collections::HashSet<UdpProxyProtocol>,
 }
 
-impl UdpInitialPackets {
-  /// Get the first packet
+impl UdpInitialDatagrams {
+  /// Get the first datagram
   fn first(&self) -> Option<&[u8]> {
     self.inner.first().map(|v| v.as_slice())
   }
@@ -433,14 +433,14 @@ impl UdpInitialPackets {
 
 /* ---------------------------------------------------------- */
 #[derive(Clone)]
-/// Temporary buffer pool of initial packets dispatched from each clients.
-/// This is used to buffer the initial packets of each client, probe the destination, and then establish a UDP connection.
-struct UdpInitialPacketsBufferPool {
+/// Temporary buffer pool of initial UDP datagrams dispatched from each clients.
+/// This is used to buffer the initial datagrams of each client, probe the destination, and then establish a UDP connection.
+struct UdpInitialDatagramsBufferPool {
   /// listening socket address
   listen_on: SocketAddr,
 
-  /// inner hashmap of mapping from client socket address to initial packets buffer
-  inner: DashMap<SocketAddr, UdpInitialPackets>,
+  /// inner hashmap of mapping from client socket address to initial datagrams buffer
+  inner: DashMap<SocketAddr, UdpInitialDatagrams>,
 
   /// UDP socket to write on back to the client
   udp_socket_tx: Arc<UdpSocket>,
@@ -461,8 +461,8 @@ struct UdpInitialPacketsBufferPool {
   max_connections: usize,
 }
 
-impl UdpInitialPacketsBufferPool {
-  /// Create a new UdpInitialPacketsBufferPool
+impl UdpInitialDatagramsBufferPool {
+  /// Create a new UdpInitialDatagramsBufferPool
   fn new((udp_proxy, udp_socket_tx, udp_conn_pool): (&UdpProxy, &Arc<UdpSocket>, &Arc<UdpConnectionPool>)) -> Self {
     Self {
       listen_on: udp_proxy.listen_on,
@@ -475,33 +475,33 @@ impl UdpInitialPacketsBufferPool {
       max_connections: udp_proxy.max_connections,
     }
   }
-  /// Start the UdpInitialPacketsBufferPool
+  /// Start the UdpInitialDatagramsBufferPool
   fn spawn_service(&self, cancel_token: CancellationToken) -> mpsc::Sender<(SocketAddr, Vec<u8>)> {
     let (tx, mut rx) = mpsc::channel::<(SocketAddr, Vec<u8>)>(UDP_BUFFER_SIZE);
 
     let self_clone = self.clone();
     let service = async move {
       loop {
-        let Some((src_addr, udp_packet)) = rx.recv().await else {
+        let Some((src_addr, udp_datagram)) = rx.recv().await else {
           warn!("UDP buffering channel closed");
           break;
         };
-        // Prune expired packet buffers
+        // Prune expired datagram buffers
         self_clone.inner.retain(|_, v| {
           let elapsed = get_since_the_epoch() - v.created_at.load(std::sync::atomic::Ordering::Relaxed);
           if elapsed < crate::constants::UDP_INITIAL_BUFFER_LIFETIME {
-            debug!("Pruning expired packet buffer for {}", src_addr);
+            debug!("Pruning expired datagram buffer for {}", src_addr);
           }
           elapsed < crate::constants::UDP_INITIAL_BUFFER_LIFETIME
         });
 
-        // Check the initial packet buffer
-        let mut initial_packets = match self_clone.inner.get(&src_addr) {
-          Some(packets) => {
-            debug!("Found existing packet buffer for {}", src_addr);
-            let mut packets = packets.clone();
-            packets.inner.push(udp_packet);
-            packets
+        // Check the initial datagram buffer
+        let mut initial_datagrams = match self_clone.inner.get(&src_addr) {
+          Some(datagrams) => {
+            debug!("Found existing UDP datagram buffer for {}", src_addr);
+            let mut datagrams = datagrams.clone();
+            datagrams.inner.push(udp_datagram);
+            datagrams
           }
           None => {
             // Check the connection limit
@@ -509,9 +509,9 @@ impl UdpInitialPacketsBufferPool {
               warn!("UDP connection limit reached: {}", self_clone.max_connections);
               continue;
             }
-            debug!("No existing initial packet buffer for {}", src_addr);
-            UdpInitialPackets {
-              inner: vec![udp_packet],
+            debug!("No existing initial datagram buffer for {}", src_addr);
+            UdpInitialDatagrams {
+              inner: vec![udp_datagram],
               created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
               probed_as_pollnext: Default::default(),
             }
@@ -519,22 +519,22 @@ impl UdpInitialPacketsBufferPool {
         };
 
         // Handle with probe result
-        let Ok(probe_result) = UdpProxyProtocol::detect_protocol(&mut initial_packets).await else {
-          error!("Failed to probe protocol from the incoming packet");
+        let Ok(probe_result) = UdpProxyProtocol::detect_protocol(&mut initial_datagrams).await else {
+          error!("Failed to probe protocol from the incoming datagram");
           continue;
         };
         let protocol = match probe_result {
           ProbeResult::Success(protocol) => protocol,
           ProbeResult::PollNext => {
-            // add the packet buffer back to the buffer pool
-            self_clone.inner.insert(src_addr, initial_packets);
+            // add the datagram buffer back to the buffer pool
+            self_clone.inner.insert(src_addr, initial_datagrams);
             continue;
           }
           ProbeResult::Failure => unreachable!(),
         };
 
         // Delete entry from the buffer pool
-        debug!("Release the packet buffer for {}", src_addr);
+        debug!("Release the datagram buffer for {}", src_addr);
         self_clone.inner.remove(&src_addr);
 
         let Ok(udp_dst) = self_clone.destination_mux.get_destination(&protocol) else {
@@ -549,7 +549,7 @@ impl UdpInitialPacketsBufferPool {
           continue;
         };
 
-        let _ = conn.send_many(&initial_packets.inner).await;
+        let _ = conn.send_many(&initial_datagrams.inner).await;
         // here we ignore the error, as the connection might be closed
         self_clone
           .connection_count
@@ -564,16 +564,15 @@ impl UdpInitialPacketsBufferPool {
     };
 
     self.runtime_handle.spawn({
-      // let udp_initial_packets_buffer_pool = self.clone();
       let child_token = cancel_token.child_token();
       async move {
         tokio::select! {
           _ = service => {
-            warn!("UDP initial packets buffer pool stopped");
+            warn!("UDP initial datagram buffer pool stopped");
             cancel_token.cancel();
           },
           _ = child_token.cancelled() => {
-            info!("UDP initial packets buffer pool cancelled");
+            info!("UDP initial datagram buffer pool cancelled");
           }
         }
       }

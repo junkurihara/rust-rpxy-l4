@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::anyhow;
 
-const QUIC_VERSION: &[u8] = &[0x00, 0x00, 0x00, 0x01];
+const QUIC_VERSION_LEN: usize = 4;
 const INITIAL_SALT: &[u8] = &[
   0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17, 0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a,
 ];
@@ -24,37 +24,36 @@ const QUIC_HP: &[u8] = &[
 
 /* ---------------------------------------------------- */
 /// Is QUIC initial packets contained?
+/// We consider initial packets only since only communication initiated from the client is expected.
+/// Version negotiation packet is sent by the server as a response to the client
 pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
   if udp_datagrams.is_empty() || udp_datagrams.iter().any(|p| p.is_empty()) {
     return Err(TlsProbeFailure::Failure);
   }
-  // We consider initial packets only since only communication initiated from the client is expected.
-  // Version negotiation packet is sent by the server as a response to the client
-  // Check either QUICv1 or QUICv2 initial packets
-  if udp_datagrams.iter().any(|p| p[0] & 0xf0 != 0xc0 && p[0] & 0xf0 != 0xd0) {
+
+  // Check if the packets contain QUIC initial packets, and unprotect the header and payload.
+  let unprotected = udp_datagrams.iter().flat_map(|p| probe_quic_packets(p)).collect::<Vec<_>>();
+  if unprotected.is_empty() {
     return Err(TlsProbeFailure::Failure);
   }
 
-  // Check if the packets are QUIC initial packets, and unprotect the header and payload.
-  let unprotected = udp_datagrams
-    .iter()
-    .map(|p| probe_quic_initial_packet_header(p))
-    .collect::<Vec<_>>();
-  if unprotected.iter().any(|p| p.is_none()) {
-    return Err(TlsProbeFailure::Failure);
-  }
-  let unprotected = unprotected.into_iter().map(|p| p.unwrap()).collect::<Vec<_>>();
-
-  // Check if all unprotected packets contains the same SCID, DCID, and Token.
+  // Check if all unprotected packets contains the same version, SCID, DCID, and Token.
+  let version = unprotected[0].version;
   let scid = unprotected[0].scid.clone();
   let dcid = unprotected[0].dcid.clone();
   let token = unprotected[0].token.clone();
   if unprotected
     .iter()
-    .any(|p| p.scid != scid || p.dcid != dcid || p.token != token)
+    .any(|p| p.version != version || p.scid != scid || p.dcid != dcid || p.token != token)
   {
     return Err(TlsProbeFailure::Failure);
   }
+
+  // Filter only the initial packets
+  let unprotected = unprotected
+    .into_iter()
+    .filter(|p| matches!(p.packet_type, QuicCoalesceablePacketType::Initial))
+    .collect::<Vec<_>>();
 
   probe_quic_unprotected_frames(&unprotected)
 }
@@ -91,80 +90,144 @@ pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClient
 /* ---------------------------------------------------- */
 /// Parsed and unprotected QUIC packet
 struct QuicPacket {
+  version: QuicVersion,
+  packet_type: QuicCoalesceablePacketType,
   dcid: Vec<u8>,
   scid: Vec<u8>,
   token: Vec<u8>,
   payload: Vec<u8>,
 }
 
-/// Check if the buffer contains a QUIC initial packet with TLS ClientHello.
+#[derive(Eq, PartialEq, Clone, Copy)]
+/// QUIC version
+enum QuicVersion {
+  V1,
+  V2,
+}
+
+/// Check QUIC version
+fn quic_version(buf: &[u8]) -> Option<QuicVersion> {
+  match buf {
+    [0x00, 0x00, 0x00, 0x01] => Some(QuicVersion::V1),
+    [0x6b, 0x33, 0x43, 0xcf] => Some(QuicVersion::V2),
+    _ => None,
+  }
+}
+
+/// Quic coalesceable packet types
+/// Ommitted: Short header packet types, etc
+enum QuicCoalesceablePacketType {
+  Initial,
+  Handshake,
+  ZeroRTT,
+}
+
+// Check if the first byte of the packet is a coalesceable packet type
+fn quick_coalesceable_packet_type(first_byte: &u8, version: &QuicVersion) -> Option<QuicCoalesceablePacketType> {
+  match version {
+    QuicVersion::V1 => match first_byte & 0xf0 {
+      0xc0 => Some(QuicCoalesceablePacketType::Initial),
+      0xd0 => Some(QuicCoalesceablePacketType::ZeroRTT),
+      0xe0 => Some(QuicCoalesceablePacketType::Handshake),
+      _ => None,
+    },
+    QuicVersion::V2 => match first_byte & 0xf0 {
+      0xd0 => Some(QuicCoalesceablePacketType::Initial),
+      0xe0 => Some(QuicCoalesceablePacketType::ZeroRTT),
+      0xf0 => Some(QuicCoalesceablePacketType::Handshake),
+      _ => None,
+    },
+  }
+}
+
+/// Check if the buffer contains a QUIC packet with TLS ClientHello.
 /// https://www.rfc-editor.org/rfc/rfc9000.html (v1)
 /// https://www.rfc-editor.org/rfc/rfc9001.html (QUIC-TLS)
 /// https://www.rfc-editor.org/rfc/rfc9369.html (v2)
 /// https://quic.xargs.org
-/// - First checks if the buffer is consistent with a QUIC initial packet.
+/// - First checks if the buffer contains QUIC (coalsceable) packets.
 /// - Then derive the header protection key and decrypt the packet.
-fn probe_quic_initial_packet_header(buf: &[u8]) -> Option<QuicPacket> {
-  // header(1), version(4), DCID length(1), SCID length(1)
-  if buf.len() < 7 {
-    return None;
-  }
-  // Packet header byte
-  // 0b1100_[0000] - Long header for initial packet type
-  // with protected packet number field length ([0000])
-  // omitting the protected part.
-  if buf[0] & 0xf0 != 0xc0 {
+///
+/// We also have to consider coalescing packets in a single UDP datagram.
+/// https://www.rfc-editor.org/rfc/rfc9000.html#name-coalescing-packets
+fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
+  let mut contained_quic_packets = Vec::new();
+  let mut ptr = 0;
+
+  while ptr < udp_datagram.len() {
+    // header(1), version(4), DCID length(1), SCID length(1)
+    if udp_datagram[ptr..].len() < 7 {
+      break;
+    }
+
+    // Packet header byte and version
+    let packet_type_byte = udp_datagram[ptr];
+    ptr += 1;
+    // Version
+    let Some(version) = quic_version(&udp_datagram[ptr..ptr + QUIC_VERSION_LEN]) else {
+      debug!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
+      break;
+    };
+    ptr += QUIC_VERSION_LEN;
+    // 0b1100_[0000] (version 1) 0b1101_[0000] (version 2) - Long header for initial packet type
+    // with protected packet number field length ([0000])
+    // omitting the protected part.
+    let Some(packet_type) = quick_coalesceable_packet_type(&packet_type_byte, &version) else {
+      debug!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
+      break;
+    };
+
+    // DCID and SCID
+    let Ok((dcid, scid)) = dcid_scid(udp_datagram, &mut ptr) else {
+      break;
+    };
+
+    // Token length
+    let Ok(token_len) = variable_length_int(udp_datagram, &mut ptr) else {
+      break;
+    };
+    ptr += token_len;
+    if ptr >= udp_datagram.len() {
+      break;
+    }
+
+    let token = udp_datagram[ptr - token_len..ptr].to_vec();
+    debug!("Token: {:x?}", &token);
+    // Payload length
+    let Ok(payload_len) = variable_length_int(udp_datagram, &mut ptr) else {
+      break;
+    };
+
+    if ptr + payload_len > udp_datagram.len() {
+      debug!("Buffer too short for payload");
+      break;
+    }
+    debug!("Payload: {:x?}", &udp_datagram[ptr..ptr + payload_len]);
+
+    // So far, the buffer is consistent with a QUIC coalseable packet.
+    // Now, try to decrypt the packet and check if it is a TLS ClientHello.
     //TODO: support v2
-    return None;
-  }
-  // Version
-  //TODO: support v2
-  if !buf[1..5].eq(QUIC_VERSION) {
-    return None;
-  }
-  let mut ptr = 5;
-  let Ok((dcid, scid)) = dcid_scid(buf, &mut ptr) else {
-    return None;
-  };
-  // Token length
-  let Ok(token_len) = variable_length_int(buf, &mut ptr) else {
-    return None;
-  };
-  ptr += token_len;
-  if ptr >= buf.len() {
-    return None;
-  }
-  let token = buf[ptr - token_len..ptr].to_vec();
-  debug!("Token: {:x?}", &token);
-  // Payload length
-  let Ok(payload_len) = variable_length_int(buf, &mut ptr) else {
-    return None;
-  };
+    let Ok(unprotected_payload) = unprotect(udp_datagram, &dcid, ptr, payload_len) else {
+      debug!("invalid to unprotect payload, just continue to parse the next packet");
+      ptr += payload_len;
+      continue;
+    };
+    debug!("Decrypted initial packet payload: {:x?}", unprotected_payload);
 
-  if ptr + payload_len > buf.len() {
-    debug!("Buffer too short for payload");
-    return None;
-  }
-  debug!("Payload: {:x?}", &buf[ptr..ptr + payload_len]);
-  // The remaining part should be padded frames
-  if buf[ptr + payload_len..].iter().any(|&b| b != 0) {
-    return None;
+    let quic_packet = QuicPacket {
+      version,
+      packet_type,
+      dcid,
+      scid,
+      token,
+      payload: unprotected_payload,
+    };
+    contained_quic_packets.push(quic_packet);
+
+    ptr += payload_len;
   }
 
-  // So far, the buffer is consistent with a QUIC initial packet.
-  // Now, try to decrypt the packet and check if it is a TLS ClientHello.
-  //TODO: support v2
-  let Ok(unprotected_payload) = unprotect(buf, &dcid, ptr, payload_len) else {
-    return None;
-  };
-  debug!("Decrypted initial packet payload: {:x?}", unprotected_payload);
-
-  Some(QuicPacket {
-    dcid,
-    scid,
-    token,
-    payload: unprotected_payload,
-  })
+  contained_quic_packets
 }
 
 /* ---------------------------------------------------- */

@@ -104,6 +104,14 @@ enum QuicVersion {
   V1,
   V2,
 }
+impl std::fmt::Display for QuicVersion {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      QuicVersion::V1 => write!(f, "QUICv1"),
+      QuicVersion::V2 => write!(f, "QUICv2"),
+    }
+  }
+}
 
 /// Check QUIC version
 fn quic_version(buf: &[u8]) -> Option<QuicVersion> {
@@ -120,6 +128,15 @@ enum QuicCoalesceablePacketType {
   Initial,
   Handshake,
   ZeroRTT,
+}
+impl std::fmt::Display for QuicCoalesceablePacketType {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      QuicCoalesceablePacketType::Initial => write!(f, "Initial"),
+      QuicCoalesceablePacketType::Handshake => write!(f, "Handshake"),
+      QuicCoalesceablePacketType::ZeroRTT => write!(f, "0-RTT"),
+    }
+  }
 }
 
 // Check if the first byte of the packet is a coalesceable packet type
@@ -176,6 +193,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
       debug!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
       break;
     };
+    debug!("QUIC Version: {}, Packet Type: {}", version, packet_type);
 
     // DCID and SCID
     let Ok((dcid, scid)) = dcid_scid(udp_datagram, &mut ptr) else {
@@ -212,7 +230,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
       ptr += payload_len;
       continue;
     };
-    debug!("Decrypted initial packet payload: {:x?}", unprotected_payload);
+    debug!("Decrypted quic packet payload ({}): {:x?}", packet_type, unprotected_payload);
 
     let quic_packet = QuicPacket {
       version,

@@ -6,21 +6,6 @@ use crate::{
 use anyhow::anyhow;
 
 const QUIC_VERSION_LEN: usize = 4;
-const INITIAL_SALT: &[u8] = &[
-  0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17, 0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a,
-];
-const CLIENT_IN: &[u8] = &[
-  0x00, 0x20, 0x0f, 0x74, 0x6c, 0x73, 0x31, 0x33, 0x20, 0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x20, 0x69, 0x6e, 0x00,
-];
-const QUIC_KEY: &[u8] = &[
-  0x00, 0x10, 0x0e, 0x74, 0x6c, 0x73, 0x31, 0x33, 0x20, 0x71, 0x75, 0x69, 0x63, 0x20, 0x6b, 0x65, 0x79, 0x00,
-];
-const QUIC_IV: &[u8] = &[
-  0x00, 0x0c, 0x0d, 0x74, 0x6c, 0x73, 0x31, 0x33, 0x20, 0x71, 0x75, 0x69, 0x63, 0x20, 0x69, 0x76, 0x00,
-];
-const QUIC_HP: &[u8] = &[
-  0x00, 0x10, 0x0d, 0x74, 0x6c, 0x73, 0x31, 0x33, 0x20, 0x71, 0x75, 0x69, 0x63, 0x20, 0x68, 0x70, 0x00,
-];
 
 /* ---------------------------------------------------- */
 /// Is QUIC initial packets contained?
@@ -98,7 +83,7 @@ struct QuicPacket {
   payload: Vec<u8>,
 }
 
-#[derive(Eq, PartialEq, Clone, Copy)]
+#[derive(Eq, PartialEq, Clone, Copy, Hash)]
 /// QUIC version
 enum QuicVersion {
   V1,
@@ -224,8 +209,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
 
     // So far, the buffer is consistent with a QUIC coalseable packet.
     // Now, try to decrypt the packet and check if it is a TLS ClientHello.
-    //TODO: support v2
-    let Ok(unprotected_payload) = unprotect(udp_datagram, &dcid, ptr, payload_len) else {
+    let Ok(unprotected_payload) = unprotect(&version, udp_datagram, &dcid, ptr, payload_len) else {
       debug!("invalid to unprotect payload, just continue to parse the next packet");
       ptr += payload_len;
       continue;
@@ -422,10 +406,52 @@ use aes_gcm::{
   Aes128Gcm, Key, Nonce,
   aead::{Aead, Payload},
 };
+use std::{collections::HashMap, sync::LazyLock};
+/// QUIC crypto parameters struct
+struct QuicCryptoParams<'a> {
+  initial_salt: &'a [u8],
+  client_in: &'a [u8],
+  quic_key: &'a [u8],
+  quic_iv: &'a [u8],
+  quic_hp: &'a [u8],
+}
+/// QUIC crypto parameters
+static QUIC_CRYPTO_PARAMS: LazyLock<HashMap<QuicVersion, QuicCryptoParams>> = LazyLock::new(|| {
+  let mut map = HashMap::new();
+  map.insert(
+    QuicVersion::V1,
+    QuicCryptoParams {
+      initial_salt: hex_literal::hex!("38762cf7f55934b34d179ae6a4c80cadccbb7f0a").as_slice(),
+      client_in: b"\0 \x0Ftls13 client in\0",
+      quic_key: b"\0\x10\x0Etls13 quic key\0",
+      quic_iv: b"\0\x0C\rtls13 quic iv\0",
+      quic_hp: b"\0\x10\rtls13 quic hp\0",
+    },
+  );
+  map.insert(
+    QuicVersion::V2,
+    QuicCryptoParams {
+      initial_salt: hex_literal::hex!("0dede3def700a6db819381be6e269dcbf9bd2ed9").as_slice(),
+      client_in: b"\0 \x0Ftls13 client in\0",
+      quic_key: b"\0\x10\x10tls13 quicv2 key\0",
+      quic_iv: b"\0\x0C\x0Ftls13 quicv2 iv\0",
+      quic_hp: b"\0\x10\x0Ftls13 quicv2 hp\0",
+    },
+  );
+  map
+});
+
 /// Unprotect header and payload, returning the decrypted payload, i.e., expected ClientHello contained in Crypto Frame.
-fn unprotect(buf: &[u8], dcid: &[u8], pn_offset: usize, payload_len: usize) -> Result<Vec<u8>, anyhow::Error> {
+///TODO: support v2
+fn unprotect(
+  version: &QuicVersion,
+  buf: &[u8],
+  dcid: &[u8],
+  pn_offset: usize,
+  payload_len: usize,
+) -> Result<Vec<u8>, anyhow::Error> {
   // Try to decrypt the protected fields
-  let Ok(protection_values) = derive_initial_protection_values(dcid) else {
+  let Ok(protection_values) = derive_initial_protection_values(version, dcid) else {
     return Err(anyhow!("Failed to derive protection values"));
   };
 
@@ -541,10 +567,13 @@ struct ProtectionValues {
 /// Packet protection key derivation
 /// https://www.rfc-editor.org/rfc/rfc9001.html#name-initial-secrets
 #[inline]
-fn derive_initial_protection_values(dcid: &[u8]) -> Result<ProtectionValues, anyhow::Error> {
-  let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(INITIAL_SALT), dcid);
+fn derive_initial_protection_values(version: &QuicVersion, dcid: &[u8]) -> Result<ProtectionValues, anyhow::Error> {
+  let params = QUIC_CRYPTO_PARAMS
+    .get(version)
+    .ok_or_else(|| anyhow!("Invalid QUIC version"))?;
+  let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(params.initial_salt), dcid);
   let mut client_secret = [0u8; 32];
-  if let Err(e) = hk.expand(CLIENT_IN, &mut client_secret) {
+  if let Err(e) = hk.expand(params.client_in, &mut client_secret) {
     error!("Failed to derive client secret: {:?}", e);
     return Err(anyhow!("Failed to derive client secret"));
   }
@@ -557,15 +586,15 @@ fn derive_initial_protection_values(dcid: &[u8]) -> Result<ProtectionValues, any
   let mut client_iv = [0u8; 12];
   let mut client_hp = [0u8; 16];
 
-  if let Err(e) = hk.expand(QUIC_KEY, &mut client_key) {
+  if let Err(e) = hk.expand(params.quic_key, &mut client_key) {
     error!("Failed to derive client key: {:?}", e);
     return Err(anyhow!("Failed to derive client key"));
   }
-  if let Err(e) = hk.expand(QUIC_IV, &mut client_iv) {
+  if let Err(e) = hk.expand(params.quic_iv, &mut client_iv) {
     error!("Failed to derive client IV: {:?}", e);
     return Err(anyhow!("Failed to derive client IV"));
   }
-  if let Err(e) = hk.expand(QUIC_HP, &mut client_hp) {
+  if let Err(e) = hk.expand(params.quic_hp, &mut client_hp) {
     error!("Failed to derive client HP: {:?}", e);
     return Err(anyhow!("Failed to derive client HP"));
   }
@@ -604,9 +633,29 @@ fn variable_length_int(buf: &[u8], pos: &mut usize) -> Result<usize, anyhow::Err
 mod tests {
   use super::*;
   #[test]
-  fn test_derive_initial_secret() {
+  fn test_encoding_crypto_params() {
+    const CLIENT_IN: &[u8] = hex_literal::hex!("00200f746c73313320636c69656e7420696e00").as_slice();
+    const QUIC_KEY_V1: &[u8] = hex_literal::hex!("00100e746c7331332071756963206b657900").as_slice();
+    const QUIC_IV_V1: &[u8] = hex_literal::hex!("000c0d746c733133207175696320697600").as_slice();
+    const QUIC_HP_V1: &[u8] = hex_literal::hex!("00100d746c733133207175696320687000").as_slice();
+    const QUIC_KEY_V2: &[u8] = hex_literal::hex!("001010746c73313320717569637632206b657900").as_slice();
+    const QUIC_IV_V2: &[u8] = hex_literal::hex!("000c0f746c7331332071756963763220697600").as_slice();
+    const QUIC_HP_V2: &[u8] = hex_literal::hex!("00100f746c7331332071756963763220687000").as_slice();
+    let params = QUIC_CRYPTO_PARAMS.get(&QuicVersion::V1).unwrap();
+    assert_eq!(params.client_in, CLIENT_IN);
+    assert_eq!(params.quic_key, QUIC_KEY_V1);
+    assert_eq!(params.quic_iv, QUIC_IV_V1);
+    assert_eq!(params.quic_hp, QUIC_HP_V1);
+    let params = QUIC_CRYPTO_PARAMS.get(&QuicVersion::V2).unwrap();
+    assert_eq!(params.client_in, CLIENT_IN);
+    assert_eq!(params.quic_key, QUIC_KEY_V2);
+    assert_eq!(params.quic_iv, QUIC_IV_V2);
+    assert_eq!(params.quic_hp, QUIC_HP_V2);
+  }
+  #[test]
+  fn test_derive_initial_secret_v1() {
     let dcid = [0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08];
-    let protection_values = derive_initial_protection_values(&dcid).unwrap();
+    let protection_values = derive_initial_protection_values(&QuicVersion::V1, &dcid).unwrap();
 
     assert_eq!(
       protection_values.key,
@@ -630,7 +679,7 @@ mod tests {
     //ckey: b14b918124fda5c8d79847602fa3520b
     //civ: ddbc15dea80925a55686a7df
     //chp: 6df4e9d737cdf714711d7c617ee82981
-    let protection_values = derive_initial_protection_values(&dcid).unwrap();
+    let protection_values = derive_initial_protection_values(&QuicVersion::V1, &dcid).unwrap();
     assert_eq!(
       protection_values.key,
       [

@@ -1,5 +1,5 @@
 use crate::{
-  client_hello::{probe_tls_client_hello_body, probe_tls_client_hello_header, TlsClientHelloInfo},
+  client_hello::{TlsClientHelloInfo, probe_tls_client_hello_body, probe_tls_client_hello_header},
   error::TlsProbeFailure,
   trace::*,
 };
@@ -23,20 +23,20 @@ const QUIC_HP: &[u8] = &[
 ];
 
 /* ---------------------------------------------------- */
-/// Is QUIC initial packets?
-pub fn probe_quic_initial_packets(packets: &[Vec<u8>]) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
-  if packets.is_empty() || packets.iter().any(|p| p.is_empty()) {
+/// Is QUIC initial packets contained?
+pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
+  if udp_datagrams.is_empty() || udp_datagrams.iter().any(|p| p.is_empty()) {
     return Err(TlsProbeFailure::Failure);
   }
   // We consider initial packets only since only communication initiated from the client is expected.
   // Version negotiation packet is sent by the server as a response to the client
   // Check either QUICv1 or QUICv2 initial packets
-  if packets.iter().any(|p| p[0] & 0xf0 != 0xc0 && p[0] & 0xf0 != 0xd0) {
+  if udp_datagrams.iter().any(|p| p[0] & 0xf0 != 0xc0 && p[0] & 0xf0 != 0xd0) {
     return Err(TlsProbeFailure::Failure);
   }
 
   // Check if the packets are QUIC initial packets, and unprotect the header and payload.
-  let unprotected = packets
+  let unprotected = udp_datagrams
     .iter()
     .map(|p| probe_quic_initial_packet_header(p))
     .collect::<Vec<_>>();
@@ -334,12 +334,12 @@ fn parse_cc_frame(buf: &[u8], ptr: &mut usize) -> Result<(), anyhow::Error> {
 
 /* ---------------------------------------------------- */
 use aes::{
-  cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit},
   Aes128,
+  cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray},
 };
 use aes_gcm::{
-  aead::{Aead, Payload},
   Aes128Gcm, Key, Nonce,
+  aead::{Aead, Payload},
 };
 /// Unprotect header and payload, returning the decrypted payload, i.e., expected ClientHello contained in Crypto Frame.
 fn unprotect(buf: &[u8], dcid: &[u8], pn_offset: usize, payload_len: usize) -> Result<Vec<u8>, anyhow::Error> {
@@ -529,7 +529,9 @@ mod tests {
 
     assert_eq!(
       protection_values.key,
-      [0x1f, 0x36, 0x96, 0x13, 0xdd, 0x76, 0xd5, 0x46, 0x77, 0x30, 0xef, 0xcb, 0xe3, 0xb1, 0xa2, 0x2d]
+      [
+        0x1f, 0x36, 0x96, 0x13, 0xdd, 0x76, 0xd5, 0x46, 0x77, 0x30, 0xef, 0xcb, 0xe3, 0xb1, 0xa2, 0x2d
+      ]
     );
     assert_eq!(
       protection_values.iv,
@@ -537,7 +539,9 @@ mod tests {
     );
     assert_eq!(
       protection_values.hp,
-      [0x9f, 0x50, 0x44, 0x9e, 0x04, 0xa0, 0xe8, 0x10, 0x28, 0x3a, 0x1e, 0x99, 0x33, 0xad, 0xed, 0xd2]
+      [
+        0x9f, 0x50, 0x44, 0x9e, 0x04, 0xa0, 0xe8, 0x10, 0x28, 0x3a, 0x1e, 0x99, 0x33, 0xad, 0xed, 0xd2
+      ]
     );
 
     let dcid = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
@@ -548,7 +552,9 @@ mod tests {
     let protection_values = derive_initial_protection_values(&dcid).unwrap();
     assert_eq!(
       protection_values.key,
-      [0xb1, 0x4b, 0x91, 0x81, 0x24, 0xfd, 0xa5, 0xc8, 0xd7, 0x98, 0x47, 0x60, 0x2f, 0xa3, 0x52, 0x0b]
+      [
+        0xb1, 0x4b, 0x91, 0x81, 0x24, 0xfd, 0xa5, 0xc8, 0xd7, 0x98, 0x47, 0x60, 0x2f, 0xa3, 0x52, 0x0b
+      ]
     );
     assert_eq!(
       protection_values.iv,
@@ -556,7 +562,9 @@ mod tests {
     );
     assert_eq!(
       protection_values.hp,
-      [0x6d, 0xf4, 0xe9, 0xd7, 0x37, 0xcd, 0xf7, 0x14, 0x71, 0x1d, 0x7c, 0x61, 0x7e, 0xe8, 0x29, 0x81]
+      [
+        0x6d, 0xf4, 0xe9, 0xd7, 0x37, 0xcd, 0xf7, 0x14, 0x71, 0x1d, 0x7c, 0x61, 0x7e, 0xe8, 0x29, 0x81
+      ]
     );
   }
 
@@ -587,8 +595,8 @@ mod tests {
   #[test]
   fn test_decrypt() {
     use aes_gcm::{
-      aead::{Aead, Payload},
       Aes128Gcm, Key, KeyInit, Nonce,
+      aead::{Aead, Payload},
     };
     let plaintext = [
       0x06, 0x00, 0x40, 0xee, 0x01, 0x00, 0x00, 0xea, 0x03, 0x03, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,

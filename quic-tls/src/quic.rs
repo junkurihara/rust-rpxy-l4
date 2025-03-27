@@ -73,6 +73,7 @@ pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClient
 // }
 
 /* ---------------------------------------------------- */
+#[allow(unused)]
 #[derive(Debug)]
 /// Parsed and unprotected QUIC packet
 struct QuicPacket {

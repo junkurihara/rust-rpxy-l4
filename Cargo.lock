@@ -1271,6 +1271,7 @@ dependencies = [
  "hex-literal",
  "hkdf",
  "hpke",
+ "rand",
  "rustls",
  "sha2",
  "thiserror 2.0.12",

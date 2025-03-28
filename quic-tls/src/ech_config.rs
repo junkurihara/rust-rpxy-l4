@@ -73,16 +73,21 @@ pub(crate) struct EchConfigList {
 impl Serialize for &EchConfigList {
   type Error = EchConfigError;
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
+    // serialize the inner list
+    let serialized_inner = self
+      .inner
+      .iter()
+      .map(|c| {
+        let serialized = compose(c)?;
+        Ok(serialized)
+      })
+      .collect::<Result<Vec<_>, _>>()?;
     // calculate total length
-    let mut len = 0;
-    for c in self.inner.iter() {
-      // 2 bytes of version and 2 bytes of length
-      len += 2 + 2 + c.length;
-    }
+    let total_len = serialized_inner.iter().fold(0, |acc, c| acc + c.len() as u16);
 
-    buf.put_u16(len);
-    for c in self.inner.iter() {
-      c.serialize(buf)?;
+    buf.put_u16(total_len);
+    for c in serialized_inner.iter() {
+      buf.put_slice(c);
     }
 
     Ok(())
@@ -106,14 +111,28 @@ impl Deserialize for EchConfigList {
   }
 }
 
+type VecIter = std::vec::IntoIter<EchConfig>;
+impl IntoIterator for EchConfigList {
+  type Item = EchConfig;
+  type IntoIter = std::iter::Filter<VecIter, fn(&Self::Item) -> bool>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    self.inner.into_iter().filter(|c| c.version == ECH_CONFIG_VERSION_DRAFT_24)
+  }
+}
+impl From<Vec<EchConfig>> for EchConfigList {
+  fn from(inner: Vec<EchConfig>) -> Self {
+    Self { inner }
+  }
+}
+
 /* ------------------------------------------- */
+const ECH_CONFIG_VERSION_DRAFT_24: u16 = 0xfe0d;
 #[derive(Debug)]
 /// ECH Configuration
 pub(crate) struct EchConfig {
-  /// Version
-  version: u16, // must be 0xfe0d
-  /// Length
-  length: u16,
+  /// Version, must be 0xfe0d
+  version: u16,
   /// Content
   contents: EchConfigContents,
 }
@@ -122,10 +141,11 @@ impl Serialize for &EchConfig {
   type Error = EchConfigError;
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), EchConfigError> {
     buf.put_u16(self.version);
-    buf.put_u16(self.length);
-    match &self.version {
-      0xfe0d => {
-        self.contents.serialize(buf)?;
+    match self.version {
+      ECH_CONFIG_VERSION_DRAFT_24 => {
+        let contents = compose(&self.contents)?;
+        buf.put_u16(contents.len() as u16);
+        buf.put_slice(&contents);
       }
       _ => {
         return Err(EchConfigError::Version);
@@ -154,7 +174,6 @@ impl Deserialize for EchConfig {
 
     Ok(Self {
       version,
-      length,
       contents: parse(&mut &contents[..])?,
     })
   }
@@ -372,6 +391,12 @@ mod tests {
   use super::*;
   use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
   use hex_literal::hex;
+  use hpke::{
+    Deserializable, Kem, Serializable,
+    aead::{Aead, AesGcm128},
+    kdf::{HkdfSha256, Kdf},
+    kem::X25519HkdfSha256,
+  };
   use rustls::{client, crypto::aws_lc_rs::hpke::ALL_SUPPORTED_SUITES, pki_types::EchConfigListBytes};
 
   #[test]
@@ -384,6 +409,46 @@ mod tests {
 
     let serialized = compose(&ech_config_list).unwrap();
     assert_eq!(https_record_bytes, serialized.to_vec());
+  }
+
+  #[test]
+  fn test_gen_my_own_ech_config() {
+    let (_sk, pk) = X25519HkdfSha256::gen_keypair(&mut rand::rng());
+    let pk_bytes = pk.to_bytes();
+    let hpke_config = HpkeKeyConfig {
+      config_id: 0,
+      kem_id: X25519HkdfSha256::KEM_ID,
+      public_key: Bytes::copy_from_slice(&pk_bytes),
+      cipher_suites: vec![HpkeSymmetricCipherSuite {
+        kdf_id: HkdfSha256::KDF_ID,
+        aead_id: AesGcm128::AEAD_ID,
+      }],
+    };
+    let contents = EchConfigContents {
+      key_config: hpke_config,
+      maximum_name_length: 0,
+      public_name: Bytes::copy_from_slice(b"my-public-name.example.com"),
+      extensions: vec![],
+    };
+    let ech_config = EchConfig {
+      version: ECH_CONFIG_VERSION_DRAFT_24,
+      contents,
+    };
+    let ech_config_list = EchConfigList::from(vec![ech_config]);
+    let serialized = compose(&ech_config_list).unwrap();
+    let buf_base64 = BASE64_STANDARD_NO_PAD.encode(&serialized);
+    println!("buf_base64: {}", &buf_base64);
+
+    let record_bytes = BASE64_STANDARD_NO_PAD.decode(&buf_base64).unwrap();
+    println!("record_bytes: {:x?}", record_bytes);
+    let deserialized = EchConfigList::deserialize(&mut &record_bytes[..]).unwrap();
+    println!("deserialized: {:#?}", deserialized);
+
+    let serialized_again = compose(&deserialized).unwrap();
+    assert_eq!(serialized, serialized_again);
+
+    let buf_base64_again = BASE64_STANDARD_NO_PAD.encode(&serialized_again);
+    assert_eq!(buf_base64, buf_base64_again);
   }
 
   #[test]

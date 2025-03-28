@@ -1,4 +1,5 @@
 mod client_hello;
+mod ech_config;
 mod error;
 mod quic;
 mod tls;

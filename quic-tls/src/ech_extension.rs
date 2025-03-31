@@ -82,6 +82,22 @@ impl Deserialize for ClientHelloOuter {
 impl Serialize for ClientHelloOuter {
   type Error = TlsClientHelloError;
   fn serialize<B: bytes::BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
-    todo!()
+    // Serialize the outer ClientHello
+    self.cipher_suite.serialize(buf).map_err(|e| {
+      if matches!(e, EchConfigError::ShortInput) {
+        TlsClientHelloError::ShortInput
+      } else {
+        TlsClientHelloError::InvalidEchExtension
+      }
+    })?;
+    buf.put_u8(self.config_id);
+    buf.put_slice(&self.enc);
+    if self.payload.is_empty() {
+      error!("Empty ech payload");
+      return Err(TlsClientHelloError::InvalidEchExtension);
+    }
+    buf.put_slice(&self.payload);
+
+    Ok(())
   }
 }

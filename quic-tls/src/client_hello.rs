@@ -1,4 +1,4 @@
-use crate::{trace::*, TlsProbeFailure};
+use crate::{TlsProbeFailure, trace::*};
 use anyhow::anyhow;
 
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
@@ -16,7 +16,7 @@ pub struct TlsClientHelloInfo {
 }
 
 /* ---------------------------------------------------------- */
-
+// TODO: ReDefine TLS Client Hello using Serialize/Deserialize in serialize.rs
 
 /* ---------------------------------------------------------- */
 /// Check if the buffer has a valid header as a TLS ClientHello, called from TLS and QUIC

@@ -1,5 +1,10 @@
-use crate::{TlsProbeFailure, trace::*};
-use anyhow::anyhow;
+use crate::{
+  SUPPORTED_TLS_VERSIONS,
+  error::{TlsClientHelloError, TlsProbeFailure},
+  serialize::{Deserialize, read_lengthed},
+  trace::*,
+};
+use bytes::{Buf, Bytes};
 
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
@@ -15,18 +20,50 @@ pub struct TlsClientHelloInfo {
   //TODO: /// ECH info
 }
 
-/* ---------------------------------------------------------- */
-// TODO: ReDefine TLS Client Hello using Serialize/Deserialize in serialize.rs
+impl From<TlsClientHello> for TlsClientHelloInfo {
+  fn from(client_hello: TlsClientHello) -> Self {
+    let mut sni = Vec::new();
+    let mut alpn = Vec::new();
+    for ext in client_hello.extensions {
+      match ext {
+        TlsClientHelloExtension::Sni(sni_ext) => {
+          for server_name in sni_ext.server_name_list {
+            sni.push(server_name.name);
+          }
+        }
+        TlsClientHelloExtension::Alpn(alpn_ext) => {
+          for protocol_name in alpn_ext.protocol_name_list {
+            alpn.push(protocol_name.inner);
+          }
+        }
+        _ => {}
+      }
+    }
+    TlsClientHelloInfo { sni, alpn }
+  }
+}
 
 /* ---------------------------------------------------------- */
-/// Check if the buffer has a valid header as a TLS ClientHello, called from TLS and QUIC
-pub(crate) fn probe_tls_client_hello_header(buf: &[u8], pos: usize) -> Result<(), TlsProbeFailure> {
-  if buf[pos] != TLS_HANDSHAKE_TYPE_CLIENT_HELLO {
+/// Check if the buffer has a valid handshake message containing a TLS ClientHello
+/// https://datatracker.ietf.org/doc/html/rfc8446#section-4
+/// https://tools.ietf.org/html/rfc5246#section-7.4
+/// -- Handshake message header --
+///  - 1 Handshake Type msg_type
+///  - 3 Length
+///  - <var> Handshake message body
+pub(crate) fn probe_tls_handshake_message<B: Buf>(buf: &mut B) -> Result<(), TlsProbeFailure> {
+  if buf.remaining() < 4 {
+    debug!("TLS ClientHello header is not fully received");
+    return Err(TlsProbeFailure::PollNext);
+  }
+  let msg_type = buf.get_u8();
+  if msg_type != TLS_HANDSHAKE_TYPE_CLIENT_HELLO {
     return Err(TlsProbeFailure::Failure);
   }
-  let client_hello_body_len = ((buf[pos + 1] as usize) << 16) + ((buf[pos + 2] as usize) << 8) + (buf[pos + 3] as usize);
-  debug!("TLS ClientHello body length: {}", client_hello_body_len);
-  if buf[pos..].len() < client_hello_body_len + 4 {
+  let length = ((buf.get_u16() as usize) << 8) + buf.get_u8() as usize;
+  debug!("TLS ClientHello body length: {}", length);
+
+  if buf.remaining() < length {
     debug!("TLS ClientHello body is not fully received");
     return Err(TlsProbeFailure::PollNext);
   }
@@ -34,198 +71,352 @@ pub(crate) fn probe_tls_client_hello_header(buf: &[u8], pos: usize) -> Result<()
 }
 
 /* ---------------------------------------------------------- */
-/// Check if the buffer is a TLS ClientHello body, called from TLS and QUIC
-pub(crate) fn probe_tls_client_hello_body(
-  buf: &[u8],
-  tls_version_major: u8,
-  tls_version_minor: u8,
-) -> Option<TlsClientHelloInfo> {
-  let mut pos = 0;
-  // -- Handshake message header (4 bytes) --
-  // -- Handshake message body if msg_type == Client Hello --
-  //  - 2	Version (again)
-  //  - 32	Random
-  //  - to	Session ID Length
-  pos += 38;
-  if buf.len() < pos {
+/// Check if the buffer is a TLS ClientHello
+pub(crate) fn probe_tls_client_hello<B: Buf>(buf: &mut B) -> Option<TlsClientHello> {
+  let Ok(client_hello) = TlsClientHello::deserialize(buf) else {
     return None;
-  }
+  };
 
-  // Session ID
-  let session_id_len = buf[pos] as usize;
-  pos += 1 + session_id_len;
-  if buf.len() < pos {
+  if !SUPPORTED_TLS_VERSIONS.contains(&client_hello.protocol_version) {
+    // Omit the legacy SSL and unknown versions
     return None;
-  }
-
-  // Cipher Suites
-  let cipher_suites_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
-  if cipher_suites_len < 2 || cipher_suites_len % 2 != 0 {
-    return None;
-  }
-  pos += 2 + cipher_suites_len;
-  if buf.len() < pos {
-    return None;
-  }
-
-  // Compression Methods
-  let compression_methods_len = buf[pos] as usize;
-  if compression_methods_len < 1 {
-    return None;
-  }
-  pos += 1 + compression_methods_len;
-  if buf.len() < pos {
-    return None;
-  }
-
-  // Now we are at the end of the Client Hello message.
-  // If no extensions are present, the next 2 bytes, extension_type, should be 0.
-  // Then, if major version == 3 and minor version == 0, it is SSL 3.0, not TLS 1.0, and we should reject it.
-  let extensions_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
-  if tls_version_major == 3 && tls_version_minor == 0 && extensions_len == 0 {
-    return None;
-  }
-  pos += 2;
-  if buf.len() < pos {
-    return None;
-  }
-  debug!("TLS extensions_len: {}", extensions_len);
-  // Check extensions
-  // https://datatracker.ietf.org/doc/html/rfc8446#section-4.2
-  let mut client_hello_info = TlsClientHelloInfo::default();
-  let mut cnt = 0;
-  while cnt < extensions_len {
-    if buf.len() < pos + 4 {
-      return None;
-    }
-    let extension_type = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
-    debug!("TLS extension_type: {:2x}", extension_type);
-    pos += 2;
-    cnt += 2;
-    let extension_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
-    // debug!("TLS extension_len: {}", extension_len);
-    pos += 2;
-    cnt += 2;
-    let extension_payload = &buf[pos..pos + extension_len];
-    // debug!("TLS extension_payload: {:?}", extension_payload);
-    /* ---------------- */
-    // parse extension for the routing with SNI and ALPN
-    match extension_type {
-      0x00 => {
-        // Server Name Indication
-        debug!("Found Server Name Indication extension");
-        client_hello_info.sni = parse_sni(extension_payload).unwrap_or_default();
-      }
-      0x10 => {
-        // Application-Layer Protocol Negotiation
-        debug!("Found Application-Layer Protocol Negotiation extension");
-        client_hello_info.alpn = parse_alpn(extension_payload).unwrap_or_default();
-      }
-      _ => {}
-    }
-    /* ---------------- */
-    pos += extension_len;
-    cnt += extension_len;
   }
 
   // Check the remaining buffer is all zero, consistent as a TLS ClientHello
-  if !buf[pos..].iter().all(|v| v.eq(&0)) {
+  if !buf.chunk().iter().all(|v| v.eq(&0)) {
     return None;
   }
 
-  debug!("TLS ClientHello detected: {:?}", client_hello_info);
-  Some(client_hello_info)
+  debug!("TLS ClientHello detected: {:?}", client_hello);
+  Some(client_hello)
 }
 
-/// Parse server name from the SNI extension
-/// https://datatracker.ietf.org/doc/html/rfc6066#section-3
-fn parse_sni(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
-  let mut pos = 0;
+/* ---------------------------------------------------------- */
+#[allow(unused)]
+#[derive(Debug)]
+/// TLS ClientHello
+/// https://datatracker.ietf.org/doc/html/rfc8446#section-4.1.2
+pub struct TlsClientHello {
+  /// TLS version
+  protocol_version: u16,
+  /// Random bytes
+  random: [u8; 32],
+  /// Session ID
+  legacy_session_id: Bytes,
+  /// Cipher suites (list)
+  cipher_suites: Bytes,
+  /// Compression methods (list)
+  legacy_compression_methods: Bytes,
+  /// Extensions (list)
+  extensions: Vec<TlsClientHelloExtension>,
+}
 
-  if buf.len() < 2 {
-    error!("Invalid SNI extension");
-    return Err(anyhow!("Invalid SNI extension"));
-  }
+#[derive(Debug)]
+/// TLS ClientHello Extension
+pub enum TlsClientHelloExtension {
+  /// Server Name Indication
+  Sni(ServerNameIndication),
+  /// Application-Layer Protocol Negotiation
+  Alpn(ApplicationLayerProtocolNegotiation),
+  /// Other
+  Other(OtherTlsClientHelloExtension),
+}
 
-  // byte length of the server name list payload
-  let server_name_list_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
-  pos += 2;
-
-  let mut sni_list = Vec::new();
-  while pos + 3 < buf.len() {
-    let name_type = buf[pos];
-    let len = ((buf[pos + 1] as usize) << 8) + buf[pos + 2] as usize;
-    if buf.len() < pos + 3 + len {
-      error!("Invalid SNI extension");
-      return Err(anyhow!("Invalid SNI extension"));
+impl std::fmt::Display for TlsClientHelloExtension {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      TlsClientHelloExtension::Sni(sni) => write!(f, "{}", sni),
+      TlsClientHelloExtension::Alpn(alpn) => write!(f, "{}", alpn),
+      TlsClientHelloExtension::Other(other) => write!(f, "{}", other),
     }
-    match name_type {
+  }
+}
+
+#[derive(Debug)]
+/// TLS ClientHello SNI Extension
+pub struct ServerNameIndication {
+  /// Server name list
+  server_name_list: Vec<ServerName>,
+}
+
+impl std::fmt::Display for ServerNameIndication {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let names = self
+      .server_name_list
+      .iter()
+      .map(|s| s.to_string())
+      .collect::<Vec<String>>()
+      .join(", ");
+    write!(f, "ServerNameIndication (0x00): {names}")
+  }
+}
+
+#[allow(unused)]
+#[derive(Debug)]
+/// TLS ClientHello SNI Extension Server Name
+pub struct ServerName {
+  /// Server name Type, 0x00 = Hostname is the only type
+  name_type: u8,
+  /// Server name
+  name: String,
+}
+
+impl std::fmt::Display for ServerName {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.name)
+  }
+}
+
+#[derive(Debug)]
+/// TLS ClientHello ALPN Extension
+pub struct ApplicationLayerProtocolNegotiation {
+  /// Protocol name list
+  protocol_name_list: Vec<ProtocolName>,
+}
+
+impl std::fmt::Display for ApplicationLayerProtocolNegotiation {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let names = self
+      .protocol_name_list
+      .iter()
+      .map(|s| s.to_string())
+      .collect::<Vec<String>>()
+      .join(", ");
+    write!(f, "ApplicationLayerProtocolNegotiation (0x10): {names}")
+  }
+}
+
+#[derive(Debug)]
+/// TLS ClientHello ALPN Extension Protocol Name
+pub struct ProtocolName {
+  /// Protocol name
+  inner: String,
+}
+
+impl std::fmt::Display for ProtocolName {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.inner)
+  }
+}
+
+#[derive(Debug)]
+/// Other (Unsupported) TLS ClientHello Extension
+pub struct OtherTlsClientHelloExtension {
+  /// Extension Type
+  extension_type: u16,
+  /// Extension Payload
+  extension_payload: Bytes,
+}
+
+impl std::fmt::Display for OtherTlsClientHelloExtension {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(
+      f,
+      "OtherTlsClientHelloExtension (0x{:02x}): {:?}",
+      self.extension_type, self.extension_payload
+    )
+  }
+}
+/* ---------------------------------------------------------- */
+
+impl Deserialize for TlsClientHello {
+  type Error = TlsClientHelloError;
+  fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
+    // Handshake message body if msg_type == Client Hello
+    // - 2: Version (again)
+    // - 32: Random
+    // - 1: Session ID Length
+    // - <var>: Session ID
+    // - 2: Cipher Suites Length
+    // - <var>: Cipher Suites
+    // - 1: Compression Methods Length
+    // - <var>: Compression Methods
+    // - 2: Extensions Length
+    // - <var>: Extensions
+    // Total: 40 + Session ID + Cipher Suites + Compression Methods + Extensions
+    if buf.remaining() < 40 {
+      return Err(TlsClientHelloError::ShortInput);
+    }
+    let protocol_version = buf.get_u16();
+    let mut random = [0u8; 32];
+    buf.copy_to_slice(&mut random);
+    let legacy_session_id = read_lengthed(buf, 1)?;
+    let cipher_suites = read_lengthed(buf, 2)?;
+    let legacy_compression_methods = read_lengthed(buf, 1)?;
+    let extensions_len = buf.get_u16() as usize;
+    if extensions_len < 8 {
+      return Err(TlsClientHelloError::ShortInput);
+    }
+    let mut extensions = Vec::new();
+    while buf.remaining() > 0 {
+      if let Ok(ext) = TlsClientHelloExtension::deserialize(buf) {
+        extensions.push(ext);
+      } else {
+        error!("Failed to parse TLS ClientHello extension");
+        return Err(TlsClientHelloError::InvalidTlsClientHello);
+      }
+    }
+
+    Ok(TlsClientHello {
+      protocol_version,
+      random,
+      legacy_session_id,
+      cipher_suites,
+      legacy_compression_methods,
+      extensions,
+    })
+  }
+}
+
+/* ---------------------------------------------------------- */
+
+impl Deserialize for TlsClientHelloExtension {
+  type Error = TlsClientHelloError;
+  fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
+    if buf.remaining() < 2 {
+      return Err(TlsClientHelloError::ShortInput);
+    }
+    let extension_type = buf.get_u16();
+    let mut extension_payload = read_lengthed(buf, 2)?;
+
+    let extension = match extension_type {
       0x00 => {
-        // Hostname
-        let name_payload = &buf[pos + 3..pos + 3 + len];
-        let name = String::from_utf8_lossy(name_payload).to_ascii_lowercase();
-        sni_list.push(name);
+        // Server Name Indication
+        let sni = ServerNameIndication::deserialize(&mut extension_payload)?;
+        TlsClientHelloExtension::Sni(sni)
+      }
+      0x10 => {
+        // Application-Layer Protocol Negotiation
+        let alpn = ApplicationLayerProtocolNegotiation::deserialize(&mut extension_payload)?;
+        TlsClientHelloExtension::Alpn(alpn)
       }
       _ => {
-        debug!("Unknown SNI name type: {:x}", name_type);
+        // Other
+        TlsClientHelloExtension::Other(OtherTlsClientHelloExtension {
+          extension_type,
+          extension_payload,
+        })
       }
-    }
-
-    pos += 3 + len;
+    };
+    Ok(extension)
   }
-
-  if sni_list.is_empty() {
-    error!("No SNI found");
-    return Err(anyhow!("No SNI found"));
-  }
-
-  if pos != server_name_list_len + 2 {
-    error!("Invalid SNI extension");
-    return Err(anyhow!("Invalid SNI extension"));
-  }
-
-  Ok(sni_list)
 }
 
-/// Parse ALPN extension
-/// https://datatracker.ietf.org/doc/html/rfc7301
-fn parse_alpn(buf: &[u8]) -> Result<Vec<String>, anyhow::Error> {
-  let mut pos = 0;
-
-  if buf.len() < 2 {
-    error!("Invalid ALPN extension");
-    return Err(anyhow!("Invalid ALPN extension"));
-  }
-
-  // byte length of the protocol name list payload
-  let protocol_name_list_len = ((buf[pos] as usize) << 8) + buf[pos + 1] as usize;
-  pos += 2;
-
-  let mut alpn_list = Vec::new();
-  while pos + 1 < buf.len() {
-    let len = buf[pos] as usize;
-    if buf.len() < pos + 1 + len || len == 0 {
-      // 0-length protocol name is invalid
-      error!("Invalid ALPN extension");
-      return Err(anyhow!("Invalid ALPN extension"));
+/* ---------------------------------------------------------- */
+impl Deserialize for ServerNameIndication {
+  type Error = TlsClientHelloError;
+  /// Parse server name list from the SNI extension
+  /// https://datatracker.ietf.org/doc/html/rfc6066#section-3
+  fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
+    if buf.remaining() < 2 {
+      return Err(TlsClientHelloError::ShortInput);
     }
-    let name_payload = &buf[pos + 1..pos + 1 + len];
-    let protocol_name = String::from_utf8_lossy(name_payload).to_ascii_lowercase();
-    alpn_list.push(protocol_name);
-    pos += 1 + len;
-  }
+    let mut server_name_list_bytes = read_lengthed(buf, 2)?;
+    let mut server_name_list = Vec::new();
+    while server_name_list_bytes.remaining() > 0 {
+      let sni = ServerName::deserialize(&mut server_name_list_bytes)?;
+      server_name_list.push(sni);
+    }
 
-  if alpn_list.is_empty() {
-    error!("No ALPN found");
-    return Err(anyhow!("No ALPN found"));
-  }
+    if server_name_list.is_empty() {
+      error!("No SNI found");
+      return Err(TlsClientHelloError::InvalidSniExtension);
+    }
 
-  if pos != protocol_name_list_len + 2 {
-    error!("Invalid ALPN extension");
-    return Err(anyhow!("Invalid ALPN extension"));
-  }
+    if server_name_list_bytes.remaining() != 0 {
+      error!("Invalid SNI extension");
+      return Err(TlsClientHelloError::InvalidSniExtension);
+    }
 
-  Ok(alpn_list)
+    Ok(ServerNameIndication { server_name_list })
+  }
+}
+
+/* ---------------------------------------------------------- */
+impl Deserialize for ServerName {
+  type Error = TlsClientHelloError;
+  /// Parse server name
+  /// https://datatracker.ietf.org/doc/html/rfc6066#section-3
+  fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
+    if buf.remaining() < 3 {
+      return Err(TlsClientHelloError::InvalidSniExtension);
+    }
+    let name_type = buf.get_u8();
+
+    if name_type != 0x00 {
+      error!("Unknown SNI name type: {:x}", name_type);
+      return Err(TlsClientHelloError::InvalidSniExtension);
+    }
+
+    let name = read_lengthed(buf, 2)?;
+    let name = String::from_utf8_lossy(&name).to_ascii_lowercase();
+    Ok(ServerName { name_type, name })
+  }
+}
+
+/* ---------------------------------------------------------- */
+
+impl Deserialize for ApplicationLayerProtocolNegotiation {
+  /// Parse ALPN extension
+  /// https://datatracker.ietf.org/doc/html/rfc7301
+  type Error = TlsClientHelloError;
+  fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
+    if buf.remaining() < 2 {
+      return Err(TlsClientHelloError::ShortInput);
+    }
+    let mut protocol_name_list_bytes = read_lengthed(buf, 2)?;
+    let mut protocol_name_list = Vec::new();
+    while protocol_name_list_bytes.remaining() > 0 {
+      let protocol_name = ProtocolName::deserialize(&mut protocol_name_list_bytes)?;
+      protocol_name_list.push(protocol_name);
+    }
+
+    if protocol_name_list.is_empty() {
+      error!("No ALPN found");
+      return Err(TlsClientHelloError::InvalidAlpnExtension);
+    }
+
+    if protocol_name_list_bytes.remaining() != 0 {
+      error!("Invalid ALPN extension");
+      return Err(TlsClientHelloError::InvalidSniExtension);
+    }
+
+    Ok(ApplicationLayerProtocolNegotiation { protocol_name_list })
+  }
+}
+
+/* ---------------------------------------------------------- */
+
+impl Deserialize for ProtocolName {
+  type Error = TlsClientHelloError;
+  /// Parse protocol name
+  /// https://datatracker.ietf.org/doc/html/rfc7301
+  fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
+    if buf.remaining() < 1 {
+      return Err(TlsClientHelloError::InvalidAlpnExtension);
+    }
+    let protocol_name = read_lengthed(buf, 1)?;
+    let protocol_name = String::from_utf8_lossy(&protocol_name).to_ascii_lowercase();
+    Ok(ProtocolName { inner: protocol_name })
+  }
 }
 
 /* ---------------------------------------------------------- */

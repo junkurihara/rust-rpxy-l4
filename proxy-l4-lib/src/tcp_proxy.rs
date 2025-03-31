@@ -8,12 +8,12 @@ use crate::{
   trace::*,
 };
 use bytes::BytesMut;
-use quic_tls::{probe_tls_handshake, TlsClientHelloInfo, TlsProbeFailure};
+use quic_tls::{TlsClientHelloInfo, TlsProbeFailure, probe_tls_handshake};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
-  io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt},
+  io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional},
   net::TcpStream,
-  time::{timeout, Duration},
+  time::{Duration, timeout},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -248,7 +248,8 @@ fn is_http(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
 
 /// Is TLS handshake
 fn is_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
-  match probe_tls_handshake(buf) {
+  let mut buf = bytes::BytesMut::from(buf);
+  match probe_tls_handshake(&mut buf) {
     Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
     Err(TlsProbeFailure::PollNext) => ProbeResult::PollNext,
     Ok(chi) => ProbeResult::Success(TcpProxyProtocol::Tls(chi)),

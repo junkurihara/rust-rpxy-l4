@@ -1,5 +1,6 @@
 mod client_hello;
 mod ech_config;
+mod ech_extension;
 mod error;
 mod quic;
 mod serialize;

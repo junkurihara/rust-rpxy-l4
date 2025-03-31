@@ -2,6 +2,7 @@ mod client_hello;
 mod ech_config;
 mod error;
 mod quic;
+mod serialize;
 mod tls;
 
 #[allow(unused)]

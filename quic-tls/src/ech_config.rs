@@ -2,6 +2,7 @@
 //! [IETF ECH Draft-24](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html)
 
 /* ------------------------------------------- */
+use crate::serialize::{Deserialize, Serialize, compose, parse, read_lengthed};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 /// Describes things that can go wrong in the ECH configuration
@@ -16,59 +17,17 @@ pub(crate) enum EchConfigError {
   /// The version is invalid
   #[error("Invalid version")]
   Version,
-}
-
-/* ------------------------------------------- */
-// Imported from odoh-rs crate
-
-/// Serialize to IETF wireformat that is similar to [XDR](https://tools.ietf.org/html/rfc1014)
-pub(crate) trait Serialize {
-  type Error;
-  /// Serialize the provided struct into the buf.
-  fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error>;
-}
-
-/// Deserialize from IETF wireformat that is similar to [XDR](https://tools.ietf.org/html/rfc1014)
-pub(crate) trait Deserialize {
-  type Error;
-  /// Deserialize a struct from the buf.
-  fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error>
-  where
-    Self: Sized;
-}
-
-/// Convenient function to deserialize a structure from Bytes.
-pub(super) fn parse<D: Deserialize, B: Buf>(buf: &mut B) -> Result<D, D::Error> {
-  D::deserialize(buf)
-}
-
-#[allow(unused)]
-/// Convenient function to serialize a structure into a new BytesMut.
-pub(super) fn compose<S: Serialize>(s: S) -> Result<BytesMut, S::Error> {
-  let mut buf = BytesMut::new();
-  s.serialize(&mut buf)?;
-  Ok(buf)
-}
-
-pub(super) fn read_lengthed<B: Buf>(b: &mut B) -> Result<Bytes, EchConfigError> {
-  if b.remaining() < 2 {
-    return Err(EchConfigError::ShortInput);
-  }
-
-  let len = b.get_u16() as usize;
-
-  if len > b.remaining() {
-    return Err(EchConfigError::InvalidInputLength);
-  }
-
-  Ok(b.copy_to_bytes(len))
+  #[error("Io error: {0}")]
+  IoError(#[from] std::io::Error),
 }
 
 /* ------------------------------------------- */
 #[derive(Debug)]
+/// EchConfigList
 pub(crate) struct EchConfigList {
   inner: Vec<EchConfig>,
 }
+const ECH_CONFIG_LIST_BYTE_LEN: usize = 2;
 
 impl Serialize for &EchConfigList {
   type Error = EchConfigError;
@@ -79,11 +38,11 @@ impl Serialize for &EchConfigList {
       .iter()
       .map(|c| {
         let serialized = compose(c)?;
-        Ok(serialized)
+        Ok(serialized) as Result<_, EchConfigError>
       })
       .collect::<Result<Vec<_>, _>>()?;
     // calculate total length
-    let total_len = serialized_inner.iter().fold(0, |acc, c| acc + c.len() as u16);
+    let total_len = serialized_inner.iter().fold(0, |acc, c: &BytesMut| acc + c.len() as u16);
 
     buf.put_u16(total_len);
     for c in serialized_inner.iter() {
@@ -96,7 +55,7 @@ impl Serialize for &EchConfigList {
 impl Deserialize for EchConfigList {
   type Error = EchConfigError;
   fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error> {
-    let mut buf = read_lengthed(buf)?;
+    let mut buf = read_lengthed(buf, ECH_CONFIG_LIST_BYTE_LEN)?;
 
     let mut inner = Vec::new();
     loop {
@@ -223,14 +182,7 @@ impl Deserialize for EchConfigContents {
     let maximum_name_length = buf.get_u8();
 
     // public_name is 1..255 bytes, so we need to check the length of 1 byte
-    let public_name_len = buf.get_u8() as usize;
-    if !(1..=255).contains(&public_name_len) {
-      return Err(EchConfigError::InvalidInputLength);
-    }
-    if buf.remaining() < public_name_len {
-      return Err(EchConfigError::ShortInput);
-    }
-    let public_name = buf.copy_to_bytes(public_name_len);
+    let public_name = read_lengthed(buf, 1)?;
 
     if buf.remaining() < 2 {
       return Err(EchConfigError::ShortInput);
@@ -264,6 +216,7 @@ pub(crate) struct EchConfigExtension {
   /// content
   data: Bytes,
 }
+const ECH_CONFIG_EXTENSION_DATA_LEN: usize = 2;
 
 impl Serialize for &EchConfigExtension {
   type Error = EchConfigError;
@@ -282,7 +235,7 @@ impl Deserialize for EchConfigExtension {
       return Err(EchConfigError::ShortInput);
     }
     let ext_type = buf.get_u16();
-    let data = read_lengthed(buf)?;
+    let data = read_lengthed(buf, ECH_CONFIG_EXTENSION_DATA_LEN)?;
     Ok(Self { ext_type, data })
   }
 }
@@ -300,6 +253,7 @@ pub(crate) struct HpkeKeyConfig {
   /// HpkeSymmetricCipherSuite
   cipher_suites: Vec<HpkeSymmetricCipherSuite>,
 }
+const HPKE_KEY_CONFIG_PUBLIC_KEY_BYTE_LEN: usize = 2;
 
 impl Serialize for &HpkeKeyConfig {
   type Error = EchConfigError;
@@ -325,7 +279,7 @@ impl Deserialize for HpkeKeyConfig {
     }
     let config_id = buf.get_u8();
     let kem_id = buf.get_u16();
-    let public_key = read_lengthed(buf)?;
+    let public_key = read_lengthed(buf, HPKE_KEY_CONFIG_PUBLIC_KEY_BYTE_LEN)?;
 
     if buf.remaining() < 4 {
       return Err(EchConfigError::ShortInput);

@@ -16,6 +16,9 @@ pub struct TlsClientHelloInfo {
 }
 
 /* ---------------------------------------------------------- */
+
+
+/* ---------------------------------------------------------- */
 /// Check if the buffer has a valid header as a TLS ClientHello, called from TLS and QUIC
 pub(crate) fn probe_tls_client_hello_header(buf: &[u8], pos: usize) -> Result<(), TlsProbeFailure> {
   if buf[pos] != TLS_HANDSHAKE_TYPE_CLIENT_HELLO {

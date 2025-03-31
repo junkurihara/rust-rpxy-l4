@@ -24,4 +24,8 @@ pub enum TlsClientHelloError {
   InvalidSniExtension,
   #[error("Invalid ALPN Extension")]
   InvalidAlpnExtension,
+  #[error("Invalid ECH Extension")]
+  InvalidEchExtension,
 }
+
+// TODO: Define distinct deserialize error for objects

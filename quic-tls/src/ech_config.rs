@@ -27,7 +27,6 @@ pub(crate) enum EchConfigError {
 pub(crate) struct EchConfigList {
   inner: Vec<EchConfig>,
 }
-const ECH_CONFIG_LIST_BYTE_LEN: usize = 2;
 
 impl Serialize for &EchConfigList {
   type Error = EchConfigError;
@@ -55,7 +54,7 @@ impl Serialize for &EchConfigList {
 impl Deserialize for EchConfigList {
   type Error = EchConfigError;
   fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error> {
-    let mut buf = read_lengthed(buf, ECH_CONFIG_LIST_BYTE_LEN)?;
+    let mut buf = read_lengthed(buf, 2)?;
 
     let mut inner = Vec::new();
     loop {
@@ -216,7 +215,6 @@ pub(crate) struct EchConfigExtension {
   /// content
   data: Bytes,
 }
-const ECH_CONFIG_EXTENSION_DATA_LEN: usize = 2;
 
 impl Serialize for &EchConfigExtension {
   type Error = EchConfigError;
@@ -235,7 +233,7 @@ impl Deserialize for EchConfigExtension {
       return Err(EchConfigError::ShortInput);
     }
     let ext_type = buf.get_u16();
-    let data = read_lengthed(buf, ECH_CONFIG_EXTENSION_DATA_LEN)?;
+    let data = read_lengthed(buf, 2)?;
     Ok(Self { ext_type, data })
   }
 }
@@ -253,7 +251,6 @@ pub(crate) struct HpkeKeyConfig {
   /// HpkeSymmetricCipherSuite
   cipher_suites: Vec<HpkeSymmetricCipherSuite>,
 }
-const HPKE_KEY_CONFIG_PUBLIC_KEY_BYTE_LEN: usize = 2;
 
 impl Serialize for &HpkeKeyConfig {
   type Error = EchConfigError;
@@ -279,7 +276,7 @@ impl Deserialize for HpkeKeyConfig {
     }
     let config_id = buf.get_u8();
     let kem_id = buf.get_u16();
-    let public_key = read_lengthed(buf, HPKE_KEY_CONFIG_PUBLIC_KEY_BYTE_LEN)?;
+    let public_key = read_lengthed(buf, 2)?;
 
     if buf.remaining() < 4 {
       return Err(EchConfigError::ShortInput);

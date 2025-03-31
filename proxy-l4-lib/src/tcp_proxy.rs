@@ -248,7 +248,7 @@ fn is_http(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
 
 /// Is TLS handshake
 fn is_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProxyProtocol> {
-  let mut buf = bytes::BytesMut::from(buf);
+  let mut buf = BytesMut::from(buf);
   match probe_tls_handshake(&mut buf) {
     Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
     Err(TlsProbeFailure::PollNext) => ProbeResult::PollNext,

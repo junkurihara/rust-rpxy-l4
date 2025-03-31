@@ -6,6 +6,7 @@ use crate::{
 };
 use bytes::{Buf, Bytes};
 
+const TLS_HANDSHAKE_MESSAGE_HEADER_LEN: usize = 4;
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
 /* ---------------------------------------------------------- */
@@ -52,7 +53,7 @@ impl From<TlsClientHello> for TlsClientHelloInfo {
 ///  - 3 Length
 ///  - <var> Handshake message body
 pub(crate) fn probe_tls_handshake_message<B: Buf>(buf: &mut B) -> Result<(), TlsProbeFailure> {
-  if buf.remaining() < 4 {
+  if buf.remaining() < TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
     debug!("TLS ClientHello header is not fully received");
     return Err(TlsProbeFailure::PollNext);
   }

@@ -38,7 +38,7 @@ tokio = { version = "1.44.1", default-features = false, features = [
 tokio-util = { version = "0.7.14", default-features = false }
 
 # network
-socket2 = { version = "0.5.8" }
+socket2 = { version = "0.5.9" }
 
 # quic and tls
 quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }

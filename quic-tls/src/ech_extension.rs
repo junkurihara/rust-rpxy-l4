@@ -33,13 +33,22 @@ impl std::fmt::Display for EncryptedClientHello {
 /// Outer ClientHello
 pub(crate) struct ClientHelloOuter {
   /// Cipher suite
-  cipher_suite: HpkeSymmetricCipherSuite,
+  pub(crate) cipher_suite: HpkeSymmetricCipherSuite,
   /// Config ID
-  config_id: u8,
+  pub(crate) config_id: u8,
   /// enc (e.g, Public key of the peer)
-  enc: Bytes,
+  pub(crate) enc: Bytes,
   /// payload (encrypted body)
-  payload: Bytes,
+  pub(crate) payload: Bytes,
+}
+impl ClientHelloOuter {
+  /// Fill the payload with zeros for AAD calculation
+  pub(crate) fn fill_payload_with_zeros(&mut self) {
+    // Replace the payload field with zeros
+    let payload_len = self.payload.len();
+    let payload = vec![0; payload_len];
+    self.payload = Bytes::from(payload);
+  }
 }
 /* ------------------------------------------- */
 
@@ -119,11 +128,13 @@ impl Serialize for ClientHelloOuter {
     // Serialize the outer ClientHello
     self.cipher_suite.serialize(buf)?;
     buf.put_u8(self.config_id);
+    buf.put_u16(self.enc.len() as u16);
     buf.put_slice(&self.enc);
     if self.payload.is_empty() {
       error!("Empty ech payload for ClientHelloOuter");
       return Err(TlsClientHelloError::InvalidEchExtension);
     }
+    buf.put_u16(self.payload.len() as u16);
     buf.put_slice(&self.payload);
 
     Ok(())

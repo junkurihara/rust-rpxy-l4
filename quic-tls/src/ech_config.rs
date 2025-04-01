@@ -314,9 +314,9 @@ impl Deserialize for HpkeKeyConfig {
 /// HpkeSymmetricCipherSuite
 pub(crate) struct HpkeSymmetricCipherSuite {
   /// HpkeKdfId
-  kdf_id: u16,
+  pub(crate) kdf_id: u16,
   /// HpkeAeadId
-  aead_id: u16,
+  pub(crate) aead_id: u16,
 }
 
 impl Serialize for &HpkeSymmetricCipherSuite {

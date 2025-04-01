@@ -2,7 +2,6 @@ use crate::{
   SUPPORTED_TLS_VERSIONS,
   client_hello::{TlsClientHelloInfo, probe_tls_client_hello, probe_tls_handshake_message},
   error::TlsProbeFailure,
-  serialize::Deserialize,
   trace::*,
 };
 use bytes::{Buf, BytesMut};
@@ -54,19 +53,10 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloInfo, Tl
   probe_tls_handshake_message(&mut tls_plaintext)?;
 
   // Check if the buffer is a TLS ClientHello
-  let tls_plaintext = tls_plaintext.chunk().to_vec();
-  let cloned_tls_plaintext = tls_plaintext.clone();
-  let mut tls_plaintext = BytesMut::from(tls_plaintext.as_slice());
   match probe_tls_client_hello(&mut tls_plaintext) {
     Some(client_hello) => {
-      // TODO: remove later, serialize check
-      let re_serialized = crate::serialize::compose(client_hello.clone()).unwrap().to_vec();
-      if re_serialized != cloned_tls_plaintext {
-        error!("Re-serialized ClientHello does not match the original buffer");
-      }
-      let mut re_serialized = BytesMut::from(re_serialized.as_slice());
-      let re_deserialized = crate::client_hello::TlsClientHello::deserialize(&mut re_serialized);
-      println!("Re-deserialized ClientHello: {:?}", re_deserialized);
+      // TODO: remove later, checking ech
+      crate::ech::decrypt_ech(&client_hello);
 
       Ok(client_hello.into())
     }

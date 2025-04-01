@@ -1,4 +1,5 @@
 mod client_hello;
+mod ech;
 mod ech_config;
 mod ech_extension;
 mod error;

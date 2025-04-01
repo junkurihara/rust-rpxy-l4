@@ -1,6 +1,6 @@
 use crate::{
   SUPPORTED_TLS_VERSIONS,
-  ech_extension::EncryptedClientHello,
+  ech_extension::{ClientHelloOuter, EncryptedClientHello},
   error::{TlsClientHelloError, TlsProbeFailure},
   serialize::{Deserialize, SerDeserError, Serialize, compose, read_lengthed},
   trace::*,
@@ -123,6 +123,28 @@ pub(crate) struct TlsClientHello {
   legacy_compression_methods: Bytes,
   /// Extensions (list)
   extensions: Vec<TlsClientHelloExtension>,
+}
+
+impl TlsClientHello {
+  /// If extensions contains ECH Outer, fill its payload with zeros,
+  /// Used for AAD calculation
+  pub(crate) fn fill_ech_payload_with_zeros(&mut self) {
+    for ext in &mut self.extensions {
+      if let TlsClientHelloExtension::Ech(EncryptedClientHello::Outer(ech_outer)) = ext {
+        ech_outer.fill_payload_with_zeros();
+      }
+    }
+  }
+  /// Get ECH extension if the ClientHello contains ECH Outer
+  pub(crate) fn get_ech_outer(&self) -> Option<ClientHelloOuter> {
+    self.extensions.iter().find_map(|ext| {
+      if let TlsClientHelloExtension::Ech(EncryptedClientHello::Outer(ech_outer)) = ext {
+        Some(ech_outer.clone())
+      } else {
+        None
+      }
+    })
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -274,7 +296,9 @@ impl Deserialize for TlsClientHello {
       return Err(TlsClientHelloError::InvalidExtensionLength);
     }
     let mut extensions = Vec::new();
-    while buf.remaining() > 0 {
+
+    let expected_padding_len = buf.remaining() - extensions_len;
+    while buf.remaining() > expected_padding_len {
       match TlsClientHelloExtension::deserialize(buf) {
         Ok(ext) => {
           extensions.push(ext);
@@ -565,31 +589,6 @@ impl Serialize for ProtocolName {
 }
 
 /* ---------------------------------------------------------- */
-
-// ///////////////////////////////////
-// // TODO: REMOVE LATER, JUST FOR PROOF OF CONCEPT
-// use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
-// use hpke::{Deserializable, Kem, OpModeR, aead::Aead, aead::AesGcm128, kdf::HkdfSha256, kdf::Kdf, kem::X25519HkdfSha256};
-// const ECH_SECRET_KEY: &str = "S7N8IwpHsrukJUnK3ybUtoiL/30q6uZkGLvlakc929c";
-// const ECH_CONFIG: &str =
-//   "AE3+DQBJAAAgACDT5C1FVWRfUJ9gd72R/jepztFdcI4yR9In6OT6LOpIdgAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA";
-// let sk_bytes = BASE64_STANDARD_NO_PAD.decode(ECH_SECRET_KEY).unwrap();
-// let sk = <X25519HkdfSha256 as hpke::Kem>::PrivateKey::from_bytes(&sk_bytes).unwrap();
-// let config_bytes = BASE64_STANDARD_NO_PAD.decode(ECH_CONFIG).unwrap();
-// let enc_clone = enc.clone();
-// let payload_clone = payload.clone();
-// let encapped_key = <X25519HkdfSha256 as hpke::Kem>::EncappedKey::from_bytes(&enc_clone).unwrap();
-// let mut info = vec![];
-// info.extend_from_slice(b"tls ech");
-// info.extend_from_slice(&[0x00u8]);
-// info.extend_from_slice(&config_bytes);
-// let mut ctx: hpke::aead::AeadCtxR<AesGcm128, HkdfSha256, X25519HkdfSha256> =
-//   hpke::setup_receiver(&OpModeR::Base, &sk, &encapped_key, &info).unwrap();
-// let aad = vec![];
-
-// let plaintext = ctx.open(&payload_clone, &aad);
-// println!("plaintext: {:?}", plaintext);
-// ///////////////////////////////////
 
 #[cfg(test)]
 mod tests {

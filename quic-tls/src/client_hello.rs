@@ -128,6 +128,20 @@ pub(crate) struct TlsClientHello {
 }
 
 impl TlsClientHello {
+  /// Is ech outer?
+  pub(crate) fn is_ech_outer(&self) -> bool {
+    self
+      .extensions
+      .iter()
+      .any(|ext| matches!(ext, TlsClientHelloExtension::Ech(EncryptedClientHello::Outer(_))))
+  }
+  /// Is decrypted ech inner
+  pub(crate) fn is_ech_inner(&self) -> bool {
+    self
+      .extensions
+      .iter()
+      .any(|ext| matches!(ext, TlsClientHelloExtension::Ech(EncryptedClientHello::Inner)))
+  }
   /// If extensions contains ECH Outer, fill its payload with zeros,
   /// Used for AAD calculation
   pub(crate) fn fill_ech_payload_with_zeros(&mut self) {
@@ -313,6 +327,18 @@ impl Deserialize for TlsClientHello {
           return Err(TlsClientHelloError::InvalidTlsClientHello);
         }
       }
+    }
+
+    // OuterExtensions and ECHOuter must not be simultaneously present
+    if extensions
+      .iter()
+      .any(|ext| matches!(ext, TlsClientHelloExtension::OuterExtensions(_)))
+      && extensions
+        .iter()
+        .any(|ext| matches!(ext, TlsClientHelloExtension::Ech(EncryptedClientHello::Outer(_))))
+    {
+      error!("OuterExtensions and ECHOuter must not be simultaneously present on the same level");
+      return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
     }
 
     Ok(TlsClientHello {

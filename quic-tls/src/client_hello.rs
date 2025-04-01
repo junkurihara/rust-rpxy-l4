@@ -1,13 +1,26 @@
 use crate::{
   SUPPORTED_TLS_VERSIONS,
+  ech_extension::EncryptedClientHello,
   error::{TlsClientHelloError, TlsProbeFailure},
   serialize::{Deserialize, SerDeserError, read_lengthed},
   trace::*,
 };
 use bytes::{Buf, Bytes};
 
+/* ---------------------------------------------------------- */
 const TLS_HANDSHAKE_MESSAGE_HEADER_LEN: usize = 4;
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
+
+/// Supported TLS ClientHello extension types
+struct ExtensionType;
+impl ExtensionType {
+  /// Server Name Indication
+  const SNI: u16 = 0x0000;
+  /// Application-Layer Protocol Negotiation
+  const ALPN: u16 = 0x0010;
+  /// Encrypted ClientHello
+  const ECH: u16 = 0xfe0d;
+}
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
@@ -97,7 +110,7 @@ pub(crate) fn probe_tls_client_hello<B: Buf>(buf: &mut B) -> Option<TlsClientHel
 #[derive(Debug)]
 /// TLS ClientHello
 /// https://datatracker.ietf.org/doc/html/rfc8446#section-4.1.2
-pub struct TlsClientHello {
+pub(crate) struct TlsClientHello {
   /// TLS version
   protocol_version: u16,
   /// Random bytes
@@ -114,11 +127,13 @@ pub struct TlsClientHello {
 
 #[derive(Debug)]
 /// TLS ClientHello Extension
-pub enum TlsClientHelloExtension {
+pub(crate) enum TlsClientHelloExtension {
   /// Server Name Indication
   Sni(ServerNameIndication),
   /// Application-Layer Protocol Negotiation
   Alpn(ApplicationLayerProtocolNegotiation),
+  /// Encrypted ClientHello
+  Ech(EncryptedClientHello),
   /// Other
   Other(OtherTlsClientHelloExtension),
 }
@@ -128,6 +143,7 @@ impl std::fmt::Display for TlsClientHelloExtension {
     match self {
       TlsClientHelloExtension::Sni(sni) => write!(f, "{}", sni),
       TlsClientHelloExtension::Alpn(alpn) => write!(f, "{}", alpn),
+      TlsClientHelloExtension::Ech(ech) => write!(f, "{}", ech),
       TlsClientHelloExtension::Other(other) => write!(f, "{}", other),
     }
   }
@@ -135,7 +151,7 @@ impl std::fmt::Display for TlsClientHelloExtension {
 
 #[derive(Debug)]
 /// TLS ClientHello SNI Extension
-pub struct ServerNameIndication {
+pub(crate) struct ServerNameIndication {
   /// Server name list
   server_name_list: Vec<ServerName>,
 }
@@ -155,7 +171,7 @@ impl std::fmt::Display for ServerNameIndication {
 #[allow(unused)]
 #[derive(Debug)]
 /// TLS ClientHello SNI Extension Server Name
-pub struct ServerName {
+pub(crate) struct ServerName {
   /// Server name Type, 0x00 = Hostname is the only type
   name_type: u8,
   /// Server name
@@ -170,7 +186,7 @@ impl std::fmt::Display for ServerName {
 
 #[derive(Debug)]
 /// TLS ClientHello ALPN Extension
-pub struct ApplicationLayerProtocolNegotiation {
+pub(crate) struct ApplicationLayerProtocolNegotiation {
   /// Protocol name list
   protocol_name_list: Vec<ProtocolName>,
 }
@@ -189,7 +205,7 @@ impl std::fmt::Display for ApplicationLayerProtocolNegotiation {
 
 #[derive(Debug)]
 /// TLS ClientHello ALPN Extension Protocol Name
-pub struct ProtocolName {
+pub(crate) struct ProtocolName {
   /// Protocol name
   inner: String,
 }
@@ -202,7 +218,7 @@ impl std::fmt::Display for ProtocolName {
 
 #[derive(Debug)]
 /// Other (Unsupported) TLS ClientHello Extension
-pub struct OtherTlsClientHelloExtension {
+pub(crate) struct OtherTlsClientHelloExtension {
   /// Extension Type
   extension_type: u16,
   /// Extension Payload
@@ -290,15 +306,20 @@ impl Deserialize for TlsClientHelloExtension {
     let mut extension_payload = read_lengthed(buf, 2)?;
 
     let extension = match extension_type {
-      0x00 => {
+      ExtensionType::SNI => {
         // Server Name Indication
         let sni = ServerNameIndication::deserialize(&mut extension_payload)?;
         TlsClientHelloExtension::Sni(sni)
       }
-      0x10 => {
+      ExtensionType::ALPN => {
         // Application-Layer Protocol Negotiation
         let alpn = ApplicationLayerProtocolNegotiation::deserialize(&mut extension_payload)?;
         TlsClientHelloExtension::Alpn(alpn)
+      }
+      ExtensionType::ECH => {
+        // Encrypted ClientHello
+        let ech = EncryptedClientHello::deserialize(&mut extension_payload)?;
+        TlsClientHelloExtension::Ech(ech)
       }
       _ => {
         // Other

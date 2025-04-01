@@ -11,23 +11,22 @@ use crate::{
 };
 
 /* ------------------------------------------- */
-/// TLS Encrypted ClientHello extension type
-pub(crate) const ENCRYPTED_CLIENT_HELLO_EXTENSION_TYPE: u16 = 0xfe0d;
-
 #[derive(Debug)]
 /// TLS ClientHello EncryptedClientHello extension
-pub(crate) struct EncryptedClientHello {
-  /// Typed payload
-  payload: EchExtensionPayload,
-}
-
-#[derive(Debug)]
-/// ClientHello typed payload
-pub(crate) enum EchExtensionPayload {
+pub(crate) enum EncryptedClientHello {
   /// outer ClientHello (0)
   Outer(ClientHelloOuter),
   /// inner ClientHello, which is always empty (1)
   Inner,
+}
+
+impl std::fmt::Display for EncryptedClientHello {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      EncryptedClientHello::Outer(payload) => write!(f, "ECH Outer: {:?}", payload),
+      EncryptedClientHello::Inner => write!(f, "ECH Inner"),
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -44,13 +43,52 @@ pub(crate) struct ClientHelloOuter {
 }
 /* ------------------------------------------- */
 
-impl Deserialize for ClientHelloOuter {
+impl Deserialize for EncryptedClientHello {
   type Error = TlsClientHelloError;
+  /// Deserialize the EncryptedClientHello
   fn deserialize<B: bytes::Buf>(buf: &mut B) -> Result<Self, Self::Error>
   where
     Self: Sized,
   {
-    // Deserialize the outer ClientHello
+    let ech_client_hello_type = buf.get_u8();
+    match ech_client_hello_type {
+      0 => {
+        let payload = ClientHelloOuter::deserialize(buf)?;
+        Ok(EncryptedClientHello::Outer(payload))
+      }
+      1 => Ok(EncryptedClientHello::Inner),
+      _ => {
+        error!("Unknown ECH ClientHello type: {}", ech_client_hello_type);
+        Err(TlsClientHelloError::InvalidEchExtension)
+      }
+    }
+  }
+}
+
+impl Serialize for EncryptedClientHello {
+  type Error = TlsClientHelloError;
+  /// Serialize the EncryptedClientHello
+  fn serialize<B: bytes::BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
+    match self {
+      EncryptedClientHello::Outer(payload) => {
+        buf.put_u8(0);
+        payload.serialize(buf)
+      }
+      EncryptedClientHello::Inner => {
+        buf.put_u8(1);
+        Ok(())
+      }
+    }
+  }
+}
+
+impl Deserialize for ClientHelloOuter {
+  type Error = TlsClientHelloError;
+  /// Deserialize the outer ClientHello
+  fn deserialize<B: bytes::Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
     let cipher_suite = HpkeSymmetricCipherSuite::deserialize(buf)?;
     if buf.remaining() < 5 {
       error!("Not enough data as ECH ClientHelloOuter");
@@ -76,6 +114,7 @@ impl Deserialize for ClientHelloOuter {
 
 impl Serialize for ClientHelloOuter {
   type Error = TlsClientHelloError;
+  /// Serialize the outer ClientHello
   fn serialize<B: bytes::BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
     // Serialize the outer ClientHello
     self.cipher_suite.serialize(buf)?;

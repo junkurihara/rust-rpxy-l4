@@ -1741,6 +1741,7 @@ dependencies = [
 name = "rpxy-l4-examples"
 version = "0.0.1"
 dependencies = [
+ "base64",
  "clap",
  "env_logger",
  "hickory-resolver",

@@ -101,7 +101,7 @@ pub(crate) fn probe_tls_client_hello<B: Buf>(buf: &mut B) -> Option<TlsClientHel
     return None;
   }
 
-  debug!("TLS ClientHello detected: {:?}", client_hello);
+  debug!("TLS ClientHello detected: {:#?}", client_hello);
   Some(client_hello)
 }
 

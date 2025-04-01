@@ -373,12 +373,15 @@ mod tests {
 
   #[test]
   fn test_gen_my_own_ech_config() {
-    let (_sk, pk) = X25519HkdfSha256::gen_keypair(&mut rand::rng());
-    let pk_bytes = pk.to_bytes();
+    let (sk, pk) = X25519HkdfSha256::gen_keypair(&mut rand::rng());
+    let sk_bytes = Bytes::copy_from_slice(&sk.to_bytes());
+    let pk_bytes = Bytes::copy_from_slice(&pk.to_bytes());
+    println!("secret key: {:x?}", BASE64_STANDARD_NO_PAD.encode(&sk_bytes));
+    println!("public key: {:x?}", BASE64_STANDARD_NO_PAD.encode(&pk_bytes));
     let hpke_config = HpkeKeyConfig {
       config_id: 0,
       kem_id: X25519HkdfSha256::KEM_ID,
-      public_key: Bytes::copy_from_slice(&pk_bytes),
+      public_key: pk_bytes,
       cipher_suites: vec![HpkeSymmetricCipherSuite {
         kdf_id: HkdfSha256::KDF_ID,
         aead_id: AesGcm128::AEAD_ID,
@@ -397,10 +400,10 @@ mod tests {
     let ech_config_list = EchConfigList::from(vec![ech_config]);
     let serialized = compose(&ech_config_list).unwrap();
     let buf_base64 = BASE64_STANDARD_NO_PAD.encode(&serialized);
-    println!("buf_base64: {}", &buf_base64);
+    println!("ech config list (base64): {}", &buf_base64);
 
     let record_bytes = BASE64_STANDARD_NO_PAD.decode(&buf_base64).unwrap();
-    println!("record_bytes: {:x?}", record_bytes);
+    println!("ech config list (hex): {:x?}", record_bytes);
     let deserialized = EchConfigList::deserialize(&mut &record_bytes[..]).unwrap();
     println!("deserialized: {:#?}", deserialized);
 

@@ -1,4 +1,8 @@
-//! **Imported rom [Rustls Examples](https://github.com/rustls/rustls/tree/main/examples)**
+//! **Test code based on [Rustls Examples](https://github.com/rustls/rustls/tree/main/examples)**
+//! Using static keys and ech config for testing
+//! - secret key: "S7N8IwpHsrukJUnK3ybUtoiL/30q6uZkGLvlakc929c"
+//! - public key: "0+QtRVVkX1CfYHe9kf43qc7RXXCOMkfSJ+jk+izqSHY"
+//! - ech config list (base64): AE3+DQBJAAAgACDT5C1FVWRfUJ9gd72R/jepztFdcI4yR9In6OT6LOpIdgAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA
 //! ============================================================================
 //! This is a simple example demonstrating how to use Encrypted Client Hello (ECH) with
 //! rustls and hickory-dns.
@@ -24,9 +28,10 @@
 
 use std::fs;
 use std::io::{BufReader, Read, Write, stdout};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 
+use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 use clap::Parser;
 use hickory_resolver::Resolver;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
@@ -41,23 +46,32 @@ use rustls::crypto::hpke::Hpke;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, EchConfigListBytes, ServerName};
 
+const ECH_SECRET_KEY: &str = "S7N8IwpHsrukJUnK3ybUtoiL/30q6uZkGLvlakc929c";
+const ECH_PUBLIC_KEY: &str = "0+QtRVVkX1CfYHe9kf43qc7RXXCOMkfSJ+jk+izqSHY";
+const ECH_CONFIG: &str =
+  "AE3+DQBJAAAgACDT5C1FVWRfUJ9gd72R/jepztFdcI4yR9In6OT6LOpIdgAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA";
+const LOCAL_SOCK: &str = "127.0.0.1:8448";
+
 fn main() {
   let args = Args::parse();
 
-  // Find raw ECH configs using DNS-over-HTTPS with Hickory DNS.
-  let resolver_config = if args.use_cloudflare_dns {
-    ResolverConfig::cloudflare_https()
-  } else {
-    ResolverConfig::google_https()
-  };
-  let resolver = Resolver::new(resolver_config, ResolverOpts::default()).unwrap();
-  let server_ech_config = match args.grease {
-    true => None, // Force the use of the GREASE ext by skipping ECH config lookup
-    false => match args.ech_config {
-      Some(path) => Some(read_ech(&path)),
-      None => lookup_ech_configs(&resolver, &args.outer_hostname, args.port),
-    },
-  };
+  let static_ech_config = EchConfigListBytes::from(BASE64_STANDARD_NO_PAD.decode(ECH_CONFIG).unwrap());
+
+  // // Find raw ECH configs using DNS-over-HTTPS with Hickory DNS.
+  // let resolver_config = if args.use_cloudflare_dns {
+  //   ResolverConfig::cloudflare_https()
+  // } else {
+  //   ResolverConfig::google_https()
+  // };
+  // let resolver = Resolver::new(resolver_config, ResolverOpts::default()).unwrap();
+  // let server_ech_config = match args.grease {
+  //   true => None, // Force the use of the GREASE ext by skipping ECH config lookup
+  //   false => match args.ech_config {
+  //     Some(path) => Some(read_ech(&path)),
+  //     None => lookup_ech_configs(&resolver, &args.outer_hostname, args.port),
+  //   },
+  // };
+  let server_ech_config = Some(static_ech_config.clone());
 
   // NOTE: we defer setting up env_logger and setting the trace default filter level until
   //       after doing the DNS-over-HTTPS lookup above - we don't want to muddy the output
@@ -105,11 +119,12 @@ fn main() {
     trace!("\nRequest {} of {}", i + 1, args.num_reqs);
     let mut conn = rustls::ClientConnection::new(config.clone(), server_name.clone()).unwrap();
     // The "outer" server that we're connecting to.
-    let sock_addr = (args.outer_hostname.as_str(), args.port)
-      .to_socket_addrs()
-      .unwrap()
-      .next()
-      .unwrap();
+    // let sock_addr = (args.outer_hostname.as_str(), args.port)
+    //   .to_socket_addrs()
+    //   .unwrap()
+    //   .next()
+    //   .unwrap();
+    let sock_addr: std::net::SocketAddr = LOCAL_SOCK.parse().unwrap();
     let mut sock = TcpStream::connect(sock_addr).unwrap();
     let mut tls = rustls::Stream::new(&mut conn, &mut sock);
 

@@ -2,23 +2,21 @@
 //! [IETF ECH Draft-24](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html)
 
 /* ------------------------------------------- */
-use crate::serialize::{Deserialize, Serialize, compose, parse, read_lengthed};
+use crate::{
+  serialize::{Deserialize, SerDeserError, Serialize, compose, parse, read_lengthed},
+  trace::*,
+};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 /// Describes things that can go wrong in the ECH configuration
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EchConfigError {
-  /// The input buffer is too short
-  #[error("Input buffer is too short")]
-  ShortInput,
-  /// The input length is invalid
-  #[error("Invalid input length")]
-  InvalidInputLength,
   /// The version is invalid
   #[error("Invalid version")]
   Version,
-  #[error("Io error: {0}")]
-  IoError(#[from] std::io::Error),
+  /// Error in serializing/deserializing
+  #[error("Error in serializing/deserializing")]
+  SerDeser(#[from] SerDeserError),
 }
 
 /* ------------------------------------------- */
@@ -117,16 +115,19 @@ impl Deserialize for EchConfig {
   type Error = EchConfigError;
   fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error> {
     if buf.remaining() < 4 {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for EchConfig");
+      return Err(SerDeserError::ShortInput.into());
     }
 
     let version = buf.get_u16();
     if version != 0xfe0d {
+      error!("Invalid version for EchConfig");
       return Err(EchConfigError::Version);
     }
     let length = buf.get_u16();
     if length != buf.remaining() as u16 {
-      return Err(EchConfigError::InvalidInputLength);
+      error!("Invalid input length for EchConfig");
+      return Err(SerDeserError::InvalidInputLength.into());
     }
     let contents = buf.copy_to_bytes(length as usize);
 
@@ -152,7 +153,7 @@ pub(crate) struct EchConfigContents {
 }
 
 impl Serialize for &EchConfigContents {
-  type Error = EchConfigError;
+  type Error = SerDeserError;
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
     self.key_config.serialize(buf)?;
     buf.put_u8(self.maximum_name_length);
@@ -168,15 +169,17 @@ impl Serialize for &EchConfigContents {
 }
 
 impl Deserialize for EchConfigContents {
-  type Error = EchConfigError;
+  type Error = SerDeserError;
   fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error> {
     if buf.remaining() < 8 {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for EchConfigContents");
+      return Err(SerDeserError::ShortInput);
     }
     let key_config = parse(buf)?;
 
     if buf.remaining() < 2 {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for EchConfigContents");
+      return Err(SerDeserError::ShortInput);
     }
     let maximum_name_length = buf.get_u8();
 
@@ -184,11 +187,13 @@ impl Deserialize for EchConfigContents {
     let public_name = read_lengthed(buf, 1)?;
 
     if buf.remaining() < 2 {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for EchConfigContents");
+      return Err(SerDeserError::ShortInput);
     }
     let extensions_len = buf.get_u16() as usize;
     if buf.remaining() < extensions_len {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for EchConfigContents");
+      return Err(SerDeserError::ShortInput);
     }
     let mut extensions = Vec::new();
 
@@ -217,7 +222,7 @@ pub(crate) struct EchConfigExtension {
 }
 
 impl Serialize for &EchConfigExtension {
-  type Error = EchConfigError;
+  type Error = SerDeserError;
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
     buf.put_u16(self.ext_type);
     buf.put_u16(self.data.len() as u16);
@@ -227,10 +232,10 @@ impl Serialize for &EchConfigExtension {
 }
 
 impl Deserialize for EchConfigExtension {
-  type Error = EchConfigError;
+  type Error = SerDeserError;
   fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error> {
     if buf.remaining() < 4 {
-      return Err(EchConfigError::ShortInput);
+      return Err(SerDeserError::ShortInput);
     }
     let ext_type = buf.get_u16();
     let data = read_lengthed(buf, 2)?;
@@ -253,7 +258,7 @@ pub(crate) struct HpkeKeyConfig {
 }
 
 impl Serialize for &HpkeKeyConfig {
-  type Error = EchConfigError;
+  type Error = SerDeserError;
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
     buf.put_u8(self.config_id);
     buf.put_u16(self.kem_id);
@@ -269,22 +274,25 @@ impl Serialize for &HpkeKeyConfig {
 }
 
 impl Deserialize for HpkeKeyConfig {
-  type Error = EchConfigError;
+  type Error = SerDeserError;
   fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error> {
     if buf.remaining() < 9 {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for HpkeKeyConfig");
+      return Err(SerDeserError::ShortInput);
     }
     let config_id = buf.get_u8();
     let kem_id = buf.get_u16();
     let public_key = read_lengthed(buf, 2)?;
 
     if buf.remaining() < 4 {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for HpkeKeyConfig");
+      return Err(SerDeserError::ShortInput);
     }
     let cipher_suites_byte_len = buf.get_u16() as usize;
 
     if buf.remaining() < cipher_suites_byte_len {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for HpkeKeyConfig");
+      return Err(SerDeserError::ShortInput);
     }
     let mut cipher_suites = Vec::new();
     for _ in 0..cipher_suites_byte_len / 4 {
@@ -312,7 +320,7 @@ pub(crate) struct HpkeSymmetricCipherSuite {
 }
 
 impl Serialize for &HpkeSymmetricCipherSuite {
-  type Error = EchConfigError;
+  type Error = SerDeserError;
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
     buf.put_u16(self.kdf_id);
     buf.put_u16(self.aead_id);
@@ -321,10 +329,11 @@ impl Serialize for &HpkeSymmetricCipherSuite {
 }
 
 impl Deserialize for HpkeSymmetricCipherSuite {
-  type Error = EchConfigError;
+  type Error = SerDeserError;
   fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error> {
     if buf.remaining() < 4 {
-      return Err(EchConfigError::ShortInput);
+      error!("Short input for HpkeSymmetricCipherSuite");
+      return Err(SerDeserError::ShortInput);
     }
 
     let kdf_id = buf.get_u16();
@@ -343,7 +352,7 @@ mod tests {
   use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
   use hex_literal::hex;
   use hpke::{
-    Deserializable, Kem, Serializable,
+    Kem, Serializable,
     aead::{Aead, AesGcm128},
     kdf::{HkdfSha256, Kdf},
     kem::X25519HkdfSha256,

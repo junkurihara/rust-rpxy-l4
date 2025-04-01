@@ -4,9 +4,9 @@
 use bytes::Bytes;
 
 use crate::{
-  ech_config::{EchConfigError, HpkeSymmetricCipherSuite},
+  ech_config::HpkeSymmetricCipherSuite,
   error::TlsClientHelloError,
-  serialize::{Deserialize, Serialize, read_lengthed},
+  serialize::{Deserialize, SerDeserError, Serialize, read_lengthed},
   trace::*,
 };
 
@@ -16,14 +16,14 @@ pub(crate) const ENCRYPTED_CLIENT_HELLO_EXTENSION_TYPE: u16 = 0xfe0d;
 
 #[derive(Debug)]
 /// TLS ClientHello EncryptedClientHello extension
-pub struct EncryptedClientHello {
+pub(crate) struct EncryptedClientHello {
   /// Typed payload
   payload: EchExtensionPayload,
 }
 
 #[derive(Debug)]
 /// ClientHello typed payload
-pub enum EchExtensionPayload {
+pub(crate) enum EchExtensionPayload {
   /// outer ClientHello (0)
   Outer(ClientHelloOuter),
   /// inner ClientHello, which is always empty (1)
@@ -32,7 +32,7 @@ pub enum EchExtensionPayload {
 
 #[derive(Debug)]
 /// Outer ClientHello
-pub struct ClientHelloOuter {
+pub(crate) struct ClientHelloOuter {
   /// Cipher suite
   cipher_suite: HpkeSymmetricCipherSuite,
   /// Config ID
@@ -51,22 +51,17 @@ impl Deserialize for ClientHelloOuter {
     Self: Sized,
   {
     // Deserialize the outer ClientHello
-    let cipher_suite = HpkeSymmetricCipherSuite::deserialize(buf).map_err(|e| {
-      if matches!(e, EchConfigError::ShortInput) {
-        TlsClientHelloError::ShortInput
-      } else {
-        TlsClientHelloError::InvalidEchExtension
-      }
-    })?;
+    let cipher_suite = HpkeSymmetricCipherSuite::deserialize(buf)?;
     if buf.remaining() < 5 {
-      return Err(TlsClientHelloError::ShortInput);
+      error!("Not enough data as ECH ClientHelloOuter");
+      return Err(SerDeserError::ShortInput.into());
     }
     let config_id = buf.get_u8();
     let enc = read_lengthed(buf, 2)?;
     let payload = read_lengthed(buf, 2)?;
 
     if payload.is_empty() {
-      error!("Empty ech payload");
+      error!("Empty ech payload for ClientHelloOuter");
       return Err(TlsClientHelloError::InvalidEchExtension);
     }
 
@@ -83,17 +78,11 @@ impl Serialize for ClientHelloOuter {
   type Error = TlsClientHelloError;
   fn serialize<B: bytes::BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
     // Serialize the outer ClientHello
-    self.cipher_suite.serialize(buf).map_err(|e| {
-      if matches!(e, EchConfigError::ShortInput) {
-        TlsClientHelloError::ShortInput
-      } else {
-        TlsClientHelloError::InvalidEchExtension
-      }
-    })?;
+    self.cipher_suite.serialize(buf)?;
     buf.put_u8(self.config_id);
     buf.put_slice(&self.enc);
     if self.payload.is_empty() {
-      error!("Empty ech payload");
+      error!("Empty ech payload for ClientHelloOuter");
       return Err(TlsClientHelloError::InvalidEchExtension);
     }
     buf.put_slice(&self.payload);

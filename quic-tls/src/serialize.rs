@@ -1,5 +1,14 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+// Define distinct deserialize/serialize error for objects
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SerDeserError {
+  #[error("Short input")]
+  ShortInput,
+  #[error("Invalid input length")]
+  InvalidInputLength,
+}
+
 /* ------------------------------------------- */
 // Imported from odoh-rs crate
 
@@ -33,14 +42,14 @@ pub(super) fn compose<S: Serialize>(s: S) -> Result<BytesMut, S::Error> {
 }
 
 /// Reads a length-prefixed value from the buffer, where the length is defined as `len_prefix` bytes
-pub(super) fn read_lengthed<B: Buf>(b: &mut B, len_prefix: usize) -> Result<Bytes, std::io::Error> {
+pub(super) fn read_lengthed<B: Buf>(b: &mut B, len_prefix: usize) -> Result<Bytes, SerDeserError> {
   if b.remaining() < len_prefix {
-    return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Short input"));
+    return Err(SerDeserError::ShortInput);
   }
   // byte length of usize::MAX
   let max_len_prefix = std::mem::size_of::<usize>();
   if len_prefix > max_len_prefix {
-    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid input length"));
+    return Err(SerDeserError::InvalidInputLength);
   }
 
   let mut len = 0;
@@ -50,7 +59,7 @@ pub(super) fn read_lengthed<B: Buf>(b: &mut B, len_prefix: usize) -> Result<Byte
   }
 
   if len > b.remaining() {
-    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid input length"));
+    return Err(SerDeserError::InvalidInputLength);
   }
 
   Ok(b.copy_to_bytes(len))

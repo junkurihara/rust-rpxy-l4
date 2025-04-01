@@ -1,7 +1,7 @@
 use crate::{
   SUPPORTED_TLS_VERSIONS,
   error::{TlsClientHelloError, TlsProbeFailure},
-  serialize::{Deserialize, read_lengthed},
+  serialize::{Deserialize, SerDeserError, read_lengthed},
   trace::*,
 };
 use bytes::{Buf, Bytes};
@@ -11,7 +11,7 @@ const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-/// Probed TLS ClientHello information
+/// Extracted partial information from probed TLS ClientHello message
 pub struct TlsClientHelloInfo {
   /// SNI
   pub sni: Vec<String>,
@@ -239,7 +239,8 @@ impl Deserialize for TlsClientHello {
     // - <var>: Extensions
     // Total: 40 + Session ID + Cipher Suites + Compression Methods + Extensions
     if buf.remaining() < 40 {
-      return Err(TlsClientHelloError::ShortInput);
+      error!("Not enough data as TLS ClientHello");
+      return Err(SerDeserError::ShortInput.into());
     }
     let protocol_version = buf.get_u16();
     let mut random = [0u8; 32];
@@ -249,7 +250,8 @@ impl Deserialize for TlsClientHello {
     let legacy_compression_methods = read_lengthed(buf, 1)?;
     let extensions_len = buf.get_u16() as usize;
     if extensions_len < 8 {
-      return Err(TlsClientHelloError::ShortInput);
+      error!("Invalid extensions length: {}", extensions_len);
+      return Err(TlsClientHelloError::InvalidExtensionLength);
     }
     let mut extensions = Vec::new();
     while buf.remaining() > 0 {
@@ -281,7 +283,8 @@ impl Deserialize for TlsClientHelloExtension {
     Self: Sized,
   {
     if buf.remaining() < 2 {
-      return Err(TlsClientHelloError::ShortInput);
+      error!("Not enough data as TLS ClientHello extension");
+      return Err(SerDeserError::ShortInput.into());
     }
     let extension_type = buf.get_u16();
     let mut extension_payload = read_lengthed(buf, 2)?;
@@ -319,7 +322,8 @@ impl Deserialize for ServerNameIndication {
     Self: Sized,
   {
     if buf.remaining() < 2 {
-      return Err(TlsClientHelloError::ShortInput);
+      error!("Not enough data as SNI extension");
+      return Err(SerDeserError::ShortInput.into());
     }
     let mut server_name_list_bytes = read_lengthed(buf, 2)?;
     let mut server_name_list = Vec::new();
@@ -378,7 +382,8 @@ impl Deserialize for ApplicationLayerProtocolNegotiation {
     Self: Sized,
   {
     if buf.remaining() < 2 {
-      return Err(TlsClientHelloError::ShortInput);
+      error!("Not enough data as ALPN extension");
+      return Err(SerDeserError::ShortInput.into());
     }
     let mut protocol_name_list_bytes = read_lengthed(buf, 2)?;
     let mut protocol_name_list = Vec::new();

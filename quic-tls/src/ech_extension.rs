@@ -140,3 +140,60 @@ impl Serialize for ClientHelloOuter {
     Ok(())
   }
 }
+
+/* ------------------------------------------- */
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// TLS ClientHello OuterExtensions extension, presented only in inner ClientHello (decrypted ECH payload)
+pub(crate) struct OuterExtensions {
+  /// Extension types removed from the ClientHelloInner
+  outer_extensions: Vec<u16>,
+}
+impl std::fmt::Display for OuterExtensions {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "ECH OuterExtensions: {:?}", self.outer_extensions)
+  }
+}
+
+impl Deserialize for OuterExtensions {
+  type Error = TlsClientHelloError;
+  /// Deserialize the OuterExtensions
+  fn deserialize<B: bytes::Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
+    if buf.remaining() < 1 {
+      error!("Not enough data as OuterExtensions");
+      return Err(SerDeserError::ShortInput.into());
+    }
+
+    let outer_extensions = read_lengthed(buf, 1)?;
+
+    if outer_extensions.is_empty() || outer_extensions.len() % 2 != 0 {
+      error!("Invalid OuterExtensions");
+      return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
+    }
+
+    let outer_extensions = outer_extensions
+      .chunks_exact(2)
+      .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+      .collect();
+    Ok(OuterExtensions { outer_extensions })
+  }
+}
+
+impl Serialize for OuterExtensions {
+  type Error = TlsClientHelloError;
+  /// Serialize the OuterExtensions
+  fn serialize<B: bytes::BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
+    // Serialize the outer extensions
+    if self.outer_extensions.is_empty() {
+      error!("Empty outer extensions");
+      return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
+    }
+    buf.put_u8(self.outer_extensions.len() as u8);
+    for ext in self.outer_extensions {
+      buf.put_u16(ext);
+    }
+    Ok(())
+  }
+}

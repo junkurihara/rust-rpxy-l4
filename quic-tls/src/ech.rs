@@ -51,7 +51,7 @@ pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) {
   println!("encoded_client_hello_inner: {:x?}", encoded_client_hello_inner);
 
   let client_hello_inner: TlsClientHello = parse(&mut encoded_client_hello_inner.as_slice()).unwrap();
-  println!("client_hello_inner: {:?}", client_hello_inner);
+  println!("client_hello_inner: {:#?}", client_hello_inner);
 
   // ///////////////////////////////////
 }

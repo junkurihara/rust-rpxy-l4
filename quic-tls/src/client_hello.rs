@@ -1,6 +1,6 @@
 use crate::{
   SUPPORTED_TLS_VERSIONS,
-  ech_extension::{ClientHelloOuter, EncryptedClientHello},
+  ech_extension::{ClientHelloOuter, EncryptedClientHello, OuterExtensions},
   error::{TlsClientHelloError, TlsProbeFailure},
   serialize::{Deserialize, SerDeserError, Serialize, compose, read_lengthed},
   trace::*,
@@ -20,6 +20,8 @@ impl ExtensionType {
   const ALPN: u16 = 0x0010;
   /// Encrypted ClientHello
   const ECH: u16 = 0xfe0d;
+  /// OuterExtensions
+  const OUTER_EXTENSIONS: u16 = 0xfd00;
 }
 
 /* ---------------------------------------------------------- */
@@ -156,6 +158,8 @@ pub(crate) enum TlsClientHelloExtension {
   Alpn(ApplicationLayerProtocolNegotiation),
   /// Encrypted ClientHello
   Ech(EncryptedClientHello),
+  /// Ech Outer Extensions
+  OuterExtensions(OuterExtensions),
   /// Other
   Other(OtherTlsClientHelloExtension),
 }
@@ -166,6 +170,7 @@ impl std::fmt::Display for TlsClientHelloExtension {
       TlsClientHelloExtension::Sni(sni) => write!(f, "{}", sni),
       TlsClientHelloExtension::Alpn(alpn) => write!(f, "{}", alpn),
       TlsClientHelloExtension::Ech(ech) => write!(f, "{}", ech),
+      TlsClientHelloExtension::OuterExtensions(outer_ext) => write!(f, "{}", outer_ext),
       TlsClientHelloExtension::Other(other) => write!(f, "{}", other),
     }
   }
@@ -382,6 +387,11 @@ impl Deserialize for TlsClientHelloExtension {
         let ech = EncryptedClientHello::deserialize(&mut extension_payload)?;
         TlsClientHelloExtension::Ech(ech)
       }
+      ExtensionType::OUTER_EXTENSIONS => {
+        // OuterExtensions
+        let outer_ext = OuterExtensions::deserialize(&mut extension_payload)?;
+        TlsClientHelloExtension::OuterExtensions(outer_ext)
+      }
       _ => {
         // Other
         TlsClientHelloExtension::Other(OtherTlsClientHelloExtension {
@@ -415,6 +425,12 @@ impl Serialize for TlsClientHelloExtension {
         let ser_ech = compose(ech)?;
         buf.put_u16(ser_ech.len() as u16);
         buf.put_slice(&ser_ech);
+      }
+      TlsClientHelloExtension::OuterExtensions(outer_ext) => {
+        buf.put_u16(ExtensionType::OUTER_EXTENSIONS);
+        let ser_outer_ext = compose(outer_ext)?;
+        buf.put_u16(ser_outer_ext.len() as u16);
+        buf.put_slice(&ser_outer_ext);
       }
       TlsClientHelloExtension::Other(other) => {
         buf.put_u16(other.extension_type);

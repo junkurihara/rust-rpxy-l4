@@ -22,6 +22,8 @@ pub enum TlsClientHelloError {
   InvalidAlpnExtension,
   #[error("Invalid ECH Extension")]
   InvalidEchExtension,
+  #[error("Invalid OuterExtensions Extension")]
+  InvalidOuterExtensionsExtension,
 
   #[error("Error in serialization/deserialization")]
   SerDeserError(#[from] SerDeserError),

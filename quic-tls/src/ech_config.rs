@@ -310,7 +310,7 @@ impl Deserialize for HpkeKeyConfig {
 }
 
 /* ------------------------------------------- */
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// HpkeSymmetricCipherSuite
 pub(crate) struct HpkeSymmetricCipherSuite {
   /// HpkeKdfId

@@ -11,7 +11,7 @@ use crate::{
 };
 
 /* ------------------------------------------- */
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// TLS ClientHello EncryptedClientHello extension
 pub(crate) enum EncryptedClientHello {
   /// outer ClientHello (0)
@@ -29,7 +29,7 @@ impl std::fmt::Display for EncryptedClientHello {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Outer ClientHello
 pub(crate) struct ClientHelloOuter {
   /// Cipher suite

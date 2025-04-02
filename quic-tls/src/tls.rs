@@ -55,9 +55,8 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloInfo, Tl
   // Check if the buffer is a TLS ClientHello
   match probe_tls_client_hello(&mut tls_plaintext) {
     Some(client_hello) => {
-      // TODO: remove later, checking ech
-      crate::ech::decrypt_ech(&client_hello);
-
+      // // TODO: remove later, checking ech
+      // crate::ech::decrypt_ech(&client_hello);
       Ok(client_hello.into())
     }
     None => Err(TlsProbeFailure::Failure),

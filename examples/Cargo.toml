@@ -12,7 +12,7 @@ publish = false
 [dependencies]
 rustls = { version = "0.23.25", features = ["logging"] }
 clap = { version = "4", features = ["derive"] }
-hickory-resolver = { version = "=0.25.0-alpha.2", features = [
+hickory-resolver = { version = "0.25.1", features = [
   "dns-over-https-rustls",
   "webpki-roots",
 ] }

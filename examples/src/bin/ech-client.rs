@@ -1,12 +1,10 @@
 //! **Test code based on [Rustls Examples](https://github.com/rustls/rustls/tree/main/examples)**
 //! Using static keys and ech config for testing
-//! - secret key: "S7N8IwpHsrukJUnK3ybUtoiL/30q6uZkGLvlakc929c"
-//! - public key: "0+QtRVVkX1CfYHe9kf43qc7RXXCOMkfSJ+jk+izqSHY"
-//! - ech config list (base64): AE3+DQBJAAAgACDT5C1FVWRfUJ9gd72R/jepztFdcI4yR9In6OT6LOpIdgAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA
+//! - secret key: "KwyvZOuPlflYlcmJbwhA24HMWUvxXXyan/oh9cJ6lNw"
+//! - ech config list (base64): ADz+DQA4ugAgACA9U8FCH7vKOFXVCCcAdpUUSfu3rzlooRNflhOXyV0uTwAEAAEAAQAJbG9jYWxob3N0AAA
 //!
-//! - secret key: "pLNPBNTitfdij7QQznqFbnNxPyorRN2ZARSWWpYOBDY"
-//! - public key: "rY0SPwP8yflbYTUHTNcX/RWC/oy+qAi2ZcM62nwLVXU"
-//! - ech config list (base64): AE3+DQBJAAAgACCtjRI/A/zJ+VthNQdM1xf9FYL+jL6oCLZlwzrafAtVdQAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA
+//! `cargo run --package rpxy-l4-examples --bin ech-client -- --host localhost localhost www.defo.ie`
+//!
 //! ============================================================================
 //! This is a simple example demonstrating how to use Encrypted Client Hello (ECH) with
 //! rustls and hickory-dns.
@@ -50,10 +48,7 @@ use rustls::crypto::hpke::Hpke;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, EchConfigListBytes, ServerName};
 
-const ECH_SECRET_KEY: &str = "pLNPBNTitfdij7QQznqFbnNxPyorRN2ZARSWWpYOBDY";
-const ECH_PUBLIC_KEY: &str = "rY0SPwP8yflbYTUHTNcX/RWC/oy+qAi2ZcM62nwLVXU";
-const ECH_CONFIG: &str =
-  "AE3+DQBJAAAgACCtjRI/A/zJ+VthNQdM1xf9FYL+jL6oCLZlwzrafAtVdQAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA";
+const ECH_CONFIG: &str = "ADz+DQA4ugAgACA9U8FCH7vKOFXVCCcAdpUUSfu3rzlooRNflhOXyV0uTwAEAAEAAQAJbG9jYWxob3N0AAA";
 const LOCAL_SOCK: &str = "127.0.0.1:8448";
 
 fn main() {

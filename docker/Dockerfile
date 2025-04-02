@@ -24,7 +24,7 @@ ENV RUSTFLAGS="-C link-arg=-s"
 
 RUN echo "Building rpxy-l4 from source" && \
   cargo update && \
-  cargo build --release --target $(cat /arch)-unknown-linux-musl && \
+  cargo build --release --package rpxy-l4 --target $(cat /arch)-unknown-linux-musl && \
   musl-strip --strip-all /tmp/target/$(cat /arch)-unknown-linux-musl/release/rpxy-l4 && \
   cp /tmp/target/$(cat /arch)-unknown-linux-musl/release/rpxy-l4 /tmp/target/release/rpxy-l4
 

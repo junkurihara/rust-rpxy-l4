@@ -1,5 +1,5 @@
 use crate::{
-  client_hello::{TlsClientHelloInfo, probe_tls_client_hello_body, probe_tls_client_hello_header},
+  client_hello::{TlsClientHello, TlsClientHelloInfo, probe_tls_client_hello, probe_tls_handshake_message},
   error::TlsProbeFailure,
   trace::*,
 };
@@ -40,7 +40,7 @@ pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClient
     .filter(|p| matches!(p.packet_type, QuicCoalesceablePacketType::Initial))
     .collect::<Vec<_>>();
 
-  probe_quic_unprotected_frames(&unprotected)
+  probe_quic_unprotected_frames(&unprotected).map(|ch| ch.into())
 }
 
 // /* ---------------------------------------------------- */
@@ -245,7 +245,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
 /* ---------------------------------------------------- */
 /// Extract CRYPTO frame from unprotected QUIC initial packet.
 /// Reassemble the CRYPTO frames and check if it is a TLS ClientHello.
-fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
+fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<TlsClientHello, TlsProbeFailure> {
   // We have to consider crypto frames split into multiple packets.
   // reassemble the crypto frames and check if it is a TLS ClientHello!!
 
@@ -280,15 +280,15 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<
   };
 
   // Check client hello header
-  let pos = 0;
-  probe_tls_client_hello_header(&expected_client_hello, pos)?;
+  let mut expected_client_hello = bytes::Bytes::from(expected_client_hello);
+  probe_tls_handshake_message(&mut expected_client_hello)?;
 
   // Check client hello body
-  let Some(body_probe_res) = probe_tls_client_hello_body(&expected_client_hello, 3, 2) else {
+  let Some(client_hello) = probe_tls_client_hello(&mut expected_client_hello) else {
     return Err(TlsProbeFailure::Failure);
   };
 
-  Ok(body_probe_res)
+  Ok(client_hello)
 }
 
 /* ---------------------------------------------------- */

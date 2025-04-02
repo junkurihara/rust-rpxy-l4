@@ -1,0 +1,22 @@
+[package]
+name = "rpxy-l4-examples"
+description = "examples and utils for rpxy-l4"
+version.workspace = true
+edition.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+rustls = { version = "0.23.25", features = ["logging"] }
+clap = { version = "4", features = ["derive"] }
+hickory-resolver = { version = "=0.25.0-alpha.2", features = [
+  "dns-over-https-rustls",
+  "webpki-roots",
+] }
+log = { version = "0.4.27" }
+env_logger = { version = "0.11" }
+webpki-roots = { version = "0.26" }
+base64 = { version = "0.22.1" }

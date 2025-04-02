@@ -28,17 +28,17 @@
 //!   </p>
 //! ```
 
-use std::fs;
+// use std::fs;
 use std::io::{BufReader, Read, Write, stdout};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 
 use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 use clap::Parser;
-use hickory_resolver::Resolver;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-use hickory_resolver::proto::rr::rdata::svcb::{SvcParamKey, SvcParamValue};
-use hickory_resolver::proto::rr::{RData, RecordType};
+// use hickory_resolver::Resolver;
+// use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+// use hickory_resolver::proto::rr::rdata::svcb::{SvcParamKey, SvcParamValue};
+// use hickory_resolver::proto::rr::{RData, RecordType};
 use log::trace;
 use rustls::RootCertStore;
 use rustls::client::{EchConfig, EchGreaseConfig, EchStatus};
@@ -203,38 +203,38 @@ struct Args {
   inner_hostname: String,
 }
 
-// TODO(@cpu): consider upstreaming to hickory-dns
-fn lookup_ech_configs(resolver: &Resolver, domain: &str, port: u16) -> Option<EchConfigListBytes<'static>> {
-  // For non-standard ports, lookup the ECHConfig using port-prefix naming
-  // See: https://datatracker.ietf.org/doc/html/rfc9460#section-9.1
-  let qname_to_lookup = match port {
-    443 => domain.to_owned(),
-    port => format!("_{port}._https.{domain}"),
-  };
+// // TODO(@cpu): consider upstreaming to hickory-dns
+// fn lookup_ech_configs(resolver: &Resolver, domain: &str, port: u16) -> Option<EchConfigListBytes<'static>> {
+//   // For non-standard ports, lookup the ECHConfig using port-prefix naming
+//   // See: https://datatracker.ietf.org/doc/html/rfc9460#section-9.1
+//   let qname_to_lookup = match port {
+//     443 => domain.to_owned(),
+//     port => format!("_{port}._https.{domain}"),
+//   };
 
-  resolver
-    .lookup(qname_to_lookup, RecordType::HTTPS)
-    .ok()?
-    .record_iter()
-    .find_map(|r| match r.data() {
-      RData::HTTPS(svcb) => svcb.svc_params().iter().find_map(|sp| match sp {
-        (SvcParamKey::EchConfigList, SvcParamValue::EchConfigList(e)) => Some(e.clone().0),
-        _ => None,
-      }),
-      _ => None,
-    })
-    .map(Into::into)
-}
+//   resolver
+//     .lookup(qname_to_lookup, RecordType::HTTPS)
+//     .ok()?
+//     .record_iter()
+//     .find_map(|r| match r.data() {
+//       RData::HTTPS(svcb) => svcb.svc_params().iter().find_map(|sp| match sp {
+//         (SvcParamKey::EchConfigList, SvcParamValue::EchConfigList(e)) => Some(e.clone().0),
+//         _ => None,
+//       }),
+//       _ => None,
+//     })
+//     .map(Into::into)
+// }
 
-fn read_ech(path: &str) -> EchConfigListBytes<'static> {
-  let file = fs::File::open(path).unwrap_or_else(|_| panic!("Cannot open ECH file: {path}"));
-  let mut reader = BufReader::new(file);
-  let mut bytes = Vec::new();
-  reader
-    .read_to_end(&mut bytes)
-    .unwrap_or_else(|_| panic!("Cannot read ECH file: {path}"));
-  bytes.into()
-}
+// fn read_ech(path: &str) -> EchConfigListBytes<'static> {
+//   let file = fs::File::open(path).unwrap_or_else(|_| panic!("Cannot open ECH file: {path}"));
+//   let mut reader = BufReader::new(file);
+//   let mut bytes = Vec::new();
+//   reader
+//     .read_to_end(&mut bytes)
+//     .unwrap_or_else(|_| panic!("Cannot read ECH file: {path}"));
+//   bytes.into()
+// }
 
 /// A HPKE suite to use for GREASE ECH.
 ///

@@ -1,4 +1,5 @@
 use crate::{
+  config::EchProtocolConfig,
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
   destination::{Destination, DestinationBuilder, LoadBalance},
@@ -105,6 +106,7 @@ impl UdpDestinationMuxBuilder {
     lifetime: Option<u32>,
     server_names: Option<&[&str]>,
     alpn: Option<&[&str]>,
+    ech: Option<&EchProtocolConfig>,
   ) -> &mut Self {
     let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
     if udp_dest.is_err() {

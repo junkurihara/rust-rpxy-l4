@@ -68,7 +68,13 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
           .server_names
           .as_ref()
           .map(|v| v.iter().map(|x| x.as_str()).collect::<Vec<&str>>());
-        tcp_mux_builder.dst_tls(target, spec.load_balance.as_ref(), server_names.as_deref(), alpn.as_deref());
+        tcp_mux_builder.dst_tls(
+          target,
+          spec.load_balance.as_ref(),
+          server_names.as_deref(),
+          alpn.as_deref(),
+          spec.ech.as_ref(),
+        );
       }
       /* ---------------------------------------- */
       ProtocolType::Quic => {
@@ -86,6 +92,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
           spec.idle_lifetime,
           server_names.as_deref(),
           alpn.as_deref(),
+          spec.ech.as_ref(),
         );
       }
     }

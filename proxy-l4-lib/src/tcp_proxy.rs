@@ -1,4 +1,5 @@
 use crate::{
+  config::EchProtocolConfig,
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
   destination::{Destination, DestinationBuilder, LoadBalance},
@@ -100,6 +101,7 @@ impl TcpDestinationMuxBuilder {
     load_balance: Option<&LoadBalance>,
     server_names: Option<&[&str]>,
     alpn: Option<&[&str]>,
+    ech: Option<&EchProtocolConfig>,
   ) -> &mut Self {
     let tcp_dest = TcpDestination::try_from((addrs, load_balance));
     if tcp_dest.is_err() {
@@ -433,8 +435,8 @@ mod tests {
       TcpDestinationMuxBuilder::default()
         .dst_any(dst_any, None)
         .dst_ssh(dst_ssh, None)
-        .dst_tls(dst_tls_1, None, None, None)
-        .dst_tls(dst_tls_2, None, Some(&["example.com"]), None)
+        .dst_tls(dst_tls_1, None, None, None, None)
+        .dst_tls(dst_tls_2, None, Some(&["example.com"]), None, None)
         .build()
         .unwrap(),
     );

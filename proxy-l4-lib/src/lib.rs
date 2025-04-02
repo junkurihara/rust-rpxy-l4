@@ -12,7 +12,7 @@ mod trace;
 mod udp_conn;
 mod udp_proxy;
 
-pub use config::{Config, ProtocolConfig};
+pub use config::{Config, EchProtocolConfig, ProtocolConfig};
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
 pub use error::{ProxyBuildError, ProxyError};

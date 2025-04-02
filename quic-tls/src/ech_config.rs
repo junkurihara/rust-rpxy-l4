@@ -6,24 +6,31 @@ use crate::{
   serialize::{Deserialize, SerDeserError, Serialize, compose, parse, read_lengthed},
   trace::*,
 };
+use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use hpke::{
-  Kem, Serializable,
+  Deserializable, Kem, Serializable,
   aead::{Aead, AesGcm128},
   kdf::{HkdfSha256, Kdf},
-  kem::X25519HkdfSha256,
+  kem::{DhP256HkdfSha256, X25519HkdfSha256},
 };
 use std::sync::LazyLock;
 
 /// Describes things that can go wrong in the ECH configuration
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum EchConfigError {
+pub enum EchConfigError {
   /// The version is invalid
   #[error("Invalid version")]
   Version,
   /// Error in serializing/deserializing
   #[error("Error in serializing/deserializing")]
   SerDeser(#[from] SerDeserError),
+  /// Error in base64 encoding/decoding
+  #[error("Error in base64 encoding/decoding")]
+  Base64(#[from] base64::DecodeError),
+  /// Error in importing private key
+  #[error("Error in importing private key")]
+  ImportPrivateKey,
 }
 
 /* ------------------------------------------- */
@@ -38,7 +45,7 @@ static HPKE_KEY_CONFIG_CIPHER_SUITES: LazyLock<Vec<HpkeSymmetricCipherSuite>> = 
 
 #[derive(Debug)]
 /// EchConfigList
-pub(crate) struct EchConfigList {
+pub struct EchConfigList {
   inner: Vec<EchConfig>,
 }
 
@@ -83,37 +90,39 @@ impl Deserialize for EchConfigList {
   }
 }
 
-type VecIter = std::vec::IntoIter<EchConfig>;
-impl IntoIterator for EchConfigList {
-  type Item = EchConfig;
-  type IntoIter = std::iter::Filter<VecIter, fn(&Self::Item) -> bool>;
-  fn into_iter(self) -> Self::IntoIter {
-    self.inner.into_iter().filter(|c| c.version == ECH_CONFIG_VERSION_DRAFT_24)
-  }
-}
 impl From<Vec<EchConfig>> for EchConfigList {
   fn from(inner: Vec<EchConfig>) -> Self {
     Self { inner }
   }
 }
+impl TryFrom<&str> for EchConfigList {
+  type Error = EchConfigError;
+  /// Try from base64 encoded string
+  fn try_from(s: &str) -> Result<Self, Self::Error> {
+    let configs_bytes = BASE64_STANDARD_NO_PAD.decode(s)?;
+    EchConfigList::deserialize(&mut &configs_bytes[..])
+  }
+}
 
 impl EchConfigList {
-  /// Returns the list of associated config ids
-  pub(crate) fn config_ids(&self) -> Vec<u8> {
-    self.inner.iter().map(|c| c.contents.key_config.config_id).collect()
+  /// Iterate over the inner list
+  pub fn iter(&self) -> impl Iterator<Item = &EchConfig> {
+    self.inner.iter()
   }
 
   /// Generate a new EchConfigList with randomly generated key pair
   /// By default, it generates a list of size 1 with a single EchConfig [X25519HkdfSha256 + AesGcm128 + HkdfSha256]
-  pub(crate) fn generate(public_name: &str) -> Result<(Self, Vec<HpkeKeyConfigPrivateKey>), EchConfigError> {
+  pub fn generate(public_name: &str) -> Result<(Self, Vec<EchPrivateKey>), EchConfigError> {
     let kem_id = X25519HkdfSha256::KEM_ID;
     let (sk, pk) = X25519HkdfSha256::gen_keypair(&mut rand::rng());
     // let sk_bytes = Bytes::copy_from_slice(&sk.to_bytes());
     let config_id = rand::random_range(0..=255);
+    let public_name = Bytes::copy_from_slice(public_name.as_bytes());
 
-    let sk = HpkeKeyConfigPrivateKey {
+    let sk = EchPrivateKey {
       private_key: HpkeKemPrivateKey::X25519(sk),
       config_id,
+      public_name: public_name.clone(),
     };
 
     let key_config = HpkeKeyConfig {
@@ -125,7 +134,7 @@ impl EchConfigList {
     let contents = EchConfigContents {
       key_config,
       maximum_name_length: 0,
-      public_name: Bytes::copy_from_slice(public_name.as_bytes()),
+      public_name,
       extensions: vec![],
     };
     let ech_config = EchConfig {
@@ -138,35 +147,92 @@ impl EchConfigList {
   }
 }
 
+#[derive(Clone)]
 /// Hpke KEM private key enum
-pub(crate) enum HpkeKemPrivateKey {
+pub enum HpkeKemPrivateKey {
   /// X25519 private key
   X25519(<X25519HkdfSha256 as Kem>::PrivateKey),
+  /// P256 private key
+  P256(<DhP256HkdfSha256 as Kem>::PrivateKey),
 }
 impl HpkeKemPrivateKey {
   /// Convert to bytes
-  pub(crate) fn to_bytes(&self) -> Bytes {
+  pub fn to_bytes(&self) -> Bytes {
     match self {
       HpkeKemPrivateKey::X25519(sk) => Bytes::copy_from_slice(&sk.to_bytes()),
+      HpkeKemPrivateKey::P256(sk) => Bytes::copy_from_slice(&sk.to_bytes()),
+    }
+  }
+  /// Export public key in bytes
+  fn to_pk_bytes(&self) -> Bytes {
+    match self {
+      HpkeKemPrivateKey::X25519(sk) => Bytes::copy_from_slice(&<X25519HkdfSha256 as Kem>::sk_to_pk(sk).to_bytes()),
+      HpkeKemPrivateKey::P256(sk) => Bytes::copy_from_slice(&<DhP256HkdfSha256 as Kem>::sk_to_pk(sk).to_bytes()),
     }
   }
 }
 
 /// Private key with config id associated with EchConfig.EchConfigContents.key_config
-pub(crate) struct HpkeKeyConfigPrivateKey {
+pub struct EchPrivateKey {
   /// Private key
   private_key: HpkeKemPrivateKey,
   /// Associated HpkeKeyConfig.config_id
   config_id: u8,
+  /// Associated EchConfigContents.public_name
+  public_name: Bytes,
 }
-impl HpkeKeyConfigPrivateKey {
+impl EchPrivateKey {
   /// Convert to bytes
-  pub(crate) fn to_bytes(&self) -> Bytes {
+  pub fn to_bytes(&self) -> Bytes {
     self.private_key.to_bytes()
   }
   /// Get the config id
-  pub(crate) fn config_id(&self) -> u8 {
+  pub fn config_id(&self) -> u8 {
     self.config_id
+  }
+  /// Get the public name
+  pub fn public_name(&self) -> Bytes {
+    self.public_name.clone()
+  }
+  /// Compose private key list matched to given ech_config_list
+  pub fn try_compose_list_from_base64_with_config(
+    base64_sk_list: &[String],
+    ech_config_list: &EchConfigList,
+  ) -> Result<Vec<Self>, EchConfigError> {
+    let sk_pk_bytes_list = base64_sk_list
+      .iter()
+      .map(|base64_sk| {
+        let sk_bytes = BASE64_STANDARD_NO_PAD.decode(base64_sk)?;
+        let sk = if let Ok(sk) = <X25519HkdfSha256 as Kem>::PrivateKey::from_bytes(&sk_bytes) {
+          HpkeKemPrivateKey::X25519(sk)
+        } else if let Ok(sk) = <DhP256HkdfSha256 as Kem>::PrivateKey::from_bytes(&sk_bytes) {
+          HpkeKemPrivateKey::P256(sk)
+        } else {
+          error!("Failed to import private key");
+          return Err(EchConfigError::ImportPrivateKey);
+        };
+        let pk_bytes = sk.to_pk_bytes();
+        Ok((sk, pk_bytes))
+      })
+      .collect::<Result<Vec<_>, _>>()?;
+
+    let mut sk_list = Vec::new();
+    for (sk, pk_bytes) in sk_pk_bytes_list.iter() {
+      if let Some(s) = ech_config_list.iter().find(|c| c.public_key() == *pk_bytes) {
+        let config_id = s.config_id();
+        let public_name = s.public_name();
+        sk_list.push(EchPrivateKey {
+          private_key: sk.clone(),
+          config_id,
+          public_name,
+        });
+      } else {
+        error!("No matching ECH config found for the given private key");
+        return Err(EchConfigError::ImportPrivateKey);
+      }
+    }
+
+    Ok(sk_list)
   }
 }
 
@@ -174,7 +240,7 @@ impl HpkeKeyConfigPrivateKey {
 const ECH_CONFIG_VERSION_DRAFT_24: u16 = 0xfe0d;
 #[derive(Debug)]
 /// ECH Configuration
-pub(crate) struct EchConfig {
+pub struct EchConfig {
   /// Version, must be 0xfe0d
   version: u16,
   /// Content
@@ -226,6 +292,20 @@ impl Deserialize for EchConfig {
   }
 }
 
+impl EchConfig {
+  /// Get the public name
+  pub fn public_name(&self) -> Bytes {
+    self.contents.public_name.clone()
+  }
+  /// Get the config id
+  pub fn config_id(&self) -> u8 {
+    self.contents.key_config.config_id
+  }
+  /// Get the public key in bytes
+  pub fn public_key(&self) -> Bytes {
+    self.contents.key_config.public_key.clone()
+  }
+}
 /* ------------------------------------------- */
 #[derive(Debug)]
 /// EchConfigContents
@@ -437,7 +517,6 @@ impl Deserialize for HpkeSymmetricCipherSuite {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
   use hex_literal::hex;
   use rustls::{client, crypto::aws_lc_rs::hpke::ALL_SUPPORTED_SUITES, pki_types::EchConfigListBytes};
 
@@ -457,12 +536,13 @@ mod tests {
   fn test_gen_my_own_ech_config() {
     let (ech_config_list, sk_list) = EchConfigList::generate("my-public-name.example.com").unwrap();
     let sk_bytes = sk_list.first().unwrap().to_bytes();
-    println!("secret key: {:x?}", BASE64_STANDARD_NO_PAD.encode(sk_bytes));
-    println!("associated config ids: {:?}", ech_config_list.config_ids());
-    assert_eq!(
-      ech_config_list.config_ids().first().unwrap(),
-      &sk_list.first().unwrap().config_id()
-    );
+    let base64_sk = BASE64_STANDARD_NO_PAD.encode(&sk_bytes);
+    println!("secret key: {:x?}", base64_sk);
+    let config_ids = ech_config_list.iter().map(|c| c.config_id()).collect::<Vec<_>>();
+    println!("associated config ids: {:?}", config_ids);
+    assert_eq!(config_ids.first().unwrap(), &sk_list.first().unwrap().config_id());
+    let sk_list = EchPrivateKey::try_compose_list_from_base64_with_config(&[base64_sk], &ech_config_list);
+    assert!(sk_list.is_ok());
 
     let serialized = compose(&ech_config_list).unwrap();
     let buf_base64 = BASE64_STANDARD_NO_PAD.encode(&serialized);

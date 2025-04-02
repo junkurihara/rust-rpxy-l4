@@ -17,6 +17,7 @@ pub(crate) mod trace {
 pub(crate) const SUPPORTED_TLS_VERSIONS: [u16; 3] = [0x0301, 0x0302, 0x303];
 
 pub use client_hello::TlsClientHelloInfo;
+pub use ech_config::{EchConfigError, EchConfigList, EchPrivateKey};
 pub use error::TlsProbeFailure;
 pub use quic::probe_quic_initial_packets;
 pub use tls::probe_tls_handshake;

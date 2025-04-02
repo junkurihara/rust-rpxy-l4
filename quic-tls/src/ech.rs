@@ -33,8 +33,8 @@ pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) {
   let sk = <X25519HkdfSha256 as hpke::Kem>::PrivateKey::from_bytes(&sk_bytes).unwrap();
   let config_list_bytes = BASE64_STANDARD_NO_PAD.decode(ECH_CONFIG_LIST).unwrap();
   let deser_config_list: EchConfigList = parse(&mut config_list_bytes.as_slice()).unwrap();
-  let ech_config = deser_config_list.into_iter().next().unwrap();
-  let config_bytes = compose(&ech_config).unwrap().freeze();
+  let ech_config = deser_config_list.iter().next().unwrap();
+  let config_bytes = compose(ech_config).unwrap().freeze();
 
   let enc_clone = outer.enc.clone();
   println!("enc: {:?}", enc_clone.clone().to_vec());

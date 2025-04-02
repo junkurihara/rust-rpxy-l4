@@ -1,4 +1,5 @@
-use crate::{destination::LoadBalance, proto::ProtocolType};
+use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolType};
+use quic_tls::{EchConfigList, EchPrivateKey};
 use std::net::SocketAddr;
 
 /// Configuration for the proxy service
@@ -41,4 +42,34 @@ pub struct ProtocolConfig {
   pub alpn: Option<Vec<String>>,
   /// Only TLS
   pub server_names: Option<Vec<String>>,
+  /// Only TLS
+  pub ech: Option<EchProtocolConfig>,
+}
+
+/// ECH protocol configuration
+pub struct EchProtocolConfig {
+  /// Base64 encoded ECH config list object
+  pub ech_config_list: EchConfigList,
+  /// List of base64 encoded raw private keys
+  pub private_keys: Vec<EchPrivateKey>,
+}
+
+impl EchProtocolConfig {
+  /// Create a new ECH protocol configuration
+  pub fn try_new(ech_config_list: &str, private_keys: &[String]) -> Result<Self, ProxyBuildError> {
+    let ech_config_list = EchConfigList::try_from(ech_config_list)?;
+    // compose private key list list with checking its consistency with ech config list
+    let private_keys = EchPrivateKey::try_compose_list_from_base64_with_config(private_keys, &ech_config_list)?;
+
+    if private_keys.is_empty() {
+      return Err(ProxyBuildError::InvalidEchPrivateKey(format!(
+        "No valid private keys found for ECH config list: {ech_config_list:?}"
+      )));
+    }
+
+    Ok(Self {
+      ech_config_list,
+      private_keys,
+    })
+  }
 }

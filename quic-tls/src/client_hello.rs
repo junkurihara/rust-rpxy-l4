@@ -24,41 +24,6 @@ impl ExtensionType {
   const OUTER_EXTENSIONS: u16 = 0xfd00;
 }
 
-// /* ---------------------------------------------------------- */
-// #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-// /// Extracted partial information from probed TLS ClientHello message
-// pub struct TlsClientHelloInfo {
-//   /// SNI
-//   pub sni: Vec<String>,
-//   /// ALPN
-//   #[allow(unused)]
-//   pub alpn: Vec<String>,
-//   //TODO: /// ECH info
-// }
-
-// impl From<TlsClientHello> for TlsClientHelloInfo {
-//   fn from(client_hello: TlsClientHello) -> Self {
-//     let mut sni = Vec::new();
-//     let mut alpn = Vec::new();
-//     for ext in client_hello.extensions {
-//       match ext {
-//         TlsClientHelloExtension::Sni(sni_ext) => {
-//           for server_name in sni_ext.server_name_list {
-//             sni.push(String::from_utf8_lossy(&server_name.name).to_string());
-//           }
-//         }
-//         TlsClientHelloExtension::Alpn(alpn_ext) => {
-//           for protocol_name in alpn_ext.protocol_name_list {
-//             alpn.push(String::from_utf8_lossy(&protocol_name.inner).to_string());
-//           }
-//         }
-//         _ => {}
-//       }
-//     }
-//     TlsClientHelloInfo { sni, alpn }
-//   }
-// }
-
 /* ---------------------------------------------------------- */
 /// Check if the buffer has a valid handshake message containing a TLS ClientHello
 /// https://datatracker.ietf.org/doc/html/rfc8446#section-4

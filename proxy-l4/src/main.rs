@@ -1,3 +1,6 @@
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod config;
 mod log;
 
@@ -227,12 +230,6 @@ impl ProxyService {
       error!("No proxy service is configured");
       return Err(anyhow::anyhow!("No proxy service is configured"));
     }
-
-    // let child_token = cancel_token.clone();
-    // tokio::spawn(async move {
-    //   tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-    //   child_token.cancel();
-    // });
 
     let _ = futures::future::select_all(join_handles.into_iter()).await;
     // Kill all spawned services

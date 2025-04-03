@@ -1,6 +1,6 @@
 use crate::{
   EchPrivateKey,
-  client_hello::TlsClientHello,
+  client_hello::{TlsClientHello, TlsClientHelloExtension},
   ech_config::{EchConfig, HpkeKemPrivateKey},
   ech_extension::ClientHelloOuter,
   error::TlsClientHelloError,
@@ -46,7 +46,7 @@ impl TlsClientHello {
         .iter()
         .find(|key| key.config_id() == config_id && key.cipher_suites().contains(cipher_suite))
       else {
-        warn!("No matching ECH private key found for config_id and cipher_suite: {config_id}");
+        warn!("No matching ECH private key found for config_id({config_id}) and cipher_suite, possibly GREASE");
         warn!("Currently, we do no support replying with retry_configs, and just forward the ClientHelloOuter to the backend");
         // TODO: As per https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1
         // we should do:
@@ -71,7 +71,7 @@ impl TlsClientHello {
       return Err(TlsClientHelloError::PublicNameMismatch);
     }
 
-    debug!("Decrypted client hello outer: {decrypted_ch:#?}");
+    debug!("Decrypted and recomposed client hello inner: {decrypted_ch:#?}");
     Ok(Some(decrypted_ch))
   }
 
@@ -150,8 +150,9 @@ impl TlsClientHello {
       }
     };
 
-    let client_hello_inner: TlsClientHello = parse(&mut encoded_client_hello_inner.as_slice())?;
-    // TODO: recompose the ClientHelloInner
+    let mut client_hello_inner: TlsClientHello = parse(&mut encoded_client_hello_inner.as_slice())?;
+    // Recompose the ClientHelloInner
+    self.recompose_client_hello_inner(&mut client_hello_inner)?;
     Ok(client_hello_inner)
   }
 
@@ -163,6 +164,46 @@ impl TlsClientHello {
     cloned.fill_ech_payload_with_zeros();
     let aad = compose(cloned)?.freeze();
     Ok(aad)
+  }
+
+  /// Recompose the full ClientHelloInner from the decrypted and compressed ClientHelloInner with the information of ClientHelloOuter
+  fn recompose_client_hello_inner(&self, compressed_inner: &mut TlsClientHello) -> Result<(), TlsClientHelloError> {
+    // Check if self is outer and compressed_inner is inner
+    if !self.is_ech_outer() || !compressed_inner.is_ech_inner() {
+      error!("Attempted to recompose ClientHelloInner from non-ECH outer or non-ECH inner");
+      return Err(TlsClientHelloError::InvalidClientHelloRecomposition);
+    }
+    let outer_extensions = self.extensions();
+    let mut outer_extensions = outer_extensions.iter();
+
+    let mut new_extensions = Vec::new();
+    let inner_extensions = compressed_inner.extensions();
+    for ext in inner_extensions.iter() {
+      if let TlsClientHelloExtension::OuterExtensions(outer_extensions_ext) = ext {
+        trace!("OuterExtensions extension found: {:?}", outer_extensions_ext);
+        // If outer extensions extension found, copy extensions in self.extensions() matched with extension_type
+        let mut exts_in_outer = Vec::new();
+        for outer_ext_type in outer_extensions_ext.iter() {
+          // Proceed to the next extension until the matched one is found
+          for outer_ext in outer_extensions.by_ref() {
+            if outer_ext.extension_type() == outer_ext_type {
+              exts_in_outer.push(outer_ext.clone());
+              break;
+            }
+          }
+        }
+        if exts_in_outer.len() != outer_extensions_ext.len() {
+          error!("Not all outer extensions found in self.extensions()");
+          return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
+        }
+        new_extensions.extend(exts_in_outer);
+      } else {
+        new_extensions.push(ext.clone());
+      }
+    }
+
+    compressed_inner.add_replace_extensions(&new_extensions);
+    Ok(())
   }
 }
 
@@ -182,5 +223,17 @@ pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) {
   let ech_private_key_list =
     EchPrivateKey::try_compose_list_from_base64_with_config(&[ECH_SECRET_KEY.to_string()], &ech_config_list).unwrap();
 
-  let _ = client_hello.decrypt_ech(&ech_private_key_list, false);
+  let res = client_hello.decrypt_ech(&ech_private_key_list, false);
+
+  match res {
+    Ok(Some(decrypted_ch)) => {
+      trace!("is_inner: {}", decrypted_ch.is_ech_inner());
+    }
+    Ok(None) => {
+      trace!("nothing to decrypt, possibly grease");
+    }
+    Err(e) => {
+      error!("Something going wrong: {}", e);
+    }
+  }
 }

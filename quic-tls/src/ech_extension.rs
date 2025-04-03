@@ -160,6 +160,18 @@ pub struct OuterExtensions {
   /// Extension types removed from the ClientHelloInner
   outer_extensions: Vec<u16>,
 }
+
+impl OuterExtensions {
+  // Iterator for outer extensions
+  pub(crate) fn iter(&self) -> impl Iterator<Item = u16> + '_ {
+    self.outer_extensions.iter().copied()
+  }
+  // length of outer extensions
+  pub(crate) fn len(&self) -> usize {
+    self.outer_extensions.len()
+  }
+}
+
 impl std::fmt::Display for OuterExtensions {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "ECH OuterExtensions: {:?}", self.outer_extensions)

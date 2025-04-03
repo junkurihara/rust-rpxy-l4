@@ -167,6 +167,15 @@ impl TlsClientHello {
     self.extensions.push(TlsClientHelloExtension::Alpn(protocol_name.clone()));
   }
 
+  /// Get extensions
+  pub(crate) fn extensions(&self) -> Vec<TlsClientHelloExtension> {
+    self.extensions.clone()
+  }
+  /// Add or replace all extensions
+  pub(crate) fn add_replace_extensions(&mut self, extensions: &[TlsClientHelloExtension]) {
+    self.extensions = extensions.to_vec();
+  }
+
   /// Is ech outer?
   pub(crate) fn is_ech_outer(&self) -> bool {
     self
@@ -215,6 +224,19 @@ pub enum TlsClientHelloExtension {
   OuterExtensions(OuterExtensions),
   /// Other
   Other(OtherTlsClientHelloExtension),
+}
+
+impl TlsClientHelloExtension {
+  /// Get extension type
+  pub fn extension_type(&self) -> u16 {
+    match self {
+      TlsClientHelloExtension::Sni(_) => ExtensionType::SNI,
+      TlsClientHelloExtension::Alpn(_) => ExtensionType::ALPN,
+      TlsClientHelloExtension::Ech(_) => ExtensionType::ECH,
+      TlsClientHelloExtension::OuterExtensions(_) => ExtensionType::OUTER_EXTENSIONS,
+      TlsClientHelloExtension::Other(other) => other.extension_type,
+    }
+  }
 }
 
 impl std::fmt::Display for TlsClientHelloExtension {

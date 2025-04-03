@@ -30,6 +30,8 @@ pub enum TlsClientHelloError {
   HpkeError(hpke::HpkeError),
   #[error("ECH config public_name mismatched with SNI in client hello outer")]
   PublicNameMismatch,
+  #[error("Invalid Ech ClientHello Inner recomposition attempt")]
+  InvalidClientHelloRecomposition,
 
   #[error("Error in serialization/deserialization")]
   SerDeserError(#[from] SerDeserError),

@@ -33,13 +33,13 @@ impl std::fmt::Display for EncryptedClientHello {
 /// Outer ClientHello
 pub struct ClientHelloOuter {
   /// Cipher suite
-  pub(crate) cipher_suite: HpkeSymmetricCipherSuite,
+  cipher_suite: HpkeSymmetricCipherSuite,
   /// Config ID
-  pub(crate) config_id: u8,
+  config_id: u8,
   /// enc (e.g, Public key of the peer)
-  pub(crate) enc: Bytes,
+  enc: Bytes,
   /// payload (encrypted body)
-  pub(crate) payload: Bytes,
+  payload: Bytes,
 }
 impl ClientHelloOuter {
   /// Fill the payload with zeros for AAD calculation
@@ -48,6 +48,18 @@ impl ClientHelloOuter {
     let payload_len = self.payload.len();
     let payload = vec![0; payload_len];
     self.payload = Bytes::from(payload);
+  }
+  pub(crate) fn cipher_suite(&self) -> &HpkeSymmetricCipherSuite {
+    &self.cipher_suite
+  }
+  pub(crate) fn config_id(&self) -> u8 {
+    self.config_id
+  }
+  pub(crate) fn enc(&self) -> &Bytes {
+    &self.enc
+  }
+  pub(crate) fn payload(&self) -> &Bytes {
+    &self.payload
   }
 }
 /* ------------------------------------------- */

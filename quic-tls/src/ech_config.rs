@@ -119,12 +119,6 @@ impl EchConfigList {
     let config_id = rand::random_range(0..=255);
     let public_name = Bytes::copy_from_slice(public_name.as_bytes());
 
-    let sk = EchPrivateKey {
-      private_key: HpkeKemPrivateKey::X25519(sk),
-      config_id,
-      public_name: public_name.clone(),
-    };
-
     let key_config = HpkeKeyConfig {
       config_id,
       kem_id,
@@ -141,7 +135,12 @@ impl EchConfigList {
       version: ECH_CONFIG_VERSION_DRAFT_24,
       contents,
     };
-    let ech_config_list = EchConfigList::from(vec![ech_config]);
+    let ech_config_list = EchConfigList::from(vec![ech_config.clone()]);
+
+    let sk = EchPrivateKey {
+      private_key: HpkeKemPrivateKey::X25519(sk),
+      config: ech_config,
+    };
 
     Ok((ech_config_list, vec![sk]))
   }
@@ -176,23 +175,34 @@ impl HpkeKemPrivateKey {
 pub struct EchPrivateKey {
   /// Private key
   private_key: HpkeKemPrivateKey,
-  /// Associated HpkeKeyConfig.config_id
-  config_id: u8,
-  /// Associated EchConfigContents.public_name
-  public_name: Bytes,
+  /// Associated EchConfig
+  config: EchConfig,
 }
+#[allow(unused)]
 impl EchPrivateKey {
   /// Convert to bytes
   pub fn to_bytes(&self) -> Bytes {
     self.private_key.to_bytes()
   }
+  /// Get the private key
+  pub fn private_key(&self) -> &HpkeKemPrivateKey {
+    &self.private_key
+  }
+  /// Get ech_config
+  pub fn ech_config(&self) -> &EchConfig {
+    &self.config
+  }
   /// Get the config id
-  pub fn config_id(&self) -> u8 {
-    self.config_id
+  pub(crate) fn config_id(&self) -> u8 {
+    self.config.config_id()
   }
   /// Get the public name
-  pub fn public_name(&self) -> Bytes {
-    self.public_name.clone()
+  pub(crate) fn public_name(&self) -> Bytes {
+    self.config.public_name()
+  }
+  /// Get the available symmetric cipher suites
+  pub(crate) fn cipher_suites(&self) -> &[HpkeSymmetricCipherSuite] {
+    self.config.cipher_suites()
   }
   /// Compose private key list matched to given ech_config_list
   pub fn try_compose_list_from_base64_with_config(
@@ -218,13 +228,10 @@ impl EchPrivateKey {
 
     let mut sk_list = Vec::new();
     for (sk, pk_bytes) in sk_pk_bytes_list.iter() {
-      if let Some(s) = ech_config_list.iter().find(|c| c.public_key() == *pk_bytes) {
-        let config_id = s.config_id();
-        let public_name = s.public_name();
+      if let Some(config) = ech_config_list.iter().find(|c| c.public_key() == *pk_bytes) {
         sk_list.push(EchPrivateKey {
           private_key: sk.clone(),
-          config_id,
-          public_name,
+          config: config.clone(),
         });
       } else {
         error!("No matching ECH config found for the given private key");
@@ -238,7 +245,7 @@ impl EchPrivateKey {
 
 /* ------------------------------------------- */
 const ECH_CONFIG_VERSION_DRAFT_24: u16 = 0xfe0d;
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// ECH Configuration
 pub struct EchConfig {
   /// Version, must be 0xfe0d
@@ -292,22 +299,31 @@ impl Deserialize for EchConfig {
   }
 }
 
+#[allow(unused)]
 impl EchConfig {
   /// Get the public name
-  pub fn public_name(&self) -> Bytes {
+  pub(crate) fn public_name(&self) -> Bytes {
     self.contents.public_name.clone()
   }
   /// Get the config id
-  pub fn config_id(&self) -> u8 {
+  pub(crate) fn config_id(&self) -> u8 {
     self.contents.key_config.config_id
   }
   /// Get the public key in bytes
-  pub fn public_key(&self) -> Bytes {
+  pub(crate) fn public_key(&self) -> Bytes {
     self.contents.key_config.public_key.clone()
+  }
+  /// Get the kem id
+  pub(crate) fn kem_id(&self) -> u16 {
+    self.contents.key_config.kem_id
+  }
+  /// Get the available symmetric cipher suites
+  pub(crate) fn cipher_suites(&self) -> &[HpkeSymmetricCipherSuite] {
+    &self.contents.key_config.cipher_suites
   }
 }
 /* ------------------------------------------- */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// EchConfigContents
 pub(crate) struct EchConfigContents {
   /// public key and cipher suites
@@ -380,7 +396,7 @@ impl Deserialize for EchConfigContents {
 }
 
 /* ------------------------------------------- */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// EchConfigExtension
 pub(crate) struct EchConfigExtension {
   /// EchConfigExtensionType
@@ -412,7 +428,7 @@ impl Deserialize for EchConfigExtension {
 }
 
 /* ------------------------------------------- */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// HpkeKeyConfig
 pub(crate) struct HpkeKeyConfig {
   /// config id

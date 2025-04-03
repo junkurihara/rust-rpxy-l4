@@ -48,9 +48,7 @@ pub struct ProtocolConfig {
 
 /// ECH protocol configuration
 pub struct EchProtocolConfig {
-  /// Base64 encoded ECH config list object
-  pub ech_config_list: EchConfigList,
-  /// List of base64 encoded raw private keys
+  /// List of private keys, each of which is associated with a ech config id
   pub private_keys: Vec<EchPrivateKey>,
 }
 
@@ -67,9 +65,6 @@ impl EchProtocolConfig {
       )));
     }
 
-    Ok(Self {
-      ech_config_list,
-      private_keys,
-    })
+    Ok(Self { private_keys })
   }
 }

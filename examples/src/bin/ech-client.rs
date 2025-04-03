@@ -133,7 +133,11 @@ fn main() {
       args.host.as_ref().unwrap_or(&args.inner_hostname),
     );
     dbg!(&request);
-    tls.write_all(request.as_bytes()).unwrap();
+    let res = tls.write_all(request.as_bytes());
+    if let Err(e) = res {
+      eprintln!("Error writing to socket: {:#?}", e);
+      return;
+    }
     assert!(!tls.conn.is_handshaking());
     assert_eq!(
       tls.conn.ech_status(),

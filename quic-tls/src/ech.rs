@@ -209,7 +209,7 @@ impl TlsClientHello {
 
 ///////////////////////////////////
 /// TODO: REMOVE LATER, JUST FOR PROOF OF CONCEPT
-pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) {
+pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) -> TlsClientHello {
   use crate::ech_config::EchConfigList;
   use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 
@@ -225,7 +225,7 @@ pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) {
 
   let res = client_hello.decrypt_ech(&ech_private_key_list, false);
 
-  match res {
+  match res.as_ref() {
     Ok(Some(decrypted_ch)) => {
       trace!("is_inner: {}", decrypted_ch.is_ech_inner());
     }
@@ -236,4 +236,5 @@ pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) {
       error!("Something going wrong: {}", e);
     }
   }
+  res.unwrap().unwrap()
 }

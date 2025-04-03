@@ -9,7 +9,7 @@ use crate::{
   trace::*,
 };
 use bytes::BytesMut;
-use quic_tls::{TlsClientHelloInfo, TlsProbeFailure, probe_tls_handshake};
+use quic_tls::{TlsClientHello, TlsProbeFailure, probe_tls_handshake};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
   io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional},
@@ -196,7 +196,7 @@ pub(crate) enum TcpProxyProtocol {
   /// Plaintext HTTP
   Http,
   /// TLS
-  Tls(TlsClientHelloInfo),
+  Tls(TlsClientHello),
   // TODO: and more ...
 }
 
@@ -212,7 +212,7 @@ impl std::fmt::Display for TcpProxyProtocol {
   }
 }
 
-/// Peek the incoming TCP stream to detect the protocol
+/// Poll the incoming TCP stream to detect the protocol
 async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<usize, ProxyError> {
   let read_len = incoming_stream.read_buf(buf).await?;
   if read_len == 0 {
@@ -423,6 +423,7 @@ impl TcpProxy {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use quic_tls::extension::ServerNameIndication;
 
   #[tokio::test]
   async fn test_tcp_proxy() {
@@ -441,20 +442,21 @@ mod tests {
         .unwrap(),
     );
     // check for example.com tls
-    let chi = TlsClientHelloInfo {
-      sni: vec!["example.com".to_string()],
-      alpn: vec!["".to_string()],
-    };
-    let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(chi)).unwrap();
+    let mut sni = ServerNameIndication::default();
+    sni.add_server_name("example.com");
+    let mut ch = TlsClientHello::default();
+    ch.add_replace_sni(&sni);
+
+    let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(ch)).unwrap();
     let destination = found.inner.get_destination(&"127.0.0.1:60000".parse().unwrap()).unwrap();
     assert_eq!(destination, &"127.0.0.1:50444".parse().unwrap());
 
     // check for unspecified tls
-    let chi = TlsClientHelloInfo {
-      sni: vec!["any.com".to_string()],
-      alpn: vec!["".to_string()],
-    };
-    let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(chi)).unwrap();
+    let mut sni = ServerNameIndication::default();
+    sni.add_server_name("any.com");
+    let ch = TlsClientHello::default();
+
+    let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(ch)).unwrap();
     let destination = found.inner.get_destination(&"127.0.0.1:60000".parse().unwrap()).unwrap();
     assert_eq!(destination, &"127.0.0.1:50443".parse().unwrap());
 

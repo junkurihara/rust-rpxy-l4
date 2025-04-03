@@ -1,5 +1,5 @@
 use crate::{
-  client_hello::{TlsClientHello, TlsClientHelloInfo, probe_tls_client_hello, probe_tls_handshake_message},
+  client_hello::{TlsClientHello, probe_tls_client_hello, probe_tls_handshake_message},
   error::TlsProbeFailure,
   trace::*,
 };
@@ -11,7 +11,7 @@ const QUIC_VERSION_LEN: usize = 4;
 /// Is QUIC initial packets contained?
 /// We consider initial packets only since only communication initiated from the client is expected.
 /// Version negotiation packet is sent by the server as a response to the client
-pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
+pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClientHello, TlsProbeFailure> {
   if udp_datagrams.is_empty() || udp_datagrams.iter().any(|p| p.is_empty()) {
     return Err(TlsProbeFailure::Failure);
   }
@@ -40,7 +40,7 @@ pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClient
     .filter(|p| matches!(p.packet_type, QuicCoalesceablePacketType::Initial))
     .collect::<Vec<_>>();
 
-  probe_quic_unprotected_frames(&unprotected).map(|ch| ch.into())
+  probe_quic_unprotected_frames(&unprotected)
 }
 
 // /* ---------------------------------------------------- */

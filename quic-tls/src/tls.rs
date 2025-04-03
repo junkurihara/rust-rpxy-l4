@@ -1,6 +1,6 @@
 use crate::{
   SUPPORTED_TLS_VERSIONS,
-  client_hello::{TlsClientHelloInfo, probe_tls_client_hello, probe_tls_handshake_message},
+  client_hello::{TlsClientHello, probe_tls_client_hello, probe_tls_handshake_message},
   error::TlsProbeFailure,
   trace::*,
 };
@@ -14,7 +14,7 @@ const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
 /// Check if the buffer is a TLSPlaintext record
 /// This is inspired by https://github.com/yrutschle/sslh/blob/master/tls.c
 /// Support TLS Record layer fragmentation https://datatracker.ietf.org/doc/html/rfc8446#section-5.1
-pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
+pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHello, TlsProbeFailure> {
   let mut tls_plaintext = BytesMut::new();
 
   while buf.remaining() > 0 {
@@ -57,7 +57,7 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloInfo, Tl
     Some(client_hello) => {
       // // TODO: remove later, checking ech
       // crate::ech::decrypt_ech(&client_hello);
-      Ok(client_hello.into())
+      Ok(client_hello)
     }
     None => Err(TlsProbeFailure::Failure),
   }

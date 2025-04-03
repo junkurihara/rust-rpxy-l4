@@ -120,9 +120,11 @@ impl<T> TlsDestinations<T> {
     self.inner.push((TlsMatchingRule::from((server_names, alpn)), dest));
   }
   /// Find a destination by SNI
-  pub fn find(&self, received_client_hello: &quic_tls::TlsClientHelloInfo) -> Option<&T> {
-    let received_sni = received_client_hello.sni.iter().map(|v| v.to_lowercase());
-    let received_alpn = received_client_hello.alpn.iter().map(|v| v.to_lowercase());
+  pub fn find(&self, received_client_hello: &quic_tls::TlsClientHello) -> Option<&T> {
+    let sni = received_client_hello.sni();
+    let alpn = received_client_hello.alpn();
+    let received_sni = sni.iter().map(|v| v.to_lowercase());
+    let received_alpn = alpn.iter().map(|v| v.to_lowercase());
 
     let filtered = {
       let filtered = self.inner.iter().filter(|(rule, _)| {
@@ -214,61 +216,85 @@ mod tests {
 
     // Test SNI
     // Match only sni
-    let mut received = quic_tls::TlsClientHelloInfo {
-      sni: vec!["example.com".to_string()],
-      alpn: Vec::new(),
-    };
+    let mut received = quic_tls::TlsClientHello::default();
+
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.com");
+    received.add_replace_sni(&sni);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"127.0.0.1"));
 
-    received.sni = vec!["example.org".to_string()];
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.org");
+    received.add_replace_sni(&sni);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"192.168.0.1"));
 
     // Doesn't match sni
-    received.sni = vec!["example.net".to_string()];
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.net");
+    received.add_replace_sni(&sni);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"1.1.1.1"));
 
     // Doesn't match sni
-    received.sni = vec!["example.io".to_string()];
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.io");
+    received.add_replace_sni(&sni);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"1.1.1.1"));
 
     // Test ALPN
     // Match only alpn
-    received.sni = vec![];
-    received.alpn = vec!["h2".to_string()];
+    let mut received = quic_tls::TlsClientHello::default();
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h2");
+    received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"8.8.8.8"));
 
     // Doesn't match alpn
-    received.alpn = vec!["h3".to_string()];
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h3");
+    received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"1.1.1.1"));
 
     // Test both SNI and ALPN
     // Match both sni and alpn to single destination
-    received.sni = vec!["example.com".to_string()];
-    received.alpn = vec!["h2".to_string()];
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.com");
+    received.add_replace_sni(&sni);
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h2");
+    received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"127.0.0.2"));
 
     // Match sni but doesn't match alpn
-    received.sni = vec!["example.com".to_string()];
-    received.alpn = vec!["h3".to_string()];
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h3");
+    received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"127.0.0.1"));
 
     // Match sni and alpn "independently", sni is prioritized
-    received.sni = vec!["example.org".to_string()];
-    received.alpn = vec!["h2".to_string()];
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.org");
+    received.add_replace_sni(&sni);
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h2");
+    received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"192.168.0.1"));
 
     // Match neither sni nor alpn
-    received.sni = vec!["example.net".to_string()];
-    received.alpn = vec!["h3".to_string()];
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.net");
+    received.add_replace_sni(&sni);
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h3");
+    received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest, Some(&"1.1.1.1"));
   }

@@ -10,7 +10,7 @@ use crate::{
   trace::{debug, error, info, warn},
   udp_conn::UdpConnectionPool,
 };
-use quic_tls::{TlsClientHelloInfo, TlsProbeFailure, probe_quic_initial_packets};
+use quic_tls::{TlsClientHello, TlsProbeFailure, probe_quic_initial_packets};
 use std::{
   net::SocketAddr,
   sync::{Arc, atomic::AtomicU64},
@@ -185,7 +185,7 @@ pub(crate) enum UdpProxyProtocol {
   /// wireguard
   Wireguard,
   /// quic
-  Quic(TlsClientHelloInfo),
+  Quic(TlsClientHello),
   // TODO: and more ...
 }
 

@@ -11,9 +11,9 @@ use crate::{
 };
 
 /* ------------------------------------------- */
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TLS ClientHello EncryptedClientHello extension
-pub(crate) enum EncryptedClientHello {
+pub enum EncryptedClientHello {
   /// outer ClientHello (0)
   Outer(ClientHelloOuter),
   /// inner ClientHello, which is always empty (1)
@@ -29,9 +29,9 @@ impl std::fmt::Display for EncryptedClientHello {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Outer ClientHello
-pub(crate) struct ClientHelloOuter {
+pub struct ClientHelloOuter {
   /// Cipher suite
   pub(crate) cipher_suite: HpkeSymmetricCipherSuite,
   /// Config ID
@@ -142,9 +142,9 @@ impl Serialize for ClientHelloOuter {
 }
 
 /* ------------------------------------------- */
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TLS ClientHello OuterExtensions extension, presented only in inner ClientHello (decrypted ECH payload)
-pub(crate) struct OuterExtensions {
+pub struct OuterExtensions {
   /// Extension types removed from the ClientHelloInner
   outer_extensions: Vec<u16>,
 }

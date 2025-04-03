@@ -24,40 +24,40 @@ impl ExtensionType {
   const OUTER_EXTENSIONS: u16 = 0xfd00;
 }
 
-/* ---------------------------------------------------------- */
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-/// Extracted partial information from probed TLS ClientHello message
-pub struct TlsClientHelloInfo {
-  /// SNI
-  pub sni: Vec<String>,
-  /// ALPN
-  #[allow(unused)]
-  pub alpn: Vec<String>,
-  //TODO: /// ECH info
-}
+// /* ---------------------------------------------------------- */
+// #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+// /// Extracted partial information from probed TLS ClientHello message
+// pub struct TlsClientHelloInfo {
+//   /// SNI
+//   pub sni: Vec<String>,
+//   /// ALPN
+//   #[allow(unused)]
+//   pub alpn: Vec<String>,
+//   //TODO: /// ECH info
+// }
 
-impl From<TlsClientHello> for TlsClientHelloInfo {
-  fn from(client_hello: TlsClientHello) -> Self {
-    let mut sni = Vec::new();
-    let mut alpn = Vec::new();
-    for ext in client_hello.extensions {
-      match ext {
-        TlsClientHelloExtension::Sni(sni_ext) => {
-          for server_name in sni_ext.server_name_list {
-            sni.push(String::from_utf8_lossy(&server_name.name).to_string());
-          }
-        }
-        TlsClientHelloExtension::Alpn(alpn_ext) => {
-          for protocol_name in alpn_ext.protocol_name_list {
-            alpn.push(String::from_utf8_lossy(&protocol_name.inner).to_string());
-          }
-        }
-        _ => {}
-      }
-    }
-    TlsClientHelloInfo { sni, alpn }
-  }
-}
+// impl From<TlsClientHello> for TlsClientHelloInfo {
+//   fn from(client_hello: TlsClientHello) -> Self {
+//     let mut sni = Vec::new();
+//     let mut alpn = Vec::new();
+//     for ext in client_hello.extensions {
+//       match ext {
+//         TlsClientHelloExtension::Sni(sni_ext) => {
+//           for server_name in sni_ext.server_name_list {
+//             sni.push(String::from_utf8_lossy(&server_name.name).to_string());
+//           }
+//         }
+//         TlsClientHelloExtension::Alpn(alpn_ext) => {
+//           for protocol_name in alpn_ext.protocol_name_list {
+//             alpn.push(String::from_utf8_lossy(&protocol_name.inner).to_string());
+//           }
+//         }
+//         _ => {}
+//       }
+//     }
+//     TlsClientHelloInfo { sni, alpn }
+//   }
+// }
 
 /* ---------------------------------------------------------- */
 /// Check if the buffer has a valid handshake message containing a TLS ClientHello
@@ -109,10 +109,10 @@ pub(crate) fn probe_tls_client_hello<B: Buf>(buf: &mut B) -> Option<TlsClientHel
 
 /* ---------------------------------------------------------- */
 #[allow(unused)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TLS ClientHello
 /// https://datatracker.ietf.org/doc/html/rfc8446#section-4.1.2
-pub(crate) struct TlsClientHello {
+pub struct TlsClientHello {
   /// TLS version
   protocol_version: u16,
   /// Random bytes
@@ -127,7 +127,81 @@ pub(crate) struct TlsClientHello {
   extensions: Vec<TlsClientHelloExtension>,
 }
 
+impl Default for TlsClientHello {
+  fn default() -> Self {
+    TlsClientHello {
+      protocol_version: 0x0303,
+      random: [0u8; 32],
+      legacy_session_id: Bytes::new(),
+      cipher_suites: Bytes::new(),
+      legacy_compression_methods: Bytes::new(),
+      extensions: Vec::new(),
+    }
+  }
+}
+
 impl TlsClientHello {
+  // Get SNIs
+  pub fn sni(&self) -> Vec<String> {
+    self
+      .extensions
+      .iter()
+      .find_map(|ext| {
+        if let TlsClientHelloExtension::Sni(sni) = ext {
+          let snis = sni
+            .server_name_list
+            .iter()
+            .map(|sever_name| String::from_utf8_lossy(&sever_name.name).to_string())
+            .collect::<Vec<String>>();
+          Some(snis)
+        } else {
+          None
+        }
+      })
+      .unwrap_or_default()
+  }
+  /// Add or replace SNI extension
+  pub fn add_replace_sni(&mut self, server_name: &ServerNameIndication) {
+    if let Some(pos) = self
+      .extensions
+      .iter()
+      .position(|ext| matches!(ext, TlsClientHelloExtension::Sni(_)))
+    {
+      self.extensions.remove(pos);
+    }
+    self.extensions.push(TlsClientHelloExtension::Sni(server_name.clone()));
+  }
+  // Get ALPNs
+  pub fn alpn(&self) -> Vec<String> {
+    self
+      .extensions
+      .iter()
+      .find_map(|ext| {
+        if let TlsClientHelloExtension::Alpn(alpn) = ext {
+          let alpn = alpn
+            .protocol_name_list
+            .iter()
+            .map(|protocol_name| String::from_utf8_lossy(&protocol_name.inner).to_string())
+            .collect::<Vec<String>>();
+          Some(alpn)
+        } else {
+          None
+        }
+      })
+      .unwrap_or_default()
+  }
+  /// Add or replace ALPN extension
+  pub fn add_replace_alpn(&mut self, protocol_name: &ApplicationLayerProtocolNegotiation) {
+    if let Some(pos) = self
+      .extensions
+      .iter()
+      .position(|ext| matches!(ext, TlsClientHelloExtension::Alpn(_)))
+    {
+      self.extensions.remove(pos);
+    }
+    self.extensions.push(TlsClientHelloExtension::Alpn(protocol_name.clone()));
+  }
+
   /// Is ech outer?
   pub(crate) fn is_ech_outer(&self) -> bool {
     self
@@ -163,9 +237,9 @@ impl TlsClientHello {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TLS ClientHello Extension
-pub(crate) enum TlsClientHelloExtension {
+pub enum TlsClientHelloExtension {
   /// Server Name Indication
   Sni(ServerNameIndication),
   /// Application-Layer Protocol Negotiation
@@ -190,11 +264,20 @@ impl std::fmt::Display for TlsClientHelloExtension {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 /// TLS ClientHello SNI Extension
-pub(crate) struct ServerNameIndication {
+pub struct ServerNameIndication {
   /// Server name list
   server_name_list: Vec<ServerName>,
+}
+impl ServerNameIndication {
+  /// add a server name
+  pub fn add_server_name(&mut self, server_name: &str) {
+    let server_name = server_name.to_string();
+    if !self.server_name_list.iter().any(|s| s.to_string() == server_name) {
+      self.server_name_list.push(ServerName::new(server_name.into()));
+    }
+  }
 }
 
 impl std::fmt::Display for ServerNameIndication {
@@ -210,7 +293,7 @@ impl std::fmt::Display for ServerNameIndication {
 }
 
 #[allow(unused)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TLS ClientHello SNI Extension Server Name
 pub(crate) struct ServerName {
   /// Server name Type, 0x00 = Hostname is the only type
@@ -219,17 +302,36 @@ pub(crate) struct ServerName {
   name: Bytes,
 }
 
+impl ServerName {
+  /// Instantiate a new ServerName
+  pub fn new(name: Bytes) -> Self {
+    ServerName { name_type: 0x00, name }
+  }
+}
+
 impl std::fmt::Display for ServerName {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "{}", String::from_utf8_lossy(&self.name))
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 /// TLS ClientHello ALPN Extension
-pub(crate) struct ApplicationLayerProtocolNegotiation {
+pub struct ApplicationLayerProtocolNegotiation {
   /// Protocol name list
   protocol_name_list: Vec<ProtocolName>,
+}
+
+impl ApplicationLayerProtocolNegotiation {
+  /// add a protocol name
+  pub fn add_protocol_name(&mut self, protocol_name: &str) {
+    let protocol_name = protocol_name.to_string();
+    if !self.protocol_name_list.iter().any(|s| s.to_string() == protocol_name) {
+      self.protocol_name_list.push(ProtocolName {
+        inner: protocol_name.into(),
+      });
+    }
+  }
 }
 
 impl std::fmt::Display for ApplicationLayerProtocolNegotiation {
@@ -244,7 +346,7 @@ impl std::fmt::Display for ApplicationLayerProtocolNegotiation {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TLS ClientHello ALPN Extension Protocol Name
 pub(crate) struct ProtocolName {
   /// Protocol name
@@ -257,9 +359,9 @@ impl std::fmt::Display for ProtocolName {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Other (Unsupported) TLS ClientHello Extension
-pub(crate) struct OtherTlsClientHelloExtension {
+pub struct OtherTlsClientHelloExtension {
   /// Extension Type
   extension_type: u16,
   /// Extension Payload

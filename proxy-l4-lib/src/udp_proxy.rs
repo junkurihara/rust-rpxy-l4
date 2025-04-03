@@ -106,7 +106,7 @@ impl UdpDestinationMuxBuilder {
     lifetime: Option<u32>,
     server_names: Option<&[&str]>,
     alpn: Option<&[&str]>,
-    ech: Option<&EchProtocolConfig>,
+    ech: Option<&EchProtocolConfig>, // TODO: Consider how to handle TLS ClientHello for QUIC + ECH, especially reassembling the datagram for TLS ClientHello Inner
   ) -> &mut Self {
     let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
     if udp_dest.is_err() {

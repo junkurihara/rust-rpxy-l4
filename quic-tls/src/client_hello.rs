@@ -5,7 +5,7 @@ use crate::{
   serialize::{Deserialize, SerDeserError, Serialize, compose, read_lengthed},
   trace::*,
 };
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 /* ---------------------------------------------------------- */
 const TLS_HANDSHAKE_MESSAGE_HEADER_LEN: usize = 4;
@@ -25,6 +25,32 @@ impl ExtensionType {
 }
 
 /* ---------------------------------------------------------- */
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// TLS Handshake message header
+pub struct TlsHandshakeMessageHeader {
+  /// handshake type (msg_type)
+  pub(crate) msg_type: u8,
+  /// length
+  pub(crate) length: [u8; 3],
+}
+impl Default for TlsHandshakeMessageHeader {
+  fn default() -> Self {
+    TlsHandshakeMessageHeader {
+      msg_type: TLS_HANDSHAKE_TYPE_CLIENT_HELLO,
+      length: [0u8; 3],
+    }
+  }
+}
+impl TlsHandshakeMessageHeader {
+  /// to Bytes
+  pub fn to_bytes(&self) -> Bytes {
+    let mut buf = BytesMut::with_capacity(TLS_HANDSHAKE_MESSAGE_HEADER_LEN);
+    buf.put_u8(self.msg_type);
+    buf.put_slice(&self.length);
+    buf.freeze()
+  }
+}
+
 /// Check if the buffer has a valid handshake message containing a TLS ClientHello
 /// https://datatracker.ietf.org/doc/html/rfc8446#section-4
 /// https://tools.ietf.org/html/rfc5246#section-7.4
@@ -32,7 +58,7 @@ impl ExtensionType {
 ///  - 1 Handshake Type msg_type
 ///  - 3 Length
 ///  - <var> Handshake message body
-pub(crate) fn probe_tls_handshake_message<B: Buf>(buf: &mut B) -> Result<(), TlsProbeFailure> {
+pub(crate) fn probe_tls_handshake_message<B: Buf>(buf: &mut B) -> Result<TlsHandshakeMessageHeader, TlsProbeFailure> {
   if buf.remaining() < TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
     debug!("TLS ClientHello header is not fully received");
     return Err(TlsProbeFailure::PollNext);
@@ -41,6 +67,7 @@ pub(crate) fn probe_tls_handshake_message<B: Buf>(buf: &mut B) -> Result<(), Tls
   if msg_type != TLS_HANDSHAKE_TYPE_CLIENT_HELLO {
     return Err(TlsProbeFailure::Failure);
   }
+
   let length = ((buf.get_u16() as usize) << 8) + buf.get_u8() as usize;
   debug!("TLS ClientHello body length: {}", length);
 
@@ -48,7 +75,15 @@ pub(crate) fn probe_tls_handshake_message<B: Buf>(buf: &mut B) -> Result<(), Tls
     debug!("TLS ClientHello body is not fully received");
     return Err(TlsProbeFailure::PollNext);
   }
-  Ok(())
+  let mut length_bytes = [0u8; 3];
+  length_bytes[0] = (length >> 16) as u8;
+  length_bytes[1] = (length >> 8) as u8;
+  length_bytes[2] = length as u8;
+  let tls_handshake_message_header = TlsHandshakeMessageHeader {
+    msg_type,
+    length: length_bytes,
+  };
+  Ok(tls_handshake_message_header)
 }
 
 /* ---------------------------------------------------------- */
@@ -106,6 +141,10 @@ impl Default for TlsClientHello {
 }
 
 impl TlsClientHello {
+  /// to Bytes
+  pub fn try_to_bytes(&self) -> Result<Bytes, TlsClientHelloError> {
+    compose(self.clone()).map(|b| b.freeze())
+  }
   // Get SNIs
   pub fn sni(&self) -> Vec<String> {
     self

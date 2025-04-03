@@ -281,7 +281,7 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<
 
   // Check client hello header
   let mut expected_client_hello = bytes::Bytes::from(expected_client_hello);
-  probe_tls_handshake_message(&mut expected_client_hello)?;
+  let _tls_handshake_message_header = probe_tls_handshake_message(&mut expected_client_hello)?;
 
   // Check client hello body
   let Some(client_hello) = probe_tls_client_hello(&mut expected_client_hello) else {

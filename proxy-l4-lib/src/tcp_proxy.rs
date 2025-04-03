@@ -9,7 +9,7 @@ use crate::{
   trace::*,
 };
 use bytes::BytesMut;
-use quic_tls::{TlsClientHello, TlsProbeFailure, probe_tls_handshake};
+use quic_tls::{TlsClientHelloBuffer, TlsProbeFailure, probe_tls_handshake};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
   io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional},
@@ -166,10 +166,10 @@ impl TcpDestinationMux {
         }
       }
       // Found TLS protocol
-      TcpProxyProtocol::Tls(client_hello_info) => {
+      TcpProxyProtocol::Tls(client_hello_buf) => {
         if let Some(dst) = &self.dst_tls {
           debug!("Setting up dest addr specific to TLS");
-          if let Some(found) = dst.find(client_hello_info) {
+          if let Some(found) = dst.find(&client_hello_buf.client_hello) {
             Ok(found.clone())
           } else {
             Err(ProxyError::NoDestinationAddressForProtocol)
@@ -196,7 +196,7 @@ pub(crate) enum TcpProxyProtocol {
   /// Plaintext HTTP
   Http,
   /// TLS
-  Tls(TlsClientHello),
+  Tls(TlsClientHelloBuffer),
   // TODO: and more ...
 }
 
@@ -392,6 +392,14 @@ impl TcpProxy {
               connection_count.decrement();
               return;
             };
+
+            // if let TcpProxyProtocol::Tls(client_hello_buf) = protocol {
+            //   if let Err(e) = outgoing_stream.write_all(&client_hello_buf.try_to_bytes().unwrap()).await {
+            //     error!("Failed to write the initial buffer to the outgoing stream: {e}");
+            //     connection_count.decrement();
+            //     return;
+            //   }
+            // } else
             // Write the initial buffer to the outgoing stream
             if let Err(e) = outgoing_stream.write_all(&initial_buf).await {
               error!("Failed to write the initial buffer to the outgoing stream: {e}");
@@ -444,19 +452,20 @@ mod tests {
     // check for example.com tls
     let mut sni = ServerNameIndication::default();
     sni.add_server_name("example.com");
-    let mut ch = TlsClientHello::default();
-    ch.add_replace_sni(&sni);
+    let mut chb = TlsClientHelloBuffer::default();
+    chb.client_hello.add_replace_sni(&sni);
 
-    let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(ch)).unwrap();
+    let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(chb)).unwrap();
     let destination = found.inner.get_destination(&"127.0.0.1:60000".parse().unwrap()).unwrap();
     assert_eq!(destination, &"127.0.0.1:50444".parse().unwrap());
 
     // check for unspecified tls
     let mut sni = ServerNameIndication::default();
     sni.add_server_name("any.com");
-    let ch = TlsClientHello::default();
+    let mut chb = TlsClientHelloBuffer::default();
+    chb.client_hello.add_replace_sni(&sni);
 
-    let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(ch)).unwrap();
+    let found = dst_mux.get_destination(&TcpProxyProtocol::Tls(chb)).unwrap();
     let destination = found.inner.get_destination(&"127.0.0.1:60000".parse().unwrap()).unwrap();
     assert_eq!(destination, &"127.0.0.1:50443".parse().unwrap());
 

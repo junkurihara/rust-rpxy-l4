@@ -32,7 +32,6 @@ impl TlsClientHello {
     let public_server_names = self.sni().iter().map(|s| s.to_ascii_lowercase()).collect::<Vec<_>>();
 
     // Decrypt and obtain the ClientHelloInner
-    // TODO: currently not recomposed one
     let (decrypted_ch, config) = if ignore_config_id {
       let Some(res) = self._decrypt_ech_brute_force(&client_hello_outer, ech_private_key_list) else {
         warn!("Attempted to decrypt ECH with all keys, but no success");
@@ -51,11 +50,11 @@ impl TlsClientHello {
         // TODO: As per https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1
         // we should do:
         // > - If sending a HelloRetryRequest, the server MAY include an "encrypted_client_hello" extension
-        // > with a payload of 8 random bytes; see Section 10.10.4 for details.
+        // >   with a payload of 8 random bytes; see Section 10.10.4 for details.
         // > - If the server is configured with any ECHConfigs, it MUST include the "encrypted_client_hello"
-        // > extension in its EncryptedExtensions with the "retry_configs" field set to one or more ECHConfig
-        // > structures with up-to-date keys. Servers MAY supply multiple ECHConfig values of different versions.
-        // > This allows a server to support multiple versions at once.
+        // >   extension in its EncryptedExtensions with the "retry_configs" field set to one or more ECHConfig
+        // >   structures with up-to-date keys. Servers MAY supply multiple ECHConfig values of different versions.
+        // >   This allows a server to support multiple versions at once.
         return Ok(None);
       };
       let res = self._decrypt_ech(&client_hello_outer, matched_ech_private_key)?;
@@ -209,7 +208,8 @@ impl TlsClientHello {
 
 ///////////////////////////////////
 /// TODO: REMOVE LATER, JUST FOR PROOF OF CONCEPT
-pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) -> TlsClientHello {
+pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) -> Result<Option<TlsClientHello>, TlsClientHelloError> {
+  /* ------------------ */
   use crate::ech_config::EchConfigList;
   use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 
@@ -222,12 +222,15 @@ pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) -> TlsClientHello {
 
   let ech_private_key_list =
     EchPrivateKey::try_compose_list_from_base64_with_config(&[ECH_SECRET_KEY.to_string()], &ech_config_list).unwrap();
+  /* ------------------ */
 
   let res = client_hello.decrypt_ech(&ech_private_key_list, false);
-
   match res.as_ref() {
     Ok(Some(decrypted_ch)) => {
       trace!("is_inner: {}", decrypted_ch.is_ech_inner());
+      let mut ser = compose(decrypted_ch.clone()).unwrap().freeze();
+      let deser: TlsClientHello = parse(&mut ser).unwrap();
+      trace!("deser = org?: {}", deser == *decrypted_ch);
     }
     Ok(None) => {
       trace!("nothing to decrypt, possibly grease");
@@ -236,5 +239,5 @@ pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) -> TlsClientHello {
       error!("Something going wrong: {}", e);
     }
   }
-  res.unwrap().unwrap()
+  res
 }

@@ -140,15 +140,19 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloBuffer, 
   // Check if the buffer is a TLS ClientHello
   match probe_tls_client_hello(&mut tls_plaintext) {
     Some(client_hello) => {
+      /* ------------------ */
       // TODO: remove later, checking ech
       if client_hello.is_ech_outer() {
-        let new_ch = crate::ech::decrypt_ech(&client_hello);
-        return Ok(TlsClientHelloBuffer {
-          record_header: record_headers[0].clone(),
-          handshake_message_header,
-          client_hello: new_ch,
-        });
+        if let Ok(Some(_new_ch)) = crate::ech::decrypt_ech(&client_hello) {
+          trace!("successfully decrypted ECH ClientHello outer and got ClientHello inner");
+          // return Ok(TlsClientHelloBuffer {
+          //   record_header: record_headers[0].clone(),
+          //   handshake_message_header,
+          //   client_hello: _new_ch,
+          // });
+        }
       }
+      /* ------------------ */
       Ok(TlsClientHelloBuffer {
         record_header: record_headers[0].clone(),
         handshake_message_header,

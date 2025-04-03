@@ -392,7 +392,7 @@ impl TcpProxy {
               connection_count.decrement();
               return;
             };
-
+            // Write the initial buffer to the outgoing stream
             // if let TcpProxyProtocol::Tls(client_hello_buf) = protocol {
             //   if let Err(e) = outgoing_stream.write_all(&client_hello_buf.try_to_bytes().unwrap()).await {
             //     error!("Failed to write the initial buffer to the outgoing stream: {e}");
@@ -400,7 +400,6 @@ impl TcpProxy {
             //     return;
             //   }
             // } else
-            // Write the initial buffer to the outgoing stream
             if let Err(e) = outgoing_stream.write_all(&initial_buf).await {
               error!("Failed to write the initial buffer to the outgoing stream: {e}");
               connection_count.decrement();

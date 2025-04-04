@@ -170,7 +170,17 @@ impl HpkeKemPrivateKey {
     }
   }
 }
+impl std::fmt::Debug for HpkeKemPrivateKey {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let redacted = "PRIVATE KEY REDACTED";
+    match self {
+      Self::X25519(_) => f.debug_tuple("X25519").field(&redacted).finish(),
+      Self::P256(_) => f.debug_tuple("P256").field(&redacted).finish(),
+    }
+  }
+}
 
+#[derive(Debug, Clone)]
 /// Private key with config id associated with EchConfig.EchConfigContents.key_config
 pub struct EchPrivateKey {
   /// Private key

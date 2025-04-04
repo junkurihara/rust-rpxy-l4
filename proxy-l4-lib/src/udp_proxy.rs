@@ -106,7 +106,7 @@ impl UdpDestinationMuxBuilder {
     lifetime: Option<u32>,
     server_names: Option<&[&str]>,
     alpn: Option<&[&str]>,
-    ech: Option<&EchProtocolConfig>, // TODO: Consider how to handle TLS ClientHello for QUIC + ECH, especially reassembling the datagram for TLS ClientHello Inner
+    _ech: Option<&EchProtocolConfig>, // TODO: Consider how to handle TLS ClientHello for QUIC + ECH, especially reassembling the datagram for TLS ClientHello Inner
   ) -> &mut Self {
     let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
     if udp_dest.is_err() {
@@ -122,7 +122,7 @@ impl UdpDestinationMuxBuilder {
 
     let server_names = server_names.unwrap_or_default();
     let alpn = alpn.unwrap_or_default();
-    current.add(server_names, alpn, udp_dest);
+    current.add(server_names, alpn, udp_dest, None); // TODO: currently NONE for ech
 
     self.dst_quic = Some(Some(current));
     self
@@ -161,7 +161,7 @@ impl UdpDestinationMux {
         if let Some(dst) = &self.dst_quic {
           debug!("Setting up dest addr for QUIC proto");
           if let Some(found) = dst.find(client_hello_info) {
-            Ok(found.clone())
+            Ok(found.destination().clone()) // TODO: This has to return not only destination but one with TLS information
           } else {
             Err(ProxyError::NoDestinationAddressForProtocol)
           }

@@ -117,7 +117,7 @@ impl TcpDestinationMuxBuilder {
 
     let server_names = server_names.unwrap_or_default();
     let alpn = alpn.unwrap_or_default();
-    current.add(server_names, alpn, tcp_dest);
+    current.add(server_names, alpn, tcp_dest, ech.cloned());
 
     self.dst_tls = Some(Some(current));
     self
@@ -170,7 +170,7 @@ impl TcpDestinationMux {
         if let Some(dst) = &self.dst_tls {
           debug!("Setting up dest addr specific to TLS");
           if let Some(found) = dst.find(&client_hello_buf.client_hello) {
-            Ok(found.clone())
+            Ok(found.destination().clone()) // TODO: This has to return not only destination but one with TLS information
           } else {
             Err(ProxyError::NoDestinationAddressForProtocol)
           }

@@ -1,4 +1,7 @@
-use crate::error::{ProxyBuildError, ProxyError};
+use crate::{
+  config::EchProtocolConfig,
+  error::{ProxyBuildError, ProxyError},
+};
 use rand::Rng;
 use std::net::SocketAddr;
 
@@ -104,23 +107,47 @@ impl From<(&[&str], &[&str])> for TlsMatchingRule {
   }
 }
 
+#[derive(Clone, Debug, Default)]
+/// TCP/UDP destinations + EchProtocolConfig
+pub(crate) struct TlsDestinationItem<T> {
+  /// Destination (UdpDestination or TcpDestination)
+  dest: T,
+  // /// EchProtocolConfig
+  ech: Option<EchProtocolConfig>,
+}
+impl<T> TlsDestinationItem<T> {
+  /// Create a new instance
+  pub fn new(dest: T, ech: Option<EchProtocolConfig>) -> Self {
+    Self { dest, ech }
+  }
+  /// Get the destination
+  pub fn destination(&self) -> &T {
+    &self.dest
+  }
+  /// Get the ECH config
+  pub fn ech(&self) -> Option<&EchProtocolConfig> {
+    self.ech.as_ref()
+  }
+}
+
 #[derive(Debug, Clone, Default)]
 /// Router for TLS/QUIC destinations
 pub(crate) struct TlsDestinations<T> {
   /// inner
-  inner: Vec<(TlsMatchingRule, T)>,
+  inner: Vec<(TlsMatchingRule, TlsDestinationItem<T>)>,
 }
 impl<T> TlsDestinations<T> {
   /// Create a new instance
   pub fn new() -> Self {
     Self { inner: Vec::new() }
   }
-  /// Add a destination with SNI
-  pub fn add(&mut self, server_names: &[&str], alpn: &[&str], dest: T) {
-    self.inner.push((TlsMatchingRule::from((server_names, alpn)), dest));
+  /// Add a destination with SNI and ALPN
+  pub fn add(&mut self, server_names: &[&str], alpn: &[&str], dest: T, ech: Option<EchProtocolConfig>) {
+    let item = TlsDestinationItem::new(dest, ech);
+    self.inner.push((TlsMatchingRule::from((server_names, alpn)), item));
   }
-  /// Find a destination by SNI
-  pub fn find(&self, received_client_hello: &quic_tls::TlsClientHello) -> Option<&T> {
+  /// Find a destination by SNI and ALPN
+  pub fn find(&self, received_client_hello: &quic_tls::TlsClientHello) -> Option<&TlsDestinationItem<T>> {
     let sni = received_client_hello.sni();
     let alpn = received_client_hello.alpn();
     let received_sni = sni.iter().map(|v| v.to_lowercase());
@@ -207,12 +234,12 @@ mod tests {
   #[test]
   fn test_tls_destinations() {
     let mut tls_destinations = TlsDestinations::new();
-    tls_destinations.add(&["example.com"], &[], "127.0.0.1");
-    tls_destinations.add(&["example.org"], &[], "192.168.0.1");
-    tls_destinations.add(&[], &[], "1.1.1.1");
+    tls_destinations.add(&["example.com"], &[], "127.0.0.1", None);
+    tls_destinations.add(&["example.org"], &[], "192.168.0.1", None);
+    tls_destinations.add(&[], &[], "1.1.1.1", None);
 
-    tls_destinations.add(&[], &["h2"], "8.8.8.8");
-    tls_destinations.add(&["example.com"], &["h2"], "127.0.0.2");
+    tls_destinations.add(&[], &["h2"], "8.8.8.8", None);
+    tls_destinations.add(&["example.com"], &["h2"], "127.0.0.2", None);
 
     // Test SNI
     // Match only sni
@@ -222,27 +249,27 @@ mod tests {
     sni.add_server_name("example.com");
     received.add_replace_sni(&sni);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"127.0.0.1"));
+    assert_eq!(dest.map(|v| v.dest), Some("127.0.0.1"));
 
     let mut sni = quic_tls::extension::ServerNameIndication::default();
     sni.add_server_name("example.org");
     received.add_replace_sni(&sni);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"192.168.0.1"));
+    assert_eq!(dest.map(|v| v.dest), Some("192.168.0.1"));
 
     // Doesn't match sni
     let mut sni = quic_tls::extension::ServerNameIndication::default();
     sni.add_server_name("example.net");
     received.add_replace_sni(&sni);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"1.1.1.1"));
+    assert_eq!(dest.map(|v| v.dest), Some("1.1.1.1"));
 
     // Doesn't match sni
     let mut sni = quic_tls::extension::ServerNameIndication::default();
     sni.add_server_name("example.io");
     received.add_replace_sni(&sni);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"1.1.1.1"));
+    assert_eq!(dest.map(|v| v.dest), Some("1.1.1.1"));
 
     // Test ALPN
     // Match only alpn
@@ -251,14 +278,14 @@ mod tests {
     alpn.add_protocol_name("h2");
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"8.8.8.8"));
+    assert_eq!(dest.map(|v| v.dest), Some("8.8.8.8"));
 
     // Doesn't match alpn
     let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
     alpn.add_protocol_name("h3");
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"1.1.1.1"));
+    assert_eq!(dest.map(|v| v.dest), Some("1.1.1.1"));
 
     // Test both SNI and ALPN
     // Match both sni and alpn to single destination
@@ -269,14 +296,14 @@ mod tests {
     alpn.add_protocol_name("h2");
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"127.0.0.2"));
+    assert_eq!(dest.map(|v| v.dest), Some("127.0.0.2"));
 
     // Match sni but doesn't match alpn
     let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
     alpn.add_protocol_name("h3");
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"127.0.0.1"));
+    assert_eq!(dest.map(|v| v.dest), Some("127.0.0.1"));
 
     // Match sni and alpn "independently", sni is prioritized
     let mut sni = quic_tls::extension::ServerNameIndication::default();
@@ -286,7 +313,7 @@ mod tests {
     alpn.add_protocol_name("h2");
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"192.168.0.1"));
+    assert_eq!(dest.map(|v| v.dest), Some("192.168.0.1"));
 
     // Match neither sni nor alpn
     let mut sni = quic_tls::extension::ServerNameIndication::default();
@@ -296,6 +323,6 @@ mod tests {
     alpn.add_protocol_name("h3");
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
-    assert_eq!(dest, Some(&"1.1.1.1"));
+    assert_eq!(dest.map(|v| v.dest), Some("1.1.1.1"));
   }
 }

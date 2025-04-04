@@ -86,6 +86,10 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
           .server_names
           .as_ref()
           .map(|v| v.iter().map(|x| x.as_str()).collect::<Vec<&str>>());
+        // TODO: currently QUIC ECH is not supported
+        if spec.ech.is_some() {
+          trace::warn!("QUIC ECH is not supported yet");
+        }
         udp_mux_builder.dst_quic(
           target,
           spec.load_balance.as_ref(),

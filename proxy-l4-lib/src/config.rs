@@ -46,6 +46,7 @@ pub struct ProtocolConfig {
   pub ech: Option<EchProtocolConfig>,
 }
 
+#[derive(Debug, Clone)]
 /// ECH protocol configuration
 pub struct EchProtocolConfig {
   /// List of private keys, each of which is associated with a ech config id

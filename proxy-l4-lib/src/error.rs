@@ -25,6 +25,10 @@ pub enum ProxyError {
 
   #[error("Broken UDP connection")]
   BrokenUdpConnection,
+
+  /* --------------------------------------- */
+  #[error("TLS or Quic error: {0}")]
+  TlsError(#[from] quic_tls::TlsClientHelloError),
 }
 
 /// Errors that happens during building the proxy

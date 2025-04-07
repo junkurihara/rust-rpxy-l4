@@ -418,7 +418,7 @@ async fn handle_tcp_connection(
       return;
     }
   };
-  // TODO: found_dst contains not only TcpDestinationInner address but also ECH config for TLS
+  // found_dst contains not only TcpDestinationInner address but also ECH config for TLS
   let found_dst = match dst_mux.find_destination(&probed_protocol) {
     Ok(addr) => addr,
     Err(e) => {
@@ -438,15 +438,23 @@ async fn handle_tcp_connection(
     connection_count.decrement();
     return;
   };
-  // Write the initial buffer to the outgoing stream
-  // if let TcpProxyProtocol::Tls(client_hello_buf) = protocol {
-  //   if let Err(e) = outgoing_stream.write_all(&client_hello_buf.try_to_bytes().unwrap()).await {
-  //     error!("Failed to write the initial buffer to the outgoing stream: {e}");
-  //     connection_count.decrement();
-  //     return;
-  //   }
-  // } else
-  if let Err(e) = outgoing_stream.write_all(&initial_buf).await {
+
+  let to_be_written =
+    if let (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) = (found_dst, probed_protocol) {
+      // Handle tls, especially ECH
+      let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination) else {
+        // TODO: Error means that illegal parameter must be sent back when error
+        error!("Failed to handle TLS client hello");
+        connection_count.decrement();
+        return;
+      };
+
+      client_hello_bytes
+    } else {
+      // handle non-tls
+      initial_buf.freeze()
+    };
+  if let Err(e) = outgoing_stream.write_all(&to_be_written).await {
     error!("Failed to write the initial buffer to the outgoing stream: {e}");
     connection_count.decrement();
     return;
@@ -459,6 +467,30 @@ async fn handle_tcp_connection(
   debug!("TCP proxy connection closed (total: {})", connection_count.current());
 }
 
+/// handle tls, especially ECH
+/// This returns as is (Ok(...)) in Bytes when no matching config_id is found (case of GREASE), otherwise returns decrypted ClientHello record in Bytes
+/// TODO: If this returns Err(...), it means that it failed to be decrypted or that the decrypted result is illegal. Then we must send some error back to the client.
+fn handle_tls_client_hello<T>(
+  orig_ch_buf: &TlsClientHelloBuffer,
+  tls_destination: &TlsDestinationItem<T>,
+) -> Result<bytes::Bytes, ProxyError> {
+  if orig_ch_buf.is_ech_outer() && tls_destination.ech().is_some() {
+    let ech = tls_destination.ech().unwrap();
+    let Some(decrypted_ch) = orig_ch_buf.client_hello.decrypt_ech(&ech.private_keys, false)? else {
+      return Ok(orig_ch_buf.try_to_bytes()?);
+    };
+
+    let new_ch_buf = TlsClientHelloBuffer {
+      client_hello: decrypted_ch,
+      record_header: orig_ch_buf.record_header.clone(),
+      handshake_message_header: orig_ch_buf.handshake_message_header.clone(),
+    };
+
+    return Ok(new_ch_buf.try_to_bytes()?);
+  };
+
+  Ok(orig_ch_buf.try_to_bytes()?)
+}
 /* ---------------------------------------------------------- */
 
 #[cfg(test)]

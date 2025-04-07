@@ -19,6 +19,7 @@ use hpke::{
 impl TlsClientHello {
   /// Implementation of the ECH decryption, return the re-composed ClientHelloInner
   /// If ignore_config_id is true, decryption will be attempted for all ech_secret_key
+  /// Returns None if no ECH outer is found or decryption failed
   pub fn decrypt_ech(
     &self,
     ech_private_key_list: &[EchPrivateKey],
@@ -45,7 +46,7 @@ impl TlsClientHello {
         .iter()
         .find(|key| key.config_id() == config_id && key.cipher_suites().contains(cipher_suite))
       else {
-        warn!("No matching ECH private key found for config_id({config_id}) and cipher_suite, possibly GREASE");
+        warn!("No matching ECH private key found for config_id ({config_id}) and cipher_suite, possibly GREASE");
         warn!("Currently, we do no support replying with retry_configs, and just forward the ClientHelloOuter to the backend");
         // TODO: As per https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1
         // we should do:
@@ -204,40 +205,4 @@ impl TlsClientHello {
     compressed_inner.add_replace_extensions(&new_extensions);
     Ok(())
   }
-}
-
-///////////////////////////////////
-/// TODO: REMOVE LATER, JUST FOR PROOF OF CONCEPT
-pub(crate) fn decrypt_ech(client_hello: &TlsClientHello) -> Result<Option<TlsClientHello>, TlsClientHelloError> {
-  /* ------------------ */
-  use crate::ech_config::EchConfigList;
-  use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
-
-  const ECH_SECRET_KEY: &str = "KwyvZOuPlflYlcmJbwhA24HMWUvxXXyan/oh9cJ6lNw";
-  // const ECH_PUBLIC_KEY: &str = "rY0SPwP8yflbYTUHTNcX/RWC/oy+qAi2ZcM62nwLVXU";
-  const ECH_CONFIG_LIST: &str = "ADz+DQA4ugAgACA9U8FCH7vKOFXVCCcAdpUUSfu3rzlooRNflhOXyV0uTwAEAAEAAQAJbG9jYWxob3N0AAA";
-
-  let ech_config_list_bytes = BASE64_STANDARD_NO_PAD.decode(ECH_CONFIG_LIST).unwrap();
-  let ech_config_list: EchConfigList = parse(&mut ech_config_list_bytes.as_slice()).unwrap();
-
-  let ech_private_key_list =
-    EchPrivateKey::try_compose_list_from_base64_with_config(&[ECH_SECRET_KEY.to_string()], &ech_config_list).unwrap();
-  /* ------------------ */
-
-  let res = client_hello.decrypt_ech(&ech_private_key_list, false);
-  match res.as_ref() {
-    Ok(Some(decrypted_ch)) => {
-      trace!("is_inner: {}", decrypted_ch.is_ech_inner());
-      let mut ser = compose(decrypted_ch.clone()).unwrap().freeze();
-      let deser: TlsClientHello = parse(&mut ser).unwrap();
-      trace!("deser = org?: {}", deser == *decrypted_ch);
-    }
-    Ok(None) => {
-      trace!("nothing to decrypt, possibly grease");
-    }
-    Err(e) => {
-      error!("Something going wrong: {}", e);
-    }
-  }
-  res
 }

@@ -20,6 +20,10 @@ pub struct TlsClientHelloBuffer {
   pub client_hello: TlsClientHello,
 }
 impl TlsClientHelloBuffer {
+  /// Is Ech Outer
+  pub fn is_ech_outer(&self) -> bool {
+    self.client_hello.is_ech_outer()
+  }
   /// to Bytes
   pub fn try_to_bytes(&self) -> Result<Bytes, TlsClientHelloError> {
     let client_hello_bytes = self.client_hello.try_to_bytes()?;
@@ -139,26 +143,11 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloBuffer, 
 
   // Check if the buffer is a TLS ClientHello
   match probe_tls_client_hello(&mut tls_plaintext) {
-    Some(client_hello) => {
-      /* ------------------ */
-      // TODO: remove later, checking ech
-      if client_hello.is_ech_outer() {
-        if let Ok(Some(_new_ch)) = crate::ech::decrypt_ech(&client_hello) {
-          trace!("successfully decrypted ECH ClientHello outer and got ClientHello inner");
-          // return Ok(TlsClientHelloBuffer {
-          //   record_header: record_headers[0].clone(),
-          //   handshake_message_header,
-          //   client_hello: _new_ch,
-          // });
-        }
-      }
-      /* ------------------ */
-      Ok(TlsClientHelloBuffer {
-        record_header: record_headers[0].clone(),
-        handshake_message_header,
-        client_hello,
-      })
-    }
+    Some(client_hello) => Ok(TlsClientHelloBuffer {
+      record_header: record_headers[0].clone(),
+      handshake_message_header,
+      client_hello,
+    }),
     None => Err(TlsProbeFailure::Failure),
   }
 }

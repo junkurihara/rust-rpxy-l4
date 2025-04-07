@@ -2,9 +2,10 @@ use crate::{
   config::EchProtocolConfig,
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
-  destination::{Destination, DestinationBuilder, LoadBalance},
+  destination::{Destination, DestinationBuilder, LoadBalance, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
+  proto::UdpProtocolType,
   socket::bind_udp_socket,
   time_util::get_since_the_epoch,
   trace::{debug, error, info, warn},
@@ -19,12 +20,19 @@ use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
 /// Type alias for QUIC destinations
-type QuicDestinations = crate::destination::TlsDestinations<UdpDestination>;
+type QuicDestinations = crate::destination::TlsDestinations<UdpDestinationInner>;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
+enum UdpDestination {
+  /// Udp destination
+  Udp(UdpDestinationInner),
+  /// Udp destinations specific for QUIC
+  Quic(QuicDestinations),
+}
+#[derive(Debug, Clone)]
 /// Udp destination struct
-pub(crate) struct UdpDestination {
+pub(crate) struct UdpDestinationInner {
   /// Destination socket address
   inner: Destination,
   /// Connection idle lifetime in seconds
@@ -32,7 +40,16 @@ pub(crate) struct UdpDestination {
   connection_idle_lifetime: u32,
 }
 
-impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestination {
+#[derive(Debug, Clone)]
+/// Destination struct found in the multiplexer from TcpProbedProtocol
+enum FoundUdpDestination {
+  /// Udp destination
+  Udp(UdpDestinationInner),
+  /// Tls destination
+  Quic(TlsDestinationItem<UdpDestinationInner>),
+}
+
+impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestinationInner {
   type Error = ProxyBuildError;
   fn try_from(
     (dst_addrs, load_balance, connection_idle_lifetime): (&[SocketAddr], Option<&LoadBalance>, Option<u32>),
@@ -52,7 +69,7 @@ impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestinat
   }
 }
 
-impl UdpDestination {
+impl UdpDestinationInner {
   /// Get the destination socket address
   pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
     self.inner.get_destination(src_addr)
@@ -62,44 +79,70 @@ impl UdpDestination {
     self.connection_idle_lifetime
   }
 }
+
+#[allow(unused)]
+impl FoundUdpDestination {
+  /// Get the destination socket address
+  pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
+    match self {
+      Self::Udp(dst) => dst.get_destination(src_addr),
+      Self::Quic(dst) => dst.destination().get_destination(src_addr),
+    }
+  }
+  /// Get the connection idle lifetime
+  pub(crate) fn get_connection_idle_lifetime(&self) -> u32 {
+    match self {
+      Self::Udp(dst) => dst.get_connection_idle_lifetime(),
+      Self::Quic(dst) => dst.destination().get_connection_idle_lifetime(),
+    }
+  }
+}
+
 /* ---------------------------------------------------------- */
 /// Udp destination multiplexer
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct UdpDestinationMux {
-  /// destination socket address for any protocol
-  /// If this is set, it will be used for all protocols except the specific (non-None) protocols.
-  #[builder(setter(custom), default = "None")]
-  dst_any: Option<UdpDestination>,
-  /// destination socket address for Wireguard protocol
-  #[builder(setter(custom), default = "None")]
-  dst_wireguard: Option<UdpDestination>,
-  /// destination socket address for IETF QUIC protocol
-  #[builder(setter(custom), default = "None")]
-  dst_quic: Option<QuicDestinations>,
-  // TODO: Add more protocols
+  /// Multiplexed TCP destinations
+  #[builder(default = "ahash::HashMap::default()")]
+  inner: ahash::HashMap<UdpProtocolType, UdpDestination>,
 }
 
 impl UdpDestinationMuxBuilder {
-  /* --------------------- */
-  pub fn dst_any(&mut self, addrs: &[SocketAddr], load_balance: Option<&LoadBalance>, lifetime: Option<u32>) -> &mut Self {
-    let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
+  /// Create a new Udp destination multiplexer builder
+  pub(crate) fn set_base(
+    &mut self,
+    proto_type: UdpProtocolType,
+    addrs: &[SocketAddr],
+    load_balance: Option<&LoadBalance>,
+    lifetime: Option<u32>,
+  ) -> &mut Self {
+    let udp_dest = UdpDestinationInner::try_from((addrs, load_balance, lifetime));
     if udp_dest.is_err() {
       return self;
     }
-    self.dst_any = Some(udp_dest.ok());
-    self
-  }
-  /* --------------------- */
-  pub fn dst_wireguard(&mut self, addrs: &[SocketAddr], load_balance: Option<&LoadBalance>, lifetime: Option<u32>) -> &mut Self {
-    let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
-    if udp_dest.is_err() {
-      return self;
+    let udp_dest_inner = udp_dest.unwrap();
+
+    let mut inner = self.inner.clone().unwrap_or_default();
+    match proto_type {
+      UdpProtocolType::Quic => {
+        let mut current_quic = if let Some(UdpDestination::Quic(current)) = inner.get(&proto_type).cloned() {
+          current
+        } else {
+          QuicDestinations::new()
+        };
+        current_quic.add(&[], &[], udp_dest_inner, None);
+        inner.insert(proto_type, UdpDestination::Quic(current_quic));
+      }
+      _ => {
+        inner.insert(proto_type, UdpDestination::Udp(udp_dest_inner));
+      }
     }
-    self.dst_wireguard = Some(udp_dest.ok());
+    self.inner = Some(inner);
     self
   }
-  /* --------------------- */
-  pub fn dst_quic(
+
+  /// Set Quic destinations, use this if alpn and server names are needed for protocol detection or ech is need to be configured
+  pub(crate) fn set_quic(
     &mut self,
     addrs: &[SocketAddr],
     load_balance: Option<&LoadBalance>,
@@ -108,23 +151,27 @@ impl UdpDestinationMuxBuilder {
     alpn: Option<&[&str]>,
     _ech: Option<&EchProtocolConfig>, // TODO: Consider how to handle TLS ClientHello for QUIC + ECH, especially reassembling the datagram for TLS ClientHello Inner
   ) -> &mut Self {
-    let udp_dest = UdpDestination::try_from((addrs, load_balance, lifetime));
+    let udp_dest = UdpDestinationInner::try_from((addrs, load_balance, lifetime));
     if udp_dest.is_err() {
       return self;
     }
+    let udp_dest_inner = udp_dest.unwrap();
+    let mut inner = self.inner.clone().unwrap_or_default();
 
-    let udp_dest = udp_dest.unwrap();
-    let mut current = if self.dst_quic.as_ref().is_none_or(|d| d.is_none()) {
-      QuicDestinations::new()
+    let mut current_quic = if let Some(UdpDestination::Quic(current)) = inner.get(&UdpProtocolType::Quic).cloned() {
+      current
     } else {
-      self.dst_quic.as_ref().unwrap().as_ref().unwrap().clone()
+      QuicDestinations::new()
     };
+    current_quic.add(
+      server_names.unwrap_or_default(),
+      alpn.unwrap_or_default(),
+      udp_dest_inner,
+      None, // TODO: currently NONE for ech
+    );
 
-    let server_names = server_names.unwrap_or_default();
-    let alpn = alpn.unwrap_or_default();
-    current.add(server_names, alpn, udp_dest, None); // TODO: currently NONE for ech
-
-    self.dst_quic = Some(Some(current));
+    inner.insert(UdpProtocolType::Quic, UdpDestination::Quic(current_quic));
+    self.inner = Some(inner);
     self
   }
 }
@@ -132,54 +179,54 @@ impl UdpDestinationMuxBuilder {
 impl UdpDestinationMux {
   /// Check if the destination mux is empty
   pub fn is_empty(&self) -> bool {
-    self.dst_any.is_none() && self.dst_wireguard.is_none() && self.dst_quic.is_none()
+    self.inner.is_empty()
   }
   /// Get the destination socket address for the given protocol
-  pub(crate) fn get_destination(&self, protocol: &UdpProxyProtocol) -> Result<UdpDestination, ProxyError> {
-    match protocol {
-      // No matched protocol found from the pattern
-      UdpProxyProtocol::Any => {
-        if let Some(dst) = &self.dst_any {
-          debug!("Setting up dest addr for unspecified proto");
-          Ok(dst.clone())
+  fn find_destination(&self, probed_protocol: &UdpProbedProtocol) -> Result<FoundUdpDestination, ProxyError> {
+    let proto_type = probed_protocol.proto_type();
+    match self.inner.get(&proto_type) {
+      // Found non-Quic protocol
+      Some(UdpDestination::Udp(udp_destination)) => {
+        debug!("Setting up dest addr for {proto_type}");
+        return Ok(FoundUdpDestination::Udp(udp_destination.clone()));
+      }
+      // Found Quic protocol
+      Some(UdpDestination::Quic(quic_destinations)) => {
+        let UdpProbedProtocol::Quic(client_hello) = probed_protocol else {
+          return Err(ProxyError::NoDestinationAddressForProtocol);
+        };
+        if let Some(found) = quic_destinations.find(client_hello) {
+          debug!("Setting up dest addr for {proto_type}");
+          return Ok(FoundUdpDestination::Quic(found.clone()));
         } else {
-          Err(ProxyError::NoDestinationAddressForProtocol)
+          return Err(ProxyError::NoDestinationAddressForProtocol);
         }
       }
-      UdpProxyProtocol::Wireguard => {
-        if let Some(dst) = &self.dst_wireguard {
-          debug!("Setting up dest addr for Wireguard proto");
-          Ok(dst.clone())
-        } else if let Some(dst) = &self.dst_any {
-          debug!("Setting up dest addr for unspecified proto");
-          Ok(dst.clone())
-        } else {
-          Err(ProxyError::NoDestinationAddressForProtocol)
-        }
-      }
-      UdpProxyProtocol::Quic(client_hello_info) => {
-        if let Some(dst) = &self.dst_quic {
-          debug!("Setting up dest addr for QUIC proto");
-          if let Some(found) = dst.find(client_hello_info) {
-            Ok(found.destination().clone()) // TODO: This has to return not only destination but one with TLS information
-          } else {
-            Err(ProxyError::NoDestinationAddressForProtocol)
-          }
-        } else if let Some(dst) = &self.dst_any {
-          debug!("Setting up dest addr for unspecified proto");
-          Ok(dst.clone())
-        } else {
-          Err(ProxyError::NoDestinationAddressForProtocol)
-        }
-      }
+      _ => {}
+    };
+
+    // if nothing is found, check for the default destination
+    if proto_type == UdpProtocolType::Any {
+      return Err(ProxyError::NoDestinationAddressForProtocol);
     }
+    // Check for the default destination
+    let destination_any = self
+      .inner
+      .get(&UdpProtocolType::Any)
+      .cloned()
+      .ok_or(ProxyError::NoDestinationAddressForProtocol)?;
+    let UdpDestination::Udp(dst) = destination_any else {
+      return Err(ProxyError::NoDestinationAddressForProtocol);
+    };
+    debug!("Setting up dest addr for unspecified proto");
+    Ok(FoundUdpDestination::Udp(dst.clone()))
   }
 }
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// TCP proxy protocol, specific protocols like SSH, and default is "any".
-pub(crate) enum UdpProxyProtocol {
+/// UDP probed protocol, specific protocols like SSH, and default is "any".
+pub(crate) enum UdpProbedProtocol {
   /// any, default
   Any,
   /// wireguard
@@ -189,7 +236,17 @@ pub(crate) enum UdpProxyProtocol {
   // TODO: and more ...
 }
 
-impl std::fmt::Display for UdpProxyProtocol {
+impl UdpProbedProtocol {
+  fn proto_type(&self) -> UdpProtocolType {
+    match self {
+      Self::Any => UdpProtocolType::Any,
+      Self::Wireguard => UdpProtocolType::Wireguard,
+      Self::Quic(_) => UdpProtocolType::Quic,
+    }
+  }
+}
+
+impl std::fmt::Display for UdpProbedProtocol {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Self::Any => write!(f, "Any"),
@@ -202,7 +259,7 @@ impl std::fmt::Display for UdpProxyProtocol {
 
 /* ------ */
 /// Is Wireguard protocol?
-fn is_wireguard(initial_datagrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProxyProtocol> {
+fn is_wireguard(initial_datagrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProbedProtocol> {
   // Wireguard protocol 'initiation' detection [only Handshake]
   // Thus this may not be a reliable way to detect Wireguard protocol
   // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
@@ -213,14 +270,14 @@ fn is_wireguard(initial_datagrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpP
 
   if first.len() == 148 && first[0] == 0x01 && first[1] == 0x00 && first[2] == 0x00 && first[3] == 0x00 {
     debug!("Wireguard protocol (initiator to responder first message) detected");
-    ProbeResult::Success(UdpProxyProtocol::Wireguard)
+    ProbeResult::Success(UdpProbedProtocol::Wireguard)
   } else {
     ProbeResult::Failure
   }
 }
 
 /// Is QUIC protocol?
-fn is_quic_initial(initial_dagatgrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProxyProtocol> {
+fn is_quic_initial(initial_dagatgrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProbedProtocol> {
   let initial_datagrams_inner = initial_dagatgrams.inner.as_slice();
 
   match probe_quic_initial_packets(initial_datagrams_inner) {
@@ -228,14 +285,14 @@ fn is_quic_initial(initial_dagatgrams: &mut UdpInitialDatagrams) -> ProbeResult<
     Err(TlsProbeFailure::PollNext) => {
       initial_dagatgrams
         .probed_as_pollnext
-        .insert(UdpProxyProtocol::Quic(Default::default()));
+        .insert(UdpProbedProtocol::Quic(Default::default()));
       ProbeResult::PollNext
     }
-    Ok(client_hello_info) => ProbeResult::Success(UdpProxyProtocol::Quic(client_hello_info)),
+    Ok(client_hello_info) => ProbeResult::Success(UdpProbedProtocol::Quic(client_hello_info)),
   }
 }
 
-impl UdpProxyProtocol {
+impl UdpProbedProtocol {
   /// Detect the protocol from the first few bytes of the incoming datagram
   async fn detect_protocol(initial_datagrams: &mut UdpInitialDatagrams) -> Result<ProbeResult<Self>, ProxyError> {
     // TODO: Add more protocol detection patterns
@@ -250,8 +307,8 @@ impl UdpProxyProtocol {
         .probed_as_pollnext
         .iter()
         .map(|p| match p {
-          UdpProxyProtocol::Wireguard => is_wireguard,
-          UdpProxyProtocol::Quic(_) => is_quic_initial,
+          UdpProbedProtocol::Wireguard => is_wireguard,
+          UdpProbedProtocol::Quic(_) => is_quic_initial,
           _ => unreachable!(),
         })
         .collect()
@@ -423,7 +480,7 @@ struct UdpInitialDatagrams {
   /// created at
   created_at: Arc<AtomicU64>,
   /// Protocols that were detected as 'poll_next'
-  probed_as_pollnext: std::collections::HashSet<UdpProxyProtocol>,
+  probed_as_pollnext: std::collections::HashSet<UdpProbedProtocol>,
 }
 
 impl UdpInitialDatagrams {
@@ -521,7 +578,7 @@ impl UdpInitialDatagramsBufferPool {
         };
 
         // Handle with probe result
-        let Ok(probe_result) = UdpProxyProtocol::detect_protocol(&mut initial_datagrams).await else {
+        let Ok(probe_result) = UdpProbedProtocol::detect_protocol(&mut initial_datagrams).await else {
           error!("Failed to probe protocol from the incoming datagram");
           continue;
         };
@@ -539,13 +596,17 @@ impl UdpInitialDatagramsBufferPool {
         debug!("Release the datagram buffer for {}", src_addr);
         self_clone.inner.remove(&src_addr);
 
-        let Ok(udp_dst) = self_clone.destination_mux.get_destination(&protocol) else {
+        let Ok(found_dst) = self_clone.destination_mux.find_destination(&protocol) else {
           error!("No destination address found for protocol: {}", protocol);
           continue;
         };
+        let udp_dst_inner = match found_dst {
+          FoundUdpDestination::Udp(dst) => dst,
+          FoundUdpDestination::Quic(dst) => dst.destination().to_owned(),
+        };
         let Ok(conn) = self_clone
           .udp_connection_pool
-          .create_new_connection(&src_addr, &udp_dst, self_clone.udp_socket_tx.clone())
+          .create_new_connection(&src_addr, &udp_dst_inner, self_clone.udp_socket_tx.clone())
           .await
         else {
           continue;

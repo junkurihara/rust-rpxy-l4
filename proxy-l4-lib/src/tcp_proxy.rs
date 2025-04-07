@@ -67,8 +67,8 @@ impl FoundTcpDestination {
   /// Get the destination socket address
   fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
     match self {
-      FoundTcpDestination::Tcp(tcp_destination) => tcp_destination.get_destination(src_addr),
-      FoundTcpDestination::Tls(tls_destination) => tls_destination.destination().get_destination(src_addr),
+      Self::Tcp(tcp_destination) => tcp_destination.get_destination(src_addr),
+      Self::Tls(tls_destination) => tls_destination.destination().get_destination(src_addr),
     }
   }
 }
@@ -169,6 +169,7 @@ impl TcpDestinationMux {
           return Err(ProxyError::NoDestinationAddressForProtocol);
         };
         if let Some(found) = tls_destinations.find(&client_hello_buf.client_hello) {
+          debug!("Setting up dest addr for {proto_type}");
           return Ok(FoundTcpDestination::Tls(found.clone()));
         } else {
           return Err(ProxyError::NoDestinationAddressForProtocol);

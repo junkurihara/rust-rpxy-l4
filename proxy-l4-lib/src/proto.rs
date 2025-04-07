@@ -50,3 +50,23 @@ impl std::fmt::Display for TcpProtocolType {
     }
   }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// TCP protocol types
+pub(crate) enum UdpProtocolType {
+  /// UDP: WireGuard
+  Wireguard,
+  /// UDP: QUIC
+  Quic,
+  /// UDP: Any
+  Any,
+}
+impl std::fmt::Display for UdpProtocolType {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      UdpProtocolType::Wireguard => write!(f, "wireguard"),
+      UdpProtocolType::Quic => write!(f, "quic"),
+      UdpProtocolType::Any => write!(f, "any"),
+    }
+  }
+}

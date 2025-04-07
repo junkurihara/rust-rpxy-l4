@@ -35,7 +35,8 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
     );
   }
   if let Some(udp_target) = config.udp_target.as_ref() {
-    udp_mux_builder.dst_any(
+    udp_mux_builder.set_base(
+      proto::UdpProtocolType::Any,
       udp_target.as_slice(),
       config.udp_load_balance.as_ref(),
       config.udp_idle_lifetime,
@@ -60,7 +61,12 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
       }
       /* ---------------------------------------- */
       ProtocolType::Wireguard => {
-        udp_mux_builder.dst_wireguard(target, spec.load_balance.as_ref(), spec.idle_lifetime);
+        udp_mux_builder.set_base(
+          proto::UdpProtocolType::Wireguard,
+          target,
+          spec.load_balance.as_ref(),
+          spec.idle_lifetime,
+        );
       }
       /* ---------------------------------------- */
       ProtocolType::Tls => {
@@ -94,7 +100,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
         if spec.ech.is_some() {
           trace::warn!("QUIC ECH is not supported yet");
         }
-        udp_mux_builder.dst_quic(
+        udp_mux_builder.set_quic(
           target,
           spec.load_balance.as_ref(),
           spec.idle_lifetime,

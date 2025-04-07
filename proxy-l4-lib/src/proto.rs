@@ -27,3 +27,26 @@ impl TryFrom<&str> for ProtocolType {
     }
   }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// TCP protocol types
+pub(crate) enum TcpProtocolType {
+  /// TCP: cleartext HTTP
+  Http,
+  /// TCP: TLS
+  Tls,
+  /// TCP: SSH
+  Ssh,
+  /// TCP: Any
+  Any,
+}
+impl std::fmt::Display for TcpProtocolType {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      TcpProtocolType::Http => write!(f, "http"),
+      TcpProtocolType::Tls => write!(f, "tls"),
+      TcpProtocolType::Ssh => write!(f, "ssh"),
+      TcpProtocolType::Any => write!(f, "any"),
+    }
+  }
+}

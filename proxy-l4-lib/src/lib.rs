@@ -28,7 +28,11 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
 
   // For default targets
   if let Some(tcp_target) = config.tcp_target.as_ref() {
-    tcp_mux_builder.dst_any(tcp_target.as_slice(), config.tcp_load_balance.as_ref());
+    tcp_mux_builder.set_base(
+      proto::TcpProtocolType::Any,
+      tcp_target.as_slice(),
+      config.tcp_load_balance.as_ref(),
+    );
   }
   if let Some(udp_target) = config.udp_target.as_ref() {
     udp_mux_builder.dst_any(
@@ -48,11 +52,11 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
     }
     match spec.protocol {
       ProtocolType::Http => {
-        tcp_mux_builder.dst_http(target, spec.load_balance.as_ref());
+        tcp_mux_builder.set_base(proto::TcpProtocolType::Http, target, spec.load_balance.as_ref());
       }
       /* ---------------------------------------- */
       ProtocolType::Ssh => {
-        tcp_mux_builder.dst_ssh(target, spec.load_balance.as_ref());
+        tcp_mux_builder.set_base(proto::TcpProtocolType::Ssh, target, spec.load_balance.as_ref());
       }
       /* ---------------------------------------- */
       ProtocolType::Wireguard => {
@@ -68,7 +72,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
           .server_names
           .as_ref()
           .map(|v| v.iter().map(|x| x.as_str()).collect::<Vec<&str>>());
-        tcp_mux_builder.dst_tls(
+        tcp_mux_builder.set_tls(
           target,
           spec.load_balance.as_ref(),
           server_names.as_deref(),

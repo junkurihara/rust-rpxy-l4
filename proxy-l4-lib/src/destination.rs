@@ -87,6 +87,19 @@ impl Destination {
   }
 }
 
+impl TryFrom<(&[SocketAddr], Option<&LoadBalance>)> for Destination {
+  type Error = ProxyBuildError;
+  fn try_from((dst_addrs, load_balance): (&[SocketAddr], Option<&LoadBalance>)) -> Result<Self, Self::Error> {
+    let binding = LoadBalance::default();
+    let load_balance = load_balance.unwrap_or(&binding);
+    let res = DestinationBuilder::default()
+      .dst_addrs(dst_addrs.to_vec())
+      .load_balance(*load_balance)
+      .build()?;
+    Ok(res)
+  }
+}
+
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, Default)]
 /// Matching rule of TLS Server Name Indication (SNI) and Application-Layer Protocol Negotiation (ALPN) for routing

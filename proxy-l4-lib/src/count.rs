@@ -1,6 +1,6 @@
 use std::sync::{
-  atomic::{AtomicUsize, Ordering},
   Arc,
+  atomic::{AtomicUsize, Ordering},
 };
 
 /// DashMap type alias, uses ahash::RandomState as hashbuilder

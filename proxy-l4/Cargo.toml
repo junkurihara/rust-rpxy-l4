@@ -33,7 +33,7 @@ mimalloc = { version = "=0.1.44", default-features = false }
 libmimalloc-sys = { version = "=0.1.40" }
 
 # async runtime
-tokio = { version = "1.44.1", default-features = false, features = [
+tokio = { version = "1.44.2", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",

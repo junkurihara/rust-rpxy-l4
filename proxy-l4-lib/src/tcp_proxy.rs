@@ -354,7 +354,7 @@ impl TcpProxy {
 
     let listener_service = async {
       loop {
-        let (mut incoming_stream, src_addr) = match tcp_listener.accept().await {
+        let (incoming_stream, src_addr) = match tcp_listener.accept().await {
           Err(e) => {
             error!("Error in TCP listener: {e}");
             continue;
@@ -375,66 +375,7 @@ impl TcpProxy {
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
           let connection_count = self.connection_count.clone();
-          async move {
-            let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
-            let Ok(probe_result) = timeout(
-              Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
-              TcpProbedProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
-            )
-            .await
-            else {
-              error!("Timeout to probe the incoming TCP stream");
-              return;
-            };
-            let probed_protocol = match probe_result {
-              Ok(ProbeResult::Success(p)) => p,
-              Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
-              Err(e) => {
-                error!("Failed to detect protocol: {e}");
-                connection_count.decrement();
-                return;
-              }
-            };
-            // TODO: found_dst contains not only TcpDestinationInner address but also ECH config for TLS
-            let found_dst = match dst_mux.find_destination(&probed_protocol) {
-              Ok(addr) => addr,
-              Err(e) => {
-                error!("No route for {probed_protocol}: {e}");
-                connection_count.decrement();
-                return;
-              }
-            };
-
-            let Ok(dst_addr) = found_dst.get_destination(&src_addr) else {
-              error!("Failed to get destination address for {src_addr}");
-              connection_count.decrement();
-              return;
-            };
-            let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await else {
-              error!("Failed to connect to the destination: {dst_addr}");
-              connection_count.decrement();
-              return;
-            };
-            // Write the initial buffer to the outgoing stream
-            // if let TcpProxyProtocol::Tls(client_hello_buf) = protocol {
-            //   if let Err(e) = outgoing_stream.write_all(&client_hello_buf.try_to_bytes().unwrap()).await {
-            //     error!("Failed to write the initial buffer to the outgoing stream: {e}");
-            //     connection_count.decrement();
-            //     return;
-            //   }
-            // } else
-            if let Err(e) = outgoing_stream.write_all(&initial_buf).await {
-              error!("Failed to write the initial buffer to the outgoing stream: {e}");
-              connection_count.decrement();
-              return;
-            }
-            // Then, copy bidirectional
-            if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
-              warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
-            }
-            connection_count.decrement();
-            debug!("TCP proxy connection closed (total: {})", connection_count.current());
-          }
+          handle_tcp_connection(dst_mux, connection_count, incoming_stream, src_addr)
         });
       }
     };
@@ -449,6 +390,76 @@ impl TcpProxy {
     Ok(())
   }
 }
+
+/* ---------------------------------------------------------- */
+/// Handle TCP connection
+async fn handle_tcp_connection(
+  dst_mux: Arc<TcpDestinationMux>,
+  connection_count: ConnectionCount,
+  mut incoming_stream: TcpStream,
+  src_addr: SocketAddr,
+) {
+  let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+  let Ok(probe_result) = timeout(
+    Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
+    TcpProbedProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
+  )
+  .await
+  else {
+    error!("Timeout to probe the incoming TCP stream");
+    return;
+  };
+  let probed_protocol = match probe_result {
+    Ok(ProbeResult::Success(p)) => p,
+    Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
+    Err(e) => {
+      error!("Failed to detect protocol: {e}");
+      connection_count.decrement();
+      return;
+    }
+  };
+  // TODO: found_dst contains not only TcpDestinationInner address but also ECH config for TLS
+  let found_dst = match dst_mux.find_destination(&probed_protocol) {
+    Ok(addr) => addr,
+    Err(e) => {
+      error!("No route for {probed_protocol}: {e}");
+      connection_count.decrement();
+      return;
+    }
+  };
+
+  let Ok(dst_addr) = found_dst.get_destination(&src_addr) else {
+    error!("Failed to get destination address for {src_addr}");
+    connection_count.decrement();
+    return;
+  };
+  let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await else {
+    error!("Failed to connect to the destination: {dst_addr}");
+    connection_count.decrement();
+    return;
+  };
+  // Write the initial buffer to the outgoing stream
+  // if let TcpProxyProtocol::Tls(client_hello_buf) = protocol {
+  //   if let Err(e) = outgoing_stream.write_all(&client_hello_buf.try_to_bytes().unwrap()).await {
+  //     error!("Failed to write the initial buffer to the outgoing stream: {e}");
+  //     connection_count.decrement();
+  //     return;
+  //   }
+  // } else
+  if let Err(e) = outgoing_stream.write_all(&initial_buf).await {
+    error!("Failed to write the initial buffer to the outgoing stream: {e}");
+    connection_count.decrement();
+    return;
+  }
+  // Then, copy bidirectional
+  if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
+    warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
+  }
+  connection_count.decrement();
+  debug!("TCP proxy connection closed (total: {})", connection_count.current());
+}
+
+/* ---------------------------------------------------------- */
 
 #[cfg(test)]
 mod tests {

@@ -108,6 +108,14 @@ impl TryFrom<ConfigToml> for Config {
           .as_ref()
           .map(|v| EchProtocolConfig::try_new(&v.ech_config_list, &v.private_keys))
           .transpose()?;
+        if ech.is_some() {
+          warn!("ECH is configured for protocol: {name}");
+          warn!("Make sure that the ECH config has been set up correctly as the client can refer to it.");
+          warn!(
+            "If DNS HTTPS RR is used for that, check if its value contains \"ech={}\"",
+            &protocol_toml.ech.as_ref().unwrap().ech_config_list
+          );
+        }
 
         let protocol = ProtocolConfig {
           protocol: proto_type,

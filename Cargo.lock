@@ -1332,7 +1332,7 @@ dependencies = [
  "clap",
  "env_logger",
  "log",
- "rustls",
+ "rustls 0.23.25",
  "tokio",
  "webpki-roots",
 ]
@@ -1368,7 +1368,7 @@ dependencies = [
  "hkdf",
  "hpke",
  "rand",
- "rustls",
+ "rustls 0.23.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "sha2",
  "thiserror",
  "tracing",
@@ -1419,6 +1419,19 @@ dependencies = [
  "libc",
  "linux-raw-sys 0.9.3",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "rustls"
+version = "0.23.25"
+dependencies = [
+ "aws-lc-rs",
+ "log",
+ "once_cell",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]

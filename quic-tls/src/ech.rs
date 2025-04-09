@@ -168,6 +168,7 @@ impl TlsClientHello {
 
   /// Recompose the full ClientHelloInner from the decrypted and compressed ClientHelloInner with the information of ClientHelloOuter
   fn recompose_client_hello_inner(&self, compressed_inner: &mut TlsClientHello) -> Result<(), TlsClientHelloError> {
+    compressed_inner.update_session_id(self.legacy_session_id());
     // Check if self is outer and compressed_inner is inner
     if !self.is_ech_outer() || !compressed_inner.is_ech_inner() {
       error!("Attempted to recompose ClientHelloInner from non-ECH outer or non-ECH inner");

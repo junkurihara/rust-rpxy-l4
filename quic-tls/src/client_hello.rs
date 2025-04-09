@@ -248,6 +248,13 @@ impl TlsClientHello {
       }
     })
   }
+  /// Update session ID when ECH inner is recomposed
+  pub(crate) fn update_session_id(&mut self, session_id: Bytes) {
+    self.legacy_session_id = session_id;
+  }
+  pub(crate) fn legacy_session_id(&self) -> Bytes {
+    self.legacy_session_id.clone()
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -10,7 +10,8 @@ categories.workspace = true
 publish = false
 
 [dependencies]
-rustls = { version = "0.23.25", features = ["logging"] }
+# rustls = { version = "0.23.25", features = ["logging"] }
+rustls = { path = "../../rustls/rustls/", features = ["logging"] }
 clap = { version = "4", features = ["derive"] }
 # hickory-resolver = { version = "0.25.1", features = [
 #   "webpki-roots",

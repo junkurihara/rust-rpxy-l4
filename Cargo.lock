@@ -1332,7 +1332,7 @@ dependencies = [
  "clap",
  "env_logger",
  "log",
- "rustls 0.23.25",
+ "rustls 0.23.25 (git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend)",
  "tokio",
  "webpki-roots",
 ]
@@ -1424,6 +1424,8 @@ dependencies = [
 [[package]]
 name = "rustls"
 version = "0.23.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "822ee9188ac4ec04a2f0531e55d035fb2de73f18b41a63c70c2712503b6fb13c"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -1437,8 +1439,7 @@ dependencies = [
 [[package]]
 name = "rustls"
 version = "0.23.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "822ee9188ac4ec04a2f0531e55d035fb2de73f18b41a63c70c2712503b6fb13c"
+source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend#c8f434b51595f92f8279aa205819a02e971e14bb"
 dependencies = [
  "aws-lc-rs",
  "log",

@@ -243,9 +243,9 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "cc"
-version = "1.2.18"
+version = "1.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "525046617d8376e3db1deffb079e91cef90a89fc3ca5c185bbf8c9ecdd15cd5c"
+checksum = "8e3a13707ac958681c13b39b458c073d0d9bc8a22cb1b2f4c8e55eb72c13f362"
 dependencies = [
  "jobserver",
  "libc",
@@ -979,9 +979,9 @@ checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "linux-raw-sys"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe7db12097d22ec582439daf8618b8fdd1a7bef6270e9af3b1ebcd30893cf413"
+checksum = "cd945864f07fe9f5371a27ad7b52a172b4b499999f1d97574c9fa68373937e12"
 
 [[package]]
 name = "lock_api"
@@ -1332,7 +1332,7 @@ dependencies = [
  "clap",
  "env_logger",
  "log",
- "rustls 0.23.25 (git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend)",
+ "rustls 0.23.25",
  "tokio",
  "webpki-roots",
 ]
@@ -1368,7 +1368,7 @@ dependencies = [
  "hkdf",
  "hpke",
  "rand",
- "rustls 0.23.25 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustls 0.23.26",
  "sha2",
  "thiserror",
  "tracing",
@@ -1417,15 +1417,14 @@ dependencies = [
  "bitflags",
  "errno",
  "libc",
- "linux-raw-sys 0.9.3",
+ "linux-raw-sys 0.9.4",
  "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "rustls"
 version = "0.23.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "822ee9188ac4ec04a2f0531e55d035fb2de73f18b41a63c70c2712503b6fb13c"
+source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend#504e0642cc09d72bcea460ec653d16505dc7b855"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -1438,8 +1437,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.25"
-source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend#c8f434b51595f92f8279aa205819a02e971e14bb"
+version = "0.23.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df51b5869f3a441595eac5e8ff14d486ff285f7b8c0df8770e49c3b56351f0f0"
 dependencies = [
  "aws-lc-rs",
  "log",

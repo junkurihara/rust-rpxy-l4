@@ -25,3 +25,4 @@ env_logger = { version = "0.11" }
 webpki-roots = { version = "0.26" }
 base64 = { version = "0.22.1" }
 tokio = { version = "1.44.2" }
+mio = "1.0.3"

@@ -109,12 +109,12 @@ server_names = ["my-public-name.example.com"]
 # For instance, when TLS ClientHello with SNI "example.net" (Outer) is given, the proxy will decrypts the encrypted part of the ClientHello (Inner).
 # Then it forwards the plaintext ClientHello to the target. If ech_config.server_names is given, only inner client hello matched to the entry is forwarded.
 # If decryption fails (e.g. the ECHConfigList is not matched to the OuterClientHello), the connection simply be passed to the target with no modification.
-# TODO: Implement
 [protocols."tls_4".ech]
 # ECHConfigList for the server, base64 encoded.
 ech_config_list = "<base64 encoded ECHConfigList>"
 # Private keys for ECH decryption, matched to entries in ech_config_list.
 private_keys = ["<base64 encoded private key>"]
+
 # (Optional) Server names that only be routed after ECH decryption towards the target address
 server_names = ["example.org"] # TODO: not implemented
 

@@ -11,9 +11,9 @@ use crate::{
 };
 
 /* ------------------------------------------- */
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TLS ClientHello EncryptedClientHello extension
-pub(crate) enum EncryptedClientHello {
+pub enum EncryptedClientHello {
   /// outer ClientHello (0)
   Outer(ClientHelloOuter),
   /// inner ClientHello, which is always empty (1)
@@ -29,17 +29,17 @@ impl std::fmt::Display for EncryptedClientHello {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Outer ClientHello
-pub(crate) struct ClientHelloOuter {
+pub struct ClientHelloOuter {
   /// Cipher suite
-  pub(crate) cipher_suite: HpkeSymmetricCipherSuite,
+  cipher_suite: HpkeSymmetricCipherSuite,
   /// Config ID
-  pub(crate) config_id: u8,
+  config_id: u8,
   /// enc (e.g, Public key of the peer)
-  pub(crate) enc: Bytes,
+  enc: Bytes,
   /// payload (encrypted body)
-  pub(crate) payload: Bytes,
+  payload: Bytes,
 }
 impl ClientHelloOuter {
   /// Fill the payload with zeros for AAD calculation
@@ -48,6 +48,18 @@ impl ClientHelloOuter {
     let payload_len = self.payload.len();
     let payload = vec![0; payload_len];
     self.payload = Bytes::from(payload);
+  }
+  pub(crate) fn cipher_suite(&self) -> &HpkeSymmetricCipherSuite {
+    &self.cipher_suite
+  }
+  pub(crate) fn config_id(&self) -> u8 {
+    self.config_id
+  }
+  pub(crate) fn enc(&self) -> &Bytes {
+    &self.enc
+  }
+  pub(crate) fn payload(&self) -> &Bytes {
+    &self.payload
   }
 }
 /* ------------------------------------------- */
@@ -142,12 +154,24 @@ impl Serialize for ClientHelloOuter {
 }
 
 /* ------------------------------------------- */
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// TLS ClientHello OuterExtensions extension, presented only in inner ClientHello (decrypted ECH payload)
-pub(crate) struct OuterExtensions {
+pub struct OuterExtensions {
   /// Extension types removed from the ClientHelloInner
   outer_extensions: Vec<u16>,
 }
+
+impl OuterExtensions {
+  // Iterator for outer extensions
+  pub(crate) fn iter(&self) -> impl Iterator<Item = u16> + '_ {
+    self.outer_extensions.iter().copied()
+  }
+  // length of outer extensions
+  pub(crate) fn len(&self) -> usize {
+    self.outer_extensions.len()
+  }
+}
+
 impl std::fmt::Display for OuterExtensions {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "ECH OuterExtensions: {:?}", self.outer_extensions)

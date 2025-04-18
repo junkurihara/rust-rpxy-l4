@@ -99,18 +99,24 @@ protocol = "tls"
 # TODO: consider if this can be resolved by DNS from the decrypted SNI
 target = ["192.168.122.7:443"]
 load_balance = "source_ip"
-server_names = ["example.net"]
+# (Optional) If specified, TLS connection with SNI in the intersection of `server_names` and [`ech_config.content.public_name`] are evaluated.
+# In other words, even if not specified, allowed public names in ech config are only evaluated and possibly passed to the target.
+# This should be specified if the target is not the same as the public name in the ECH config.
+server_names = ["my-public-name.example.com"]
 
 # (Optional) Support for encrypted client hello (ECH) for TLS connections, only valid when `protocol = "tls"` or `"quic"` and `server_name` is set.
 # If specified, the proxy will attempts to decrypt the encrypted InnerClientHello contained in the OuterClientHello matched to the SNI-matched connections.
 # For instance, when TLS ClientHello with SNI "example.net" (Outer) is given, the proxy will decrypts the encrypted part of the ClientHello (Inner).
-# Then it forwards the plaintext ClientHello to the target. If ech_config.server_names is given, only inner client hello matched to the entry is forwareded.
-# TODO: Implement
-[protocols."tls_3".ech]
-# Path to the private key for ECH decryption
-private_keys = ["/path/to/private.key"]
+# Then it forwards the plaintext ClientHello to the target. If ech_config.server_names is given, only inner client hello matched to the entry is forwarded.
+# If decryption fails (e.g. the ECHConfigList is not matched to the OuterClientHello), the connection simply be passed to the target with no modification.
+[protocols."tls_4".ech]
+# ECHConfigList for the server, base64 encoded.
+ech_config_list = "<base64 encoded ECHConfigList>"
+# Private keys for ECH decryption, matched to entries in ech_config_list.
+private_keys = ["<base64 encoded private key>"]
+
 # (Optional) Server names that only be routed after ECH decryption towards the target address
-server_names = ["example.org"]
+server_names = ["example.org"] # TODO: not implemented
 
 
 #########################

@@ -1,4 +1,4 @@
-use crate::serialize::SerDeserError;
+use crate::{ech_config::EchConfigError, serialize::SerDeserError};
 
 /// Probe result
 pub enum TlsProbeFailure {
@@ -24,7 +24,17 @@ pub enum TlsClientHelloError {
   InvalidEchExtension,
   #[error("Invalid OuterExtensions Extension")]
   InvalidOuterExtensionsExtension,
+  #[error("Unsupported Hpke Kdf, or Aead")]
+  UnsupportedHpkeKdfAead,
+  #[error("Hpke error")]
+  HpkeError(hpke::HpkeError),
+  #[error("ECH config public_name mismatched with SNI in client hello outer")]
+  PublicNameMismatch,
+  #[error("Invalid Ech ClientHello Inner recomposition attempt")]
+  InvalidClientHelloRecomposition,
 
   #[error("Error in serialization/deserialization")]
   SerDeserError(#[from] SerDeserError),
+  #[error("Error in EchConfig")]
+  EchConfigError(#[from] EchConfigError),
 }

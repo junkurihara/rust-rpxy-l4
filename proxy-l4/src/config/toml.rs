@@ -1,6 +1,6 @@
 use crate::log::warn;
 use anyhow::anyhow;
-use rpxy_l4_lib::{Config, LoadBalance, ProtocolConfig, ProtocolType};
+use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType};
 use serde::Deserialize;
 use std::{
   collections::{HashMap, HashSet},
@@ -43,6 +43,16 @@ pub struct ProtocolToml {
   pub alpn: Option<Vec<String>>,
   /// Only TLS
   pub server_names: Option<Vec<String>>,
+  /// Only TLS
+  pub ech: Option<EchToml>,
+}
+
+#[derive(Deserialize, Debug, Default, PartialEq, Eq, Clone)]
+pub struct EchToml {
+  /// Base64 encoded ECH config list object
+  pub ech_config_list: String,
+  /// List of base64 encoded raw private keys
+  pub private_keys: Vec<String>,
 }
 
 impl ConfigToml {
@@ -93,6 +103,20 @@ impl TryFrom<ConfigToml> for Config {
           .map(|x| x.as_str().try_into())
           .transpose()?;
 
+        let ech = protocol_toml
+          .ech
+          .as_ref()
+          .map(|v| EchProtocolConfig::try_new(&v.ech_config_list, &v.private_keys))
+          .transpose()?;
+        if ech.is_some() {
+          warn!("ECH is configured for protocol: {name}");
+          warn!("Make sure that the ECH config has been set up correctly as the client can refer to it.");
+          warn!(
+            "If DNS HTTPS RR is used for that, check if its value contains \"ech={}\"",
+            &protocol_toml.ech.as_ref().unwrap().ech_config_list
+          );
+        }
+
         let protocol = ProtocolConfig {
           protocol: proto_type,
           target,
@@ -100,6 +124,7 @@ impl TryFrom<ConfigToml> for Config {
           idle_lifetime: protocol_toml.idle_lifetime,
           alpn: protocol_toml.alpn,
           server_names: protocol_toml.server_names,
+          ech,
         };
 
         protocols.insert(name, protocol);

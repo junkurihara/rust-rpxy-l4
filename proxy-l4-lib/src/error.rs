@@ -25,12 +25,24 @@ pub enum ProxyError {
 
   #[error("Broken UDP connection")]
   BrokenUdpConnection,
+
+  /* --------------------------------------- */
+  #[error("TLS or Quic error: {0}")]
+  TlsError(#[from] quic_tls::TlsClientHelloError),
 }
 
 /// Errors that happens during building the proxy
 #[derive(thiserror::Error, Debug)]
 pub enum ProxyBuildError {
   /* --------------------------------------- */
+  /// Configuration error: ech
+  #[error("ECH config list error: {0}")]
+  EchConfigError(#[from] quic_tls::EchConfigError),
+
+  /// Invalid Ech private key
+  #[error("Invalid ECH private key: {0}")]
+  InvalidEchPrivateKey(String),
+
   /// Configuration error: protocol
   #[error("Unsupported protocol: {0}")]
   UnsupportedProtocol(String),

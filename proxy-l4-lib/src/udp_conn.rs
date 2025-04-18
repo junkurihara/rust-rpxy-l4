@@ -4,7 +4,7 @@ use crate::{
   socket::bind_udp_socket,
   time_util::get_since_the_epoch,
   trace::*,
-  udp_proxy::UdpDestination,
+  udp_proxy::UdpDestinationInner,
 };
 use std::{
   net::SocketAddr,
@@ -70,7 +70,7 @@ impl UdpConnectionPool {
   pub(crate) async fn create_new_connection(
     &self,
     src_addr: &SocketAddr,
-    udp_dst: &UdpDestination,
+    udp_dst: &UdpDestinationInner,
     udp_socket_to_downstream: Arc<UdpSocket>,
   ) -> Result<UdpConnection, ProxyError> {
     // Connection limit is handled by the caller
@@ -193,7 +193,7 @@ impl UdpConnectionInner {
   /// Create a new UdpConnection
   async fn try_new(
     src_addr: &SocketAddr,
-    udp_dst: &UdpDestination,
+    udp_dst: &UdpDestinationInner,
     udp_socket_to_downstream: Arc<UdpSocket>,
     cancel_token: CancellationToken,
   ) -> Result<Self, ProxyError> {
@@ -370,7 +370,7 @@ mod tests {
 
     let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
     let udp_dst =
-      UdpDestination::try_from((["127.0.0.1:54321".parse::<SocketAddr>().unwrap()].as_slice(), None, Some(10))).unwrap();
+      UdpDestinationInner::try_from((["127.0.0.1:54321".parse::<SocketAddr>().unwrap()].as_slice(), None, Some(10))).unwrap();
 
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());

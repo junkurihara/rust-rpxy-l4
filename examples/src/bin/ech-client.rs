@@ -1,12 +1,10 @@
 //! **Test code based on [Rustls Examples](https://github.com/rustls/rustls/tree/main/examples)**
 //! Using static keys and ech config for testing
-//! - secret key: "S7N8IwpHsrukJUnK3ybUtoiL/30q6uZkGLvlakc929c"
-//! - public key: "0+QtRVVkX1CfYHe9kf43qc7RXXCOMkfSJ+jk+izqSHY"
-//! - ech config list (base64): AE3+DQBJAAAgACDT5C1FVWRfUJ9gd72R/jepztFdcI4yR9In6OT6LOpIdgAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA
+//! - secret key: "KwyvZOuPlflYlcmJbwhA24HMWUvxXXyan/oh9cJ6lNw"
+//! - ech config list (base64): ADz+DQA4ugAgACA9U8FCH7vKOFXVCCcAdpUUSfu3rzlooRNflhOXyV0uTwAEAAEAAQAJbG9jYWxob3N0AAA
 //!
-//! - secret key: "pLNPBNTitfdij7QQznqFbnNxPyorRN2ZARSWWpYOBDY"
-//! - public key: "rY0SPwP8yflbYTUHTNcX/RWC/oy+qAi2ZcM62nwLVXU"
-//! - ech config list (base64): AE3+DQBJAAAgACCtjRI/A/zJ+VthNQdM1xf9FYL+jL6oCLZlwzrafAtVdQAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA
+//! `cargo run --package rpxy-l4-examples --bin ech-client -- --host localhost localhost www.defo.ie`
+//!
 //! ============================================================================
 //! This is a simple example demonstrating how to use Encrypted Client Hello (ECH) with
 //! rustls and hickory-dns.
@@ -30,17 +28,17 @@
 //!   </p>
 //! ```
 
-use std::fs;
+// use std::fs;
 use std::io::{BufReader, Read, Write, stdout};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 
 use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 use clap::Parser;
-use hickory_resolver::Resolver;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-use hickory_resolver::proto::rr::rdata::svcb::{SvcParamKey, SvcParamValue};
-use hickory_resolver::proto::rr::{RData, RecordType};
+// use hickory_resolver::Resolver;
+// use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+// use hickory_resolver::proto::rr::rdata::svcb::{SvcParamKey, SvcParamValue};
+// use hickory_resolver::proto::rr::{RData, RecordType};
 use log::trace;
 use rustls::RootCertStore;
 use rustls::client::{EchConfig, EchGreaseConfig, EchStatus};
@@ -50,10 +48,7 @@ use rustls::crypto::hpke::Hpke;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, EchConfigListBytes, ServerName};
 
-const ECH_SECRET_KEY: &str = "pLNPBNTitfdij7QQznqFbnNxPyorRN2ZARSWWpYOBDY";
-const ECH_PUBLIC_KEY: &str = "rY0SPwP8yflbYTUHTNcX/RWC/oy+qAi2ZcM62nwLVXU";
-const ECH_CONFIG: &str =
-  "AE3+DQBJAAAgACCtjRI/A/zJ+VthNQdM1xf9FYL+jL6oCLZlwzrafAtVdQAEAAEAAQAabXktcHVibGljLW5hbWUuZXhhbXBsZS5jb20AAA";
+const ECH_CONFIG: &str = "ADz+DQA4ugAgACA9U8FCH7vKOFXVCCcAdpUUSfu3rzlooRNflhOXyV0uTwAEAAEAAQAJbG9jYWxob3N0AAA";
 const LOCAL_SOCK: &str = "127.0.0.1:8448";
 
 fn main() {
@@ -138,7 +133,11 @@ fn main() {
       args.host.as_ref().unwrap_or(&args.inner_hostname),
     );
     dbg!(&request);
-    tls.write_all(request.as_bytes()).unwrap();
+    let res = tls.write_all(request.as_bytes());
+    if let Err(e) = res {
+      eprintln!("Error writing to socket: {:#?}", e);
+      return;
+    }
     assert!(!tls.conn.is_handshaking());
     assert_eq!(
       tls.conn.ech_status(),
@@ -208,38 +207,38 @@ struct Args {
   inner_hostname: String,
 }
 
-// TODO(@cpu): consider upstreaming to hickory-dns
-fn lookup_ech_configs(resolver: &Resolver, domain: &str, port: u16) -> Option<EchConfigListBytes<'static>> {
-  // For non-standard ports, lookup the ECHConfig using port-prefix naming
-  // See: https://datatracker.ietf.org/doc/html/rfc9460#section-9.1
-  let qname_to_lookup = match port {
-    443 => domain.to_owned(),
-    port => format!("_{port}._https.{domain}"),
-  };
+// // TODO(@cpu): consider upstreaming to hickory-dns
+// fn lookup_ech_configs(resolver: &Resolver, domain: &str, port: u16) -> Option<EchConfigListBytes<'static>> {
+//   // For non-standard ports, lookup the ECHConfig using port-prefix naming
+//   // See: https://datatracker.ietf.org/doc/html/rfc9460#section-9.1
+//   let qname_to_lookup = match port {
+//     443 => domain.to_owned(),
+//     port => format!("_{port}._https.{domain}"),
+//   };
 
-  resolver
-    .lookup(qname_to_lookup, RecordType::HTTPS)
-    .ok()?
-    .record_iter()
-    .find_map(|r| match r.data() {
-      RData::HTTPS(svcb) => svcb.svc_params().iter().find_map(|sp| match sp {
-        (SvcParamKey::EchConfigList, SvcParamValue::EchConfigList(e)) => Some(e.clone().0),
-        _ => None,
-      }),
-      _ => None,
-    })
-    .map(Into::into)
-}
+//   resolver
+//     .lookup(qname_to_lookup, RecordType::HTTPS)
+//     .ok()?
+//     .record_iter()
+//     .find_map(|r| match r.data() {
+//       RData::HTTPS(svcb) => svcb.svc_params().iter().find_map(|sp| match sp {
+//         (SvcParamKey::EchConfigList, SvcParamValue::EchConfigList(e)) => Some(e.clone().0),
+//         _ => None,
+//       }),
+//       _ => None,
+//     })
+//     .map(Into::into)
+// }
 
-fn read_ech(path: &str) -> EchConfigListBytes<'static> {
-  let file = fs::File::open(path).unwrap_or_else(|_| panic!("Cannot open ECH file: {path}"));
-  let mut reader = BufReader::new(file);
-  let mut bytes = Vec::new();
-  reader
-    .read_to_end(&mut bytes)
-    .unwrap_or_else(|_| panic!("Cannot read ECH file: {path}"));
-  bytes.into()
-}
+// fn read_ech(path: &str) -> EchConfigListBytes<'static> {
+//   let file = fs::File::open(path).unwrap_or_else(|_| panic!("Cannot open ECH file: {path}"));
+//   let mut reader = BufReader::new(file);
+//   let mut bytes = Vec::new();
+//   reader
+//     .read_to_end(&mut bytes)
+//     .unwrap_or_else(|_| panic!("Cannot read ECH file: {path}"));
+//   bytes.into()
+// }
 
 /// A HPKE suite to use for GREASE ECH.
 ///

@@ -1,5 +1,5 @@
 use crate::{
-  client_hello::{TlsClientHello, TlsClientHelloInfo, probe_tls_client_hello, probe_tls_handshake_message},
+  client_hello::{TlsClientHello, probe_tls_client_hello, probe_tls_handshake_message},
   error::TlsProbeFailure,
   trace::*,
 };
@@ -11,7 +11,7 @@ const QUIC_VERSION_LEN: usize = 4;
 /// Is QUIC initial packets contained?
 /// We consider initial packets only since only communication initiated from the client is expected.
 /// Version negotiation packet is sent by the server as a response to the client
-pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClientHelloInfo, TlsProbeFailure> {
+pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClientHello, TlsProbeFailure> {
   if udp_datagrams.is_empty() || udp_datagrams.iter().any(|p| p.is_empty()) {
     return Err(TlsProbeFailure::Failure);
   }
@@ -40,7 +40,7 @@ pub fn probe_quic_initial_packets(udp_datagrams: &[Vec<u8>]) -> Result<TlsClient
     .filter(|p| matches!(p.packet_type, QuicCoalesceablePacketType::Initial))
     .collect::<Vec<_>>();
 
-  probe_quic_unprotected_frames(&unprotected).map(|ch| ch.into())
+  probe_quic_unprotected_frames(&unprotected)
 }
 
 // /* ---------------------------------------------------- */
@@ -183,7 +183,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
       debug!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
       break;
     };
-    debug!("QUIC Version: {}, Packet Type: {}", version, packet_type);
+    trace!("QUIC Version: {}, Packet Type: {}", version, packet_type);
 
     // DCID and SCID
     let Ok((dcid, scid)) = dcid_scid(udp_datagram, &mut ptr) else {
@@ -200,7 +200,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
     }
 
     let token = udp_datagram[ptr - token_len..ptr].to_vec();
-    debug!("Token: {:x?}", &token);
+    trace!("Token: {:x?}", &token);
     // Payload length
     let Ok(payload_len) = variable_length_int(udp_datagram, &mut ptr) else {
       break;
@@ -210,7 +210,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
       debug!("Buffer too short for payload");
       break;
     }
-    debug!("Payload: {:x?}", &udp_datagram[ptr..ptr + payload_len]);
+    trace!("Payload: {:x?}", &udp_datagram[ptr..ptr + payload_len]);
 
     // So far, the buffer is consistent with a QUIC coalseable packet.
     // Now, try to decrypt the packet and check if it is a TLS ClientHello.
@@ -219,7 +219,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
       ptr += payload_len;
       continue;
     };
-    debug!(
+    trace!(
       "Decrypted quic packet payload ({}): {:x?}",
       packet_type, unprotected_result.payload
     );
@@ -260,7 +260,7 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<
       return Err(TlsProbeFailure::Failure);
     }
     Ok(crypto_frames) => {
-      debug!("Parsed QUIC frames: {:?}", crypto_frames);
+      trace!("Parsed QUIC frames: {:?}", crypto_frames);
       crypto_frames
     }
   };
@@ -281,7 +281,7 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<
 
   // Check client hello header
   let mut expected_client_hello = bytes::Bytes::from(expected_client_hello);
-  probe_tls_handshake_message(&mut expected_client_hello)?;
+  let _tls_handshake_message_header = probe_tls_handshake_message(&mut expected_client_hello)?;
 
   // Check client hello body
   let Some(client_hello) = probe_tls_client_hello(&mut expected_client_hello) else {
@@ -477,7 +477,7 @@ fn unprotect(
   let hp_key = GenericArray::from_slice(protection_values.hp.as_slice());
   let cipher = Aes128::new(hp_key);
   cipher.encrypt_block(&mut mask);
-  debug!("Header protection mask: {:x?}", mask);
+  trace!("Header protection mask: {:x?}", mask);
 
   // Unprotect header protection
   // header protected first byte (2 LSBs (reserved fields are always unset, ignored))
@@ -487,13 +487,13 @@ fn unprotect(
   if payload_len < pn_length || pn_offset + pn_length > buf.len() {
     return Err(anyhow!("Payload length too short"));
   }
-  debug!("Packet number length: {}", pn_length);
+  trace!("Packet number length: {}", pn_length);
   let packet_number = &buf[pn_offset..pn_offset + pn_length]
     .iter()
     .zip(mask[1..pn_length + 1].iter())
     .map(|(a, b)| a ^ b)
     .collect::<Vec<u8>>();
-  debug!("Packet number: {:x?}", packet_number);
+  trace!("Packet number: {:x?}", packet_number);
 
   // Unprotect packet protection part
   let encrypted_payload_offset = pn_offset + pn_length;
@@ -501,10 +501,10 @@ fn unprotect(
   let mut unprotected_header = buf[..encrypted_payload_offset].to_vec();
   unprotected_header[0] = plain_first_byte;
   unprotected_header[pn_offset..].copy_from_slice(packet_number);
-  debug!("unprotected_header: {:x?}", unprotected_header);
+  trace!("unprotected_header: {:x?}", unprotected_header);
 
   let encrypted_part = &buf[encrypted_payload_offset..encrypted_payload_offset + encrypted_payload_length];
-  debug!("encrypted_part: {:x?}", encrypted_part);
+  trace!("encrypted_part: {:x?}", encrypted_part);
   let payload = Payload {
     aad: unprotected_header.as_ref(),
     msg: encrypted_part,
@@ -541,7 +541,7 @@ fn build_nonce(iv: &[u8], pn: &[u8]) -> [u8; 12] {
 
   let candidate_pn = (expected_pn & !pn_mask) | pn_int;
   let candidate_pn_buf = candidate_pn.to_be_bytes();
-  debug!("Candidate packet number: {:x?}", candidate_pn_buf);
+  trace!("Candidate packet number: {:x?}", candidate_pn_buf);
 
   let mut nonce = [0u8; 12];
   nonce.copy_from_slice(iv);
@@ -562,7 +562,7 @@ fn dcid_scid(buf: &[u8], ptr: &mut usize) -> Result<(Vec<u8>, Vec<u8>), anyhow::
     return Err(anyhow!("Buffer too short"));
   }
   let dcid = buf[*ptr - dcid_len..*ptr].to_vec();
-  debug!("DCID: {:x?}", dcid);
+  trace!("DCID: {:x?}", dcid);
 
   // SCID length
   let scid_len = buf[*ptr] as usize;
@@ -571,7 +571,7 @@ fn dcid_scid(buf: &[u8], ptr: &mut usize) -> Result<(Vec<u8>, Vec<u8>), anyhow::
     return Err(anyhow!("Buffer too short"));
   }
   let scid = buf[*ptr - scid_len..*ptr].to_vec();
-  debug!("SCID: {:x?}", scid);
+  trace!("SCID: {:x?}", scid);
 
   Ok((dcid, scid))
 }

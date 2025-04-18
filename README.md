@@ -21,9 +21,11 @@
 - **Load balancing**: `rpxy-l4` can distribute incoming connections to multiple backend servers based on the several simple load balancing algorithms.
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
 - **TLS/QUIC forwarder**: `rpxy-l4` can forward TLS/IETF QUIC streams to appropriate backend servers based on the ServerName Indication (SNI) and Application Layer Protocol Negotiation (ALPN) values.
-<!-- - [TODO:] **TLS/QUIC Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy to serve TLS/QUIC streams with IETF-Draft Encrypted Client Hello. In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server. -->
+- **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with IETF-Draft Encrypted Client Hello. In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
 
 [^quic]: Not Google QUIC. Both QUIC v1 ([RFC9000](https://datatracker.ietf.org/doc/html/rfc9000), [RFC9001](https://datatracker.ietf.org/doc/html/rfc9001)) and QUIC v2 ([RFC9369](https://datatracker.ietf.org/doc/html/rfc9369)) are supported.
+
+[^ech_proxy]: Client facing server in the context of [ECH Split Mode](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-3)
 
 ## Installation
 
@@ -215,6 +217,12 @@ idle_lifetime = 30
 
 This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
 
+### 4. Experimental features
+
+#### 4.1. TLS Encrypted Client Hello (ECH) proxy
+
+See [./examples/README.md](./examples/README.md) for the ECH proxy configuration and client and backend server examples.
+
 ## Containerization
 
 The container, docker, image is available at Docker Hub and Github Container Registry.
@@ -229,6 +237,19 @@ The detailed configuration of the container can be found at [./docker](./docker)
 ### `UDP` pseudo connection management
 
 As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from each clients based on the socket address. Also, `rpxy-l4` identifies specific protocols by probing their initial/handshake packets. These means that if the idle lifetime of pseudo connections is too short and the client sends packets in a long interval, the pseudo connection would be removed even during the communication. Then, the subsequent packets from the client, i.e., NOT the initial/handshake packets, are *routed not to the protocol-specific target but to the default target (or dropped if there is no default target)*. To avoid this, you should set the `idle_lifetime` value of UDP-based protocol multiplexer to be longer than the interval of the client's packet sending.
+
+### Encrypted Client Hello (ECH) proxy
+
+#### Reduced functionality
+
+*Currently we do not fully implement the function of client facing server described in the [IETF draft](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1).* Specifically, `rpxy-l4` does not support the retry mechanisms of client facing server, i.e., it currently has no state about ECH request, and doesn't handle and emit the `HelloRetryRequest` message. It works as the following *simplified and reduced* manner, which is different from the draft:
+
+- If no matching configuration with the given ECH is found, it just forwards the client hello to the backend server as it is.
+- If decryption fails or decryption result is illegal, then it doesn't return illegal parameter to the client back, but just drops the packet.
+
+#### No ECH over QUIC
+
+ECH proxy function is limited only to the TLS protocol, and ECH over QUIC is not supported yet.
 
 ### Others
 

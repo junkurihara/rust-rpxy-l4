@@ -2,7 +2,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 // Define distinct deserialize/serialize error for objects
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SerDeserError {
+pub enum SerDeserError {
   #[error("Short input")]
   ShortInput,
   #[error("Invalid input length")]

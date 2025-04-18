@@ -217,6 +217,12 @@ idle_lifetime = 30
 
 This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
 
+### 4. Experimental features
+
+#### 4.1. TLS Encrypted Client Hello (ECH) proxy
+
+See [./examples/README.md](./examples/README.md) for the ECH proxy configuration and client and backend server examples.
+
 ## Containerization
 
 The container, docker, image is available at Docker Hub and Github Container Registry.

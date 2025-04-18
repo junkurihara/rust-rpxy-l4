@@ -9,12 +9,12 @@ cargo run --package rpxy-l4-examples --bin tlsserver-mio -- --certs ./examples/s
 This simply hosts a TLS server working as the backend server in the context of [ECH Split Mode](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-3).
 
 > [!NOTE]
-> The above server certificate and key are self-signed for the common name 'localhost'. This means that you will get an error as 'untrusted certificate' when you try to connect to it with the following client connection. To avoid this, you need to install the server certificate as trusted in your system.
+> The above server certificate and key are self-signed for the common name `localhost`. This means that you will get an error as `untrusted certificate` or `unknown CA` when you try to connect to it without `--cafile server.crt` option in the client.
 
 ## Start client
 
 ```bash
-cargo run --package rpxy-l4-examples --bin ech-client -- --host localhost localhost localhost
+cargo run --package rpxy-l4-examples --bin ech-client -- --host localhost --cafile ./examples/server.crt localhost localhost
 ```
 
 This will connect to the backend server by cloaking the target hostname `localhost:443` (the backend server) with the public hostname `localhost:8448` (the client facing server, i.e., `rpxy-l4`), and tries to send HTTP request with host header `localhost`.

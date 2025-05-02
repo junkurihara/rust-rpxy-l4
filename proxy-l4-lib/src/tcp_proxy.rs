@@ -283,9 +283,9 @@ fn is_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
 impl TcpProbedProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
   async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<Self>, ProxyError> {
-    let mut probe_fns = vec![is_ssh, is_http, is_tls_handshake];
+    let mut probe_functions = vec![is_ssh, is_http, is_tls_handshake];
 
-    while !probe_fns.is_empty() {
+    while !probe_functions.is_empty() {
       // Read the first several bytes to probe. at the first loop, the buffer is empty.
       let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
       let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
@@ -293,7 +293,7 @@ impl TcpProbedProtocol {
 
       // Check probe functions
       #[allow(clippy::type_complexity)]
-      let (new_probe_fns, probe_res): (Vec<fn(&[u8]) -> ProbeResult<_>>, Vec<_>) = probe_fns
+      let (new_probe_fns, probe_res): (Vec<fn(&[u8]) -> ProbeResult<_>>, Vec<_>) = probe_functions
         .into_iter()
         .filter_map(|f| {
           let res = f(buf);
@@ -310,7 +310,7 @@ impl TcpProbedProtocol {
       };
 
       // If the rest returned PollNext, fetch more data
-      probe_fns = new_probe_fns;
+      probe_functions = new_probe_fns;
     }
 
     debug!("Untyped TCP connection");

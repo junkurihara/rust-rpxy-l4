@@ -10,7 +10,7 @@ use crate::{
   trace::*,
 };
 use bytes::BytesMut;
-use quic_tls::{TlsClientHelloBuffer, TlsProbeFailure, probe_tls_handshake};
+use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer, TlsProbeFailure, probe_tls_handshake};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
   io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional},
@@ -439,21 +439,27 @@ async fn handle_tcp_connection(
     return;
   };
 
-  let to_be_written =
-    if let (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) = (found_dst, probed_protocol) {
+  let to_be_written = match (found_dst, probed_protocol) {
+    (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) => {
       // Handle tls, especially ECH
       let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination) else {
-        // TODO: Error means that illegal parameter must be sent back when error
-        error!("Failed to handle TLS client hello");
+        // Error means that illegal parameter must be sent back when error
+        error!("Failed to handle TLS client hello, sending illegal_parameter alert back to the client");
+        let illegal_parameter_alert = TlsAlertBuffer::default();
+        if let Err(e) = send_back_tls_alert(&mut incoming_stream, &illegal_parameter_alert).await {
+          error!("Failed to send TLS alert: {e}");
+        }
         connection_count.decrement();
         return;
       };
-
       client_hello_bytes
-    } else {
+    }
+    _ => {
       // handle non-tls
       initial_buf.freeze()
-    };
+    }
+  };
+
   if let Err(e) = outgoing_stream.write_all(&to_be_written).await {
     error!("Failed to write the initial buffer to the outgoing stream: {e}");
     connection_count.decrement();
@@ -469,12 +475,13 @@ async fn handle_tcp_connection(
 
 /// handle tls, especially ECH
 /// This returns as is (Ok(...)) in Bytes when no matching config_id is found (case of GREASE), otherwise returns decrypted ClientHello record in Bytes
-/// TODO: If this returns Err(...), it means that it failed to be decrypted or that the decrypted result is illegal. Then we must send some error back to the client.
+/// If this returns Err(...), it means that it failed to be decrypted or that the decrypted result is illegal. Then we must send some error back to the client.
 fn handle_tls_client_hello<T>(
   orig_ch_buf: &TlsClientHelloBuffer,
   tls_destination: &TlsDestinationItem<T>,
 ) -> Result<bytes::Bytes, ProxyError> {
   if orig_ch_buf.is_ech_outer() && tls_destination.ech().is_some() {
+    trace!("Handling ECH ClientHello Outer");
     let ech = tls_destination.ech().unwrap();
     let Some(decrypted_ch) = orig_ch_buf.client_hello.decrypt_ech(&ech.private_keys, false)? else {
       return Ok(orig_ch_buf.try_to_bytes()?);
@@ -490,6 +497,27 @@ fn handle_tls_client_hello<T>(
   };
 
   Ok(orig_ch_buf.try_to_bytes()?)
+}
+
+/// Handle TLS alert, writing TLS alert to the incoming stream back to the client
+async fn send_back_tls_alert(incoming_stream: &mut TcpStream, alert_buf: &TlsAlertBuffer) -> Result<(), ProxyError> {
+  let alert_bytes = alert_buf.to_bytes();
+  match timeout(
+    Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
+    incoming_stream.write_all(&alert_bytes),
+  )
+  .await
+  {
+    Ok(Ok(_)) => {
+      debug!("TLS alert sent to the incoming stream");
+    }
+    _ => {
+      error!("Failed to write TLS alert to the incoming stream");
+      return Err(ProxyError::TlsAlertWriteError);
+    }
+  }
+
+  Ok(())
 }
 /* ---------------------------------------------------------- */
 

@@ -112,7 +112,7 @@ jobs:
 
   dispatch_release_event:
     permissions:
-      contents: read
+      contents: write
       actions: write
 
     runs-on: ubuntu-latest

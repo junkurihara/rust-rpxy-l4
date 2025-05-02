@@ -21,7 +21,6 @@ This will connect to the backend server by cloaking the target hostname `localho
 
 ## Start rxpy-l4 with ECH configuration
 
-```bash
 Before you run the above command, make sure that you have started the backend server and `rxpy-l4` with the following ECH configuration:
 
 ```toml

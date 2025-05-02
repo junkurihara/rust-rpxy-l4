@@ -1,6 +1,6 @@
 use std::sync::{
-  atomic::{AtomicUsize, Ordering},
   Arc,
+  atomic::{AtomicUsize, Ordering},
 };
 
 /// DashMap type alias, uses ahash::RandomState as hashbuilder
@@ -34,7 +34,7 @@ impl ConnectionCount {
 }
 
 #[derive(Debug, Clone)]
-/// Counter for serving connections that must be counted as the sum of integer values give from multiple threads
+/// Counter for serving connections that must be counted as the sum of integer values given from multiple threads
 pub struct ConnectionCountSum<T>(Arc<DashMap<T, usize>>)
 where
   T: Eq + std::hash::Hash;

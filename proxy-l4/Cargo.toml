@@ -13,25 +13,27 @@ publish.workspace = true
 rpxy-l4-lib = { path = "../proxy-l4-lib" }
 
 # error handling
-anyhow = { version = "1.0.97" }
+anyhow = { version = "1.0.98" }
 
 # logging
 tracing = { version = "0.1.41" }
 tracing-subscriber = { version = "0.3.19" }
 
 # config
-clap = { version = "4.5.32", features = ["std", "cargo", "wrap_help"] }
-toml = { version = "0.8.20", default-features = false, features = ["parse"] }
-hot_reload = { version = "0.1.8" }
+clap = { version = "4.5.37", features = ["std", "cargo", "wrap_help"] }
+toml = { version = "0.8.22", default-features = false, features = ["parse"] }
+hot_reload = { version = "0.1.9" }
 serde = { version = "1.0.219", default-features = false, features = ["derive"] }
 serde_ignored = { version = "0.1.11" }
 async-trait = { version = "0.1.88" }
 
+# TODO: Workaround since musl build failure for mimalloc v2.2.4 https://github.com/microsoft/mimalloc/issues/1056
 # memory allocator
-mimalloc = { version = "*", default-features = false }
+mimalloc = { version = "=0.1.44", default-features = false }
+libmimalloc-sys = { version = "=0.1.40" }
 
 # async runtime
-tokio = { version = "1.44.1", default-features = false, features = [
+tokio = { version = "1.44.2", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",
@@ -39,5 +41,5 @@ tokio = { version = "1.44.1", default-features = false, features = [
   "macros",
   "io-util",
 ] }
-tokio-util = { version = "0.7.14", default-features = false }
+tokio-util = { version = "0.7.15", default-features = false }
 futures = { version = "0.3.31", default-features = false, features = ["alloc"] }

@@ -2,16 +2,16 @@ use crate::{
   constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
   error::ProxyError,
   socket::bind_udp_socket,
+  time_util::get_since_the_epoch,
   trace::*,
-  udp_proxy::UdpDestination,
+  udp_proxy::UdpDestinationInner,
 };
 use std::{
   net::SocketAddr,
   sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, OnceLock,
+    atomic::{AtomicU64, Ordering},
   },
-  time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{net::UdpSocket, runtime::Handle, sync::mpsc};
 use tokio_util::sync::CancellationToken;
@@ -70,7 +70,7 @@ impl UdpConnectionPool {
   pub(crate) async fn create_new_connection(
     &self,
     src_addr: &SocketAddr,
-    udp_dst: &UdpDestination,
+    udp_dst: &UdpDestinationInner,
     udp_socket_to_downstream: Arc<UdpSocket>,
   ) -> Result<UdpConnection, ProxyError> {
     // Connection limit is handled by the caller
@@ -110,7 +110,7 @@ impl UdpConnectionPool {
   }
 
   /// Prune inactive connections
-  /// This must be called when a new UDP packet is received.
+  /// This must be called when a new UDP datagram is received.
   pub(crate) fn prune_inactive_connections(&self) {
     self.inner.retain(|_, conn| {
       let last_active = conn.inner.last_active.load(Ordering::Acquire);
@@ -141,16 +141,23 @@ pub(crate) struct UdpConnection {
 }
 
 impl UdpConnection {
-  /// Send a packet to the UdpConnection
-  pub(crate) async fn send(&self, packet: Vec<u8>) -> Result<(), ProxyError> {
-    if let Err(e) = self.tx.send(packet).await {
-      error!("Error sending packet to UdpConnection: {e}");
+  /// Send a datagram to the UdpConnection
+  pub(crate) async fn send(&self, datagram: &[u8]) -> Result<(), ProxyError> {
+    if let Err(e) = self.tx.send(datagram.to_owned()).await {
+      error!("Error sending datagram to UdpConnection: {e}");
       error!(
         "Stopping UdpConnection from {} to {}",
         self.inner.src_addr, self.inner.dst_addr
       );
       self.inner.cancel_token.cancel(); // cancellation will remove the connection from the pool
       return Err(ProxyError::BrokenUdpConnection);
+    }
+    Ok(())
+  }
+  /// Send multiple datagrams to the UdpConnection
+  pub(crate) async fn send_many(&self, datagrams: &[Vec<u8>]) -> Result<(), ProxyError> {
+    for dg in datagrams.iter() {
+      self.send(dg).await?;
     }
     Ok(())
   }
@@ -186,7 +193,7 @@ impl UdpConnectionInner {
   /// Create a new UdpConnection
   async fn try_new(
     src_addr: &SocketAddr,
-    udp_dst: &UdpDestination,
+    udp_dst: &UdpDestinationInner,
     udp_socket_to_downstream: Arc<UdpSocket>,
     cancel_token: CancellationToken,
   ) -> Result<Self, ProxyError> {
@@ -250,29 +257,29 @@ impl UdpConnectionInner {
     }
   }
 
-  /// Service to forward packets to the upstream
+  /// Service to forward datagrams to the upstream
   async fn service_forward_upstream(
     &self,
     mut channel_rx: mpsc::Receiver<Vec<u8>>,
     udp_socket_to_upstream_tx: Arc<UdpSocket>,
   ) -> Result<(), ProxyError> {
     let service = async move {
-      // Handle multiple packets from the same source
+      // Handle multiple datagrams from the same source
       loop {
-        let Some(packet) = channel_rx.recv().await else {
-          error!("Error receiving packet from channel");
+        let Some(datagram) = channel_rx.recv().await else {
+          error!("Error receiving datagram from channel");
           return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
         };
         debug!(
           "[{} -> {}] received {} bytes from downstream",
           self.src_addr,
           self.dst_addr,
-          packet.len()
+          datagram.len()
         );
         self.update_last_active();
 
-        if let Err(e) = udp_socket_to_upstream_tx.send(packet.as_slice()).await {
-          error!("Error sending packet to upstream: {e}");
+        if let Err(e) = udp_socket_to_upstream_tx.send(datagram.as_slice()).await {
+          error!("Error sending datagram to upstream: {e}");
           return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
         };
       }
@@ -287,9 +294,9 @@ impl UdpConnectionInner {
     }
   }
 
-  /// Service to forward packets to the downstream
+  /// Service to forward datagrams to the downstream
   async fn service_forward_downstream(&self, udp_socket_to_upstream_rx: Arc<UdpSocket>) -> Result<(), ProxyError> {
-    // Handle multiple packets sent back from the upstream as responses
+    // Handle multiple datagrams sent back from the upstream as responses
     let service = async {
       loop {
         let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
@@ -314,7 +321,7 @@ impl UdpConnectionInner {
           .send_to(response.as_slice(), self.src_addr)
           .await
         {
-          error!("Error sending packet to downstream: {e}");
+          error!("Error sending datagram to downstream: {e}");
           return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
         };
       }
@@ -328,14 +335,6 @@ impl UdpConnectionInner {
       }
     }
   }
-}
-
-#[inline]
-fn get_since_the_epoch() -> u64 {
-  SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .expect("Time went backwards!!! Check system time.")
-    .as_secs()
 }
 
 /* ---------------------------------------------------------- */
@@ -371,7 +370,7 @@ mod tests {
 
     let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
     let udp_dst =
-      UdpDestination::try_from((["127.0.0.1:54321".parse::<SocketAddr>().unwrap()].as_slice(), None, Some(10))).unwrap();
+      UdpDestinationInner::try_from((["127.0.0.1:54321".parse::<SocketAddr>().unwrap()].as_slice(), None, Some(10))).unwrap();
 
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());

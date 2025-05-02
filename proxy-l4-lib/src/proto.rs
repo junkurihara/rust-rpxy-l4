@@ -1,3 +1,5 @@
+use crate::error::ProxyBuildError;
+
 /// L5--L7 Protocol specific types
 pub enum ProtocolType {
   /// TCP: cleartext HTTP
@@ -13,7 +15,7 @@ pub enum ProtocolType {
 }
 
 impl TryFrom<&str> for ProtocolType {
-  type Error = anyhow::Error;
+  type Error = ProxyBuildError;
   fn try_from(value: &str) -> Result<Self, Self::Error> {
     match value {
       "http" => Ok(ProtocolType::Http),
@@ -21,7 +23,50 @@ impl TryFrom<&str> for ProtocolType {
       "ssh" => Ok(ProtocolType::Ssh),
       "wireguard" => Ok(ProtocolType::Wireguard),
       "quic" => Ok(ProtocolType::Quic),
-      _ => Err(anyhow::anyhow!("Invalid protocol type: {}", value)),
+      _ => Err(ProxyBuildError::UnsupportedProtocol(value.to_string())),
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// TCP protocol types
+pub(crate) enum TcpProtocolType {
+  /// TCP: cleartext HTTP
+  Http,
+  /// TCP: TLS
+  Tls,
+  /// TCP: SSH
+  Ssh,
+  /// TCP: Any
+  Any,
+}
+impl std::fmt::Display for TcpProtocolType {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      TcpProtocolType::Http => write!(f, "http"),
+      TcpProtocolType::Tls => write!(f, "tls"),
+      TcpProtocolType::Ssh => write!(f, "ssh"),
+      TcpProtocolType::Any => write!(f, "any"),
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// TCP protocol types
+pub(crate) enum UdpProtocolType {
+  /// UDP: WireGuard
+  Wireguard,
+  /// UDP: QUIC
+  Quic,
+  /// UDP: Any
+  Any,
+}
+impl std::fmt::Display for UdpProtocolType {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      UdpProtocolType::Wireguard => write!(f, "wireguard"),
+      UdpProtocolType::Quic => write!(f, "quic"),
+      UdpProtocolType::Any => write!(f, "any"),
     }
   }
 }

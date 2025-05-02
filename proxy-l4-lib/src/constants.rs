@@ -9,7 +9,7 @@ pub const TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC: u64 = 100;
 /// But considering the hybrid post-quantum key exchange (key_share extension is > 1KB in X25519MLKEM768),
 /// the buffer size should be large, at least 2KB, to parse the Client Hello message.
 /// https://datatracker.ietf.org/doc/html/rfc8446#section-5.1
-pub const TCP_PROTOCOL_DETECTION_BUFFER_SIZE: usize = 4096;
+pub const TCP_PROTOCOL_DETECTION_BUFFER_SIZE: usize = 16384;
 
 /// UDP buffer size, theoretical limit is 65535 bytes in IPv4
 /// But the practical limit is, due to the MTU, less than 1500 bytes.
@@ -33,3 +33,6 @@ pub const UDP_CONNECTION_IDLE_LIFETIME: u32 = 30;
 
 /// Periodic interval to prune inactive UDP connections
 pub const UDP_CONNECTION_PRUNE_INTERVAL: u64 = 10;
+
+/// UDP initial buffer packet lifetime in seconds
+pub const UDP_INITIAL_BUFFER_LIFETIME: u64 = 1;

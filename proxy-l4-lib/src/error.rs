@@ -29,6 +29,9 @@ pub enum ProxyError {
   /* --------------------------------------- */
   #[error("TLS or Quic error: {0}")]
   TlsError(#[from] quic_tls::TlsClientHelloError),
+
+  #[error("TLS Alert write error")]
+  TlsAlertWriteError,
 }
 
 /// Errors that happens during building the proxy

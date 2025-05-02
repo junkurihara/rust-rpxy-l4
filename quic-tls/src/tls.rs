@@ -8,6 +8,38 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 const TLS_RECORD_HEADER_LEN: usize = 5;
 const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
+const TLS_ALERT_CONTENT_TYPE: u8 = 0x15;
+
+/* ---------------------------------------------------------- */
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// TLS Record Layer
+pub struct TlsRecordHeader {
+  /// Content type
+  pub(crate) content_type: u8,
+  /// Version
+  pub(crate) version: u16,
+  /// Length
+  pub(crate) length: u16,
+}
+impl Default for TlsRecordHeader {
+  fn default() -> Self {
+    TlsRecordHeader {
+      content_type: TLS_HANDSHAKE_CONTENT_TYPE,
+      version: SUPPORTED_TLS_VERSIONS[0],
+      length: 0,
+    }
+  }
+}
+impl TlsRecordHeader {
+  /// to Bytes
+  pub fn to_bytes(&self) -> Bytes {
+    let mut buf = BytesMut::with_capacity(TLS_RECORD_HEADER_LEN);
+    buf.put_u8(self.content_type);
+    buf.put_u16(self.version);
+    buf.put_u16(self.length);
+    buf.freeze()
+  }
+}
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -49,36 +81,6 @@ impl TlsClientHelloBuffer {
     buf.put_slice(&handshake_message_header_bytes);
     buf.put_slice(&client_hello_bytes);
     Ok(buf.freeze())
-  }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// TLS Record Layer
-pub struct TlsRecordHeader {
-  /// Content type
-  pub(crate) content_type: u8,
-  /// Version
-  pub(crate) version: u16,
-  /// Length
-  pub(crate) length: u16,
-}
-impl Default for TlsRecordHeader {
-  fn default() -> Self {
-    TlsRecordHeader {
-      content_type: TLS_HANDSHAKE_CONTENT_TYPE,
-      version: SUPPORTED_TLS_VERSIONS[0],
-      length: 0,
-    }
-  }
-}
-impl TlsRecordHeader {
-  /// to Bytes
-  pub fn to_bytes(&self) -> Bytes {
-    let mut buf = BytesMut::with_capacity(TLS_RECORD_HEADER_LEN);
-    buf.put_u8(self.content_type);
-    buf.put_u16(self.version);
-    buf.put_u16(self.length);
-    buf.freeze()
   }
 }
 
@@ -149,5 +151,70 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloBuffer, 
       client_hello,
     }),
     None => Err(TlsProbeFailure::Failure),
+  }
+}
+
+/* ---------------------------------------------------------- */
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// https://datatracker.ietf.org/doc/html/rfc8446#section-6
+pub struct TlsAlertBuffer {
+  /// Tls record header
+  pub record_header: TlsRecordHeader,
+  /// alert level
+  pub alert_level: TlsAlertLevel,
+  /// alert description
+  pub alert_description: TlsAlertDescription,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// TLS Alert Level
+/// https://datatracker.ietf.org/doc/html/rfc8446#section-6
+#[allow(unused)]
+pub enum TlsAlertLevel {
+  /// Warning
+  Warning = 1,
+  /// Fatal
+  Fatal = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// TLS Alert Description
+/// https://datatracker.ietf.org/doc/html/rfc8446#section-6
+/// Define only some of the alert descriptions used for ECH
+#[allow(unused)]
+pub enum TlsAlertDescription {
+  /// Illegal parameter
+  IllegalParameter = 47,
+  /// Decrypt error
+  DecryptError = 21,
+}
+
+impl Default for TlsAlertBuffer {
+  fn default() -> Self {
+    Self::new(TlsAlertLevel::Fatal, TlsAlertDescription::IllegalParameter)
+  }
+}
+
+impl TlsAlertBuffer {
+  /// Create a new instance
+  pub fn new(level: TlsAlertLevel, description: TlsAlertDescription) -> Self {
+    Self {
+      record_header: TlsRecordHeader {
+        content_type: TLS_ALERT_CONTENT_TYPE,
+        version: SUPPORTED_TLS_VERSIONS[0],
+        length: 2,
+      },
+      alert_level: level,
+      alert_description: description,
+    }
+  }
+
+  /// to Bytes
+  pub fn to_bytes(&self) -> Bytes {
+    let mut buf = BytesMut::with_capacity(TLS_RECORD_HEADER_LEN + 2);
+    buf.put_slice(&self.record_header.to_bytes());
+    buf.put_u8(self.alert_level.clone() as u8);
+    buf.put_u8(self.alert_description.clone() as u8);
+    buf.freeze()
   }
 }

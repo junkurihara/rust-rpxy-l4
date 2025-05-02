@@ -298,7 +298,7 @@ impl UdpProbedProtocol {
     // TODO: Add more protocol detection patterns
 
     // Probe functions
-    let probe_fns = if initial_datagrams.probed_as_pollnext.is_empty() {
+    let probe_functions = if initial_datagrams.probed_as_pollnext.is_empty() {
       // No candidate probed as PollNext, i.e., Round 1
       vec![is_wireguard, is_quic_initial]
     } else {
@@ -314,7 +314,7 @@ impl UdpProbedProtocol {
         .collect()
     };
 
-    let probe_res = probe_fns.into_iter().map(|f| f(initial_datagrams)).collect::<Vec<_>>();
+    let probe_res = probe_functions.into_iter().map(|f| f(initial_datagrams)).collect::<Vec<_>>();
 
     // In case any of the probe results is a success, return it
     if let Some(probe_success) = probe_res.iter().find(|r| matches!(r, ProbeResult::Success(_))) {

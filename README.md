@@ -242,10 +242,10 @@ As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from 
 
 #### Reduced functionality
 
-*Currently we do not fully implement the function of client facing server described in the [IETF draft](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1).* Specifically, `rpxy-l4` does not support the retry mechanisms of client facing server, i.e., it currently has no state about ECH request, and doesn't handle and emit the `HelloRetryRequest` message. It works as the following *simplified and reduced* manner, which is different from the draft:
+*Currently we do not fully implement the function of client facing server described in the [IETF draft](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1).* It works as the following *simplified and reduced* manner, which is different from the draft:
 
 - If no matching configuration with the given ECH is found, it just forwards the client hello to the backend server as it is.
-- If decryption fails or decryption result is illegal, then it doesn't return illegal parameter to the client back, but just drops the packet.
+- `rpxy-l4` does not support the retry mechanisms of client facing server, i.e., it currently has no state about ECH request, and doesn't handle, forward or emit the `HelloRetryRequest` message to the client.
 
 #### No ECH over QUIC
 

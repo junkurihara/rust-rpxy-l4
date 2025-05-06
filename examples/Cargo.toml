@@ -22,7 +22,7 @@ clap = { version = "4", features = ["derive"] }
 # ] }
 log = { version = "0.4.27" }
 env_logger = { version = "0.11" }
-webpki-roots = { version = "0.26" }
+webpki-roots = { version = "1.0" }
 base64 = { version = "0.22.1" }
 tokio = { version = "1.45.0" }
 mio = { version = "1", features = ["net", "os-poll"] }

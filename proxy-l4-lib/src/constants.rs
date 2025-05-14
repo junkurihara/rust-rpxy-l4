@@ -36,3 +36,9 @@ pub const UDP_CONNECTION_PRUNE_INTERVAL: u64 = 10;
 
 /// UDP initial buffer packet lifetime in seconds
 pub const UDP_INITIAL_BUFFER_LIFETIME: u64 = 1;
+
+/// Logging event name TODO: Other separated logs?
+pub mod log_event_names {
+  /// access log
+  pub const ACCESS_LOG: &str = "rpxy-l4::access";
+}

@@ -612,7 +612,7 @@ impl UdpInitialDatagramsBufferPool {
           continue;
         };
         // Here we are establishing a udp connection. Logging info for the connection as an access log.
-        udp_access_log(&found_dst, &probed_protocol);
+        udp_access_log(&conn, &probed_protocol);
 
         let _ = conn.send_many(&initial_datagrams.inner).await;
         // here we ignore the error, as the connection might be closed
@@ -649,7 +649,12 @@ impl UdpInitialDatagramsBufferPool {
 
 /* ---------------------------------------------------------- */
 /// Handle UDP access log
-fn udp_access_log(found_dst: &FoundUdpDestination, probed_protocol: &UdpProbedProtocol) {
-  // TODO: implement access log
-  info!("UDP: {:?}, {:?}", found_dst, probed_protocol);
+fn udp_access_log(conn: &crate::udp_conn::UdpConnection, probed_protocol: &UdpProbedProtocol) {
+  use crate::trace::{AccessLogProtocolType, access_log};
+  let proto = match probed_protocol {
+    UdpProbedProtocol::Any => AccessLogProtocolType::Udp(UdpProtocolType::Any),
+    UdpProbedProtocol::Wireguard => AccessLogProtocolType::Udp(UdpProtocolType::Wireguard),
+    UdpProbedProtocol::Quic(_) => AccessLogProtocolType::Udp(UdpProtocolType::Quic),
+  };
+  access_log(&proto, conn.src_addr(), conn.dst_addr());
 }

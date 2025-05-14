@@ -13,6 +13,7 @@ mod udp_conn;
 mod udp_proxy;
 
 pub use config::{Config, EchProtocolConfig, ProtocolConfig};
+pub use constants::log_event_names;
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
 pub use error::{ProxyBuildError, ProxyError};

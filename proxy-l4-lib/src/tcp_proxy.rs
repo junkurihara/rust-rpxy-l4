@@ -466,7 +466,7 @@ async fn handle_tcp_connection(
     return;
   }
   // Here we are establishing a bidirectional connection. Logging the connection.
-  tcp_access_log(&found_dst, &probed_protocol);
+  tcp_access_log(&src_addr, &dst_addr, &probed_protocol);
   // Then, copy bidirectional
   if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
     warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
@@ -584,7 +584,8 @@ mod tests {
 
 /* ---------------------------------------------------------- */
 /// Handle TCP access log
-fn tcp_access_log(found_dst: &FoundTcpDestination, probed_protocol: &TcpProbedProtocol) {
-  // TODO: implement access log
-  info!("TCP: {:?}, {:?}", found_dst, probed_protocol);
+fn tcp_access_log(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
+  use crate::trace::{AccessLogProtocolType, access_log};
+  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
+  access_log(&proto, src_addr, dst_addr);
 }

@@ -131,7 +131,7 @@ impl UdpConnectionPool {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// Connection pool value
 pub(crate) struct UdpConnection {
   /// Sender to the UdpConnection
@@ -161,9 +161,17 @@ impl UdpConnection {
     }
     Ok(())
   }
+  /// Get the source address of the UdpConnection
+  pub(crate) fn src_addr(&self) -> &SocketAddr {
+    &self.inner.src_addr
+  }
+  /// Get the destination address of the UdpConnection
+  pub(crate) fn dst_addr(&self) -> &SocketAddr {
+    &self.inner.dst_addr
+  }
 }
 /* ---------------------------------------------------------- */
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// Udp connection
 struct UdpConnectionInner {
   /// Remote socket address of the client
@@ -228,7 +236,7 @@ impl UdpConnectionInner {
 
   /// Serve the UdpConnection
   async fn serve(&self, channel_rx: mpsc::Receiver<Vec<u8>>, runtime_handle: Handle) {
-    info!("UdpConnection from {} to {} started", self.src_addr, self.dst_addr);
+    debug!("UdpConnection from {} to {} started", self.src_addr, self.dst_addr);
     let udp_socket_to_upstream_tx = self.udp_socket_to_upstream.clone();
     let udp_socket_to_upstream_rx = self.udp_socket_to_upstream.clone();
 

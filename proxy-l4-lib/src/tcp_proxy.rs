@@ -439,7 +439,7 @@ async fn handle_tcp_connection(
     return;
   };
 
-  let to_be_written = match (found_dst, probed_protocol) {
+  let to_be_written = match (&found_dst, &probed_protocol) {
     (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) => {
       // Handle tls, especially ECH
       let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination) else {
@@ -465,6 +465,8 @@ async fn handle_tcp_connection(
     connection_count.decrement();
     return;
   }
+  // Here we are establishing a bidirectional connection. Logging the connection.
+  tcp_access_log(&found_dst, &probed_protocol);
   // Then, copy bidirectional
   if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
     warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
@@ -578,4 +580,11 @@ mod tests {
       .unwrap();
     assert_eq!(tcp_proxy.backlog, super::super::constants::TCP_BACKLOG);
   }
+}
+
+/* ---------------------------------------------------------- */
+/// Handle TCP access log
+fn tcp_access_log(found_dst: &FoundTcpDestination, probed_protocol: &TcpProbedProtocol) {
+  // TODO: implement access log
+  info!("TCP: {:?}, {:?}", found_dst, probed_protocol);
 }

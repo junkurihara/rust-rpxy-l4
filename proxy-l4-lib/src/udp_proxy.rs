@@ -582,7 +582,7 @@ impl UdpInitialDatagramsBufferPool {
           error!("Failed to probe protocol from the incoming datagram");
           continue;
         };
-        let protocol = match probe_result {
+        let probed_protocol = match probe_result {
           ProbeResult::Success(protocol) => protocol,
           ProbeResult::PollNext => {
             // add the datagram buffer back to the buffer pool
@@ -596,21 +596,23 @@ impl UdpInitialDatagramsBufferPool {
         debug!("Release the datagram buffer for {}", src_addr);
         self_clone.inner.remove(&src_addr);
 
-        let Ok(found_dst) = self_clone.destination_mux.find_destination(&protocol) else {
-          error!("No destination address found for protocol: {}", protocol);
+        let Ok(found_dst) = self_clone.destination_mux.find_destination(&probed_protocol) else {
+          error!("No destination address found for protocol: {}", probed_protocol);
           continue;
         };
-        let udp_dst_inner = match found_dst {
+        let udp_dst_inner = match &found_dst {
           FoundUdpDestination::Udp(dst) => dst,
-          FoundUdpDestination::Quic(dst) => dst.destination().to_owned(),
+          FoundUdpDestination::Quic(dst) => dst.destination(),
         };
         let Ok(conn) = self_clone
           .udp_connection_pool
-          .create_new_connection(&src_addr, &udp_dst_inner, self_clone.udp_socket_tx.clone())
+          .create_new_connection(&src_addr, udp_dst_inner, self_clone.udp_socket_tx.clone())
           .await
         else {
           continue;
         };
+        // Here we are establishing a udp connection. Logging info for the connection as an access log.
+        udp_access_log(&found_dst, &probed_protocol);
 
         let _ = conn.send_many(&initial_datagrams.inner).await;
         // here we ignore the error, as the connection might be closed
@@ -643,4 +645,11 @@ impl UdpInitialDatagramsBufferPool {
 
     tx
   }
+}
+
+/* ---------------------------------------------------------- */
+/// Handle UDP access log
+fn udp_access_log(found_dst: &FoundUdpDestination, probed_protocol: &UdpProbedProtocol) {
+  // TODO: implement access log
+  info!("UDP: {:?}, {:?}", found_dst, probed_protocol);
 }

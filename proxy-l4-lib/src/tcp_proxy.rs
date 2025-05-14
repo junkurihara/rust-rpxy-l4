@@ -585,7 +585,7 @@ mod tests {
 /* ---------------------------------------------------------- */
 /// Handle TCP access log
 fn tcp_access_log(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
-  use crate::trace::{AccessLogProtocolType, access_log};
+  use crate::access_log::{AccessLogProtocolType, access_log};
   let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
   access_log(&proto, src_addr, dst_addr);
 }

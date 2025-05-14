@@ -650,7 +650,7 @@ impl UdpInitialDatagramsBufferPool {
 /* ---------------------------------------------------------- */
 /// Handle UDP access log
 fn udp_access_log(conn: &crate::udp_conn::UdpConnection, probed_protocol: &UdpProbedProtocol) {
-  use crate::trace::{AccessLogProtocolType, access_log};
+  use crate::access_log::{AccessLogProtocolType, access_log};
   let proto = match probed_protocol {
     UdpProbedProtocol::Any => AccessLogProtocolType::Udp(UdpProtocolType::Any),
     UdpProbedProtocol::Wireguard => AccessLogProtocolType::Udp(UdpProtocolType::Wireguard),

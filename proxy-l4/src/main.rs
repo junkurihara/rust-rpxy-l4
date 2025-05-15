@@ -16,6 +16,10 @@ const CONFIG_WATCH_DELAY_SECS: u32 = 15;
 const LISTEN_ON_V4: &str = "0.0.0.0";
 /// Listen on v6 address
 const LISTEN_ON_V6: &str = "[::]";
+/// Access log file name
+pub(crate) const ACCESS_LOG_FILE: &str = "access.log";
+/// System log file name
+pub(crate) const SYSTEM_LOG_FILE: &str = "rpxy.log";
 
 fn main() {
   let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();

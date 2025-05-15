@@ -8,7 +8,7 @@ use crate::{
   proto::UdpProtocolType,
   socket::bind_udp_socket,
   time_util::get_since_the_epoch,
-  trace::{debug, error, info, warn},
+  trace::*,
   udp_conn::UdpConnectionPool,
 };
 use quic_tls::{TlsClientHello, TlsProbeFailure, probe_quic_initial_packets};
@@ -400,7 +400,7 @@ impl UdpProxy {
           }
           Ok(res) => res,
         };
-        debug!("received {} bytes from {} [source]", buf_size, src_addr);
+        trace!("received {} bytes from {} [source]", buf_size, src_addr);
 
         // Prune inactive connections first
         udp_connection_pool.prune_inactive_connections();

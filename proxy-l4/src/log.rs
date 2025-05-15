@@ -4,7 +4,7 @@ pub use tracing::{debug, error, info, warn};
 use std::str::FromStr;
 use tracing_subscriber::{fmt, prelude::*};
 
-pub fn init_logger() {
+pub fn init_logger(log_dir_path: Option<&str>) {
   let level_string = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
   let level = tracing::Level::from_str(level_string.as_str()).unwrap_or(tracing::Level::INFO);
 

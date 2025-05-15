@@ -18,20 +18,19 @@ const LISTEN_ON_V4: &str = "0.0.0.0";
 const LISTEN_ON_V6: &str = "[::]";
 
 fn main() {
-  init_logger();
-
   let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
   runtime_builder.enable_all();
   runtime_builder.thread_name("rpxy-l4");
   let runtime = runtime_builder.build().unwrap();
 
   runtime.block_on(async {
-    info!("Starting rpxy for layer 4");
-
     let Ok(parsed_opts) = parse_opts() else {
       error!("Invalid toml file");
       std::process::exit(1);
     };
+    init_logger(parsed_opts.log_dir_path.as_deref());
+
+    info!("Starting rpxy for layer 4");
 
     // config service watches the service config file.
     // if the base service config file is updated, the  entrypoint will be restarted.

@@ -16,22 +16,25 @@ const CONFIG_WATCH_DELAY_SECS: u32 = 15;
 const LISTEN_ON_V4: &str = "0.0.0.0";
 /// Listen on v6 address
 const LISTEN_ON_V6: &str = "[::]";
+/// Access log file name
+pub(crate) const ACCESS_LOG_FILE: &str = "access.log";
+/// System log file name
+pub(crate) const SYSTEM_LOG_FILE: &str = "rpxy-l4.log";
 
 fn main() {
-  init_logger();
-
   let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
   runtime_builder.enable_all();
   runtime_builder.thread_name("rpxy-l4");
   let runtime = runtime_builder.build().unwrap();
 
   runtime.block_on(async {
-    info!("Starting rpxy for layer 4");
-
     let Ok(parsed_opts) = parse_opts() else {
       error!("Invalid toml file");
       std::process::exit(1);
     };
+    init_logger(parsed_opts.log_dir_path.as_deref());
+
+    info!("Starting rpxy for layer 4");
 
     // config service watches the service config file.
     // if the base service config file is updated, the  entrypoint will be restarted.

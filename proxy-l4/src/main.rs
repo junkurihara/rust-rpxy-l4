@@ -19,7 +19,7 @@ const LISTEN_ON_V6: &str = "[::]";
 /// Access log file name
 pub(crate) const ACCESS_LOG_FILE: &str = "access.log";
 /// System log file name
-pub(crate) const SYSTEM_LOG_FILE: &str = "rpxy.log";
+pub(crate) const SYSTEM_LOG_FILE: &str = "rpxy-l4.log";
 
 fn main() {
   let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();

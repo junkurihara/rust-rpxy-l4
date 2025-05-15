@@ -40,5 +40,6 @@ pub const UDP_INITIAL_BUFFER_LIFETIME: u64 = 1;
 /// Logging event name TODO: Other separated logs?
 pub mod log_event_names {
   /// access log
-  pub const ACCESS_LOG: &str = "rpxy-l4::access";
+  pub const ACCESS_LOG_START: &str = "rpxy-l4::conn::start";
+  pub const ACCESS_LOG_FINISH: &str = "rpxy-l4::conn::finish";
 }

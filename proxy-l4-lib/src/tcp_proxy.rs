@@ -1,4 +1,5 @@
 use crate::{
+  access_log::{AccessLogProtocolType, access_log_start},
   config::EchProtocolConfig,
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
@@ -466,11 +467,13 @@ async fn handle_tcp_connection(
     return;
   }
   // Here we are establishing a bidirectional connection. Logging the connection.
-  tcp_access_log(&src_addr, &dst_addr, &probed_protocol);
+  tcp_access_log_start(&src_addr, &dst_addr, &probed_protocol);
   // Then, copy bidirectional
   if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
     warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
   }
+  // finish log
+  tcp_access_log_finish(&src_addr, &dst_addr, &probed_protocol);
   connection_count.decrement();
   debug!("TCP proxy connection closed (total: {})", connection_count.current());
 }
@@ -583,9 +586,13 @@ mod tests {
 }
 
 /* ---------------------------------------------------------- */
-/// Handle TCP access log
-fn tcp_access_log(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
-  use crate::access_log::{AccessLogProtocolType, access_log};
+/// Handle TCP access log, when establishing a connection
+fn tcp_access_log_start(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
   let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
-  access_log(&proto, src_addr, dst_addr);
+  access_log_start(&proto, src_addr, dst_addr);
+}
+/// Handle TCP access log, when closing a connection
+fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
+  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
+  crate::access_log::access_log_finish(&proto, src_addr, dst_addr);
 }

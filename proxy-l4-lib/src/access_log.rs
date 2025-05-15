@@ -26,7 +26,11 @@ impl std::fmt::Display for AccessLogProtocolType {
   }
 }
 
-/// Handle log for probed protocol, source and destination sockets
-pub(crate) fn access_log(proto: &AccessLogProtocolType, src_addr: &SocketAddr, dst_addr: &SocketAddr) {
-  info!(name: crate::constants::log_event_names::ACCESS_LOG, "{}: {:?} -> {:?}", proto, src_addr, dst_addr);
+/// Handle log for probed protocol, source and destination sockets, when establishing a connection
+pub(crate) fn access_log_start(proto: &AccessLogProtocolType, src_addr: &SocketAddr, dst_addr: &SocketAddr) {
+  info!(name: crate::constants::log_event_names::ACCESS_LOG_START, "[start] {}: {:?} -> {:?}", proto, src_addr, dst_addr);
+}
+/// Handle log for probed protocol, source and destination sockets, when closing a connection
+pub(crate) fn access_log_finish(proto: &AccessLogProtocolType, src_addr: &SocketAddr, dst_addr: &SocketAddr) {
+  info!(name: crate::constants::log_event_names::ACCESS_LOG_FINISH, "[finish] {}: {:?} -> {:?}", proto, src_addr, dst_addr);
 }

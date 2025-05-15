@@ -606,13 +606,16 @@ impl UdpInitialDatagramsBufferPool {
         };
         let Ok(conn) = self_clone
           .udp_connection_pool
-          .create_new_connection(&src_addr, udp_dst_inner, self_clone.udp_socket_tx.clone())
+          .create_new_connection(
+            &src_addr,
+            udp_dst_inner,
+            &&probed_protocol.proto_type(),
+            self_clone.udp_socket_tx.clone(),
+          )
           .await
         else {
           continue;
         };
-        // Here we are establishing a udp connection. Logging info for the connection as an access log.
-        udp_access_log(&conn, &probed_protocol);
 
         let _ = conn.send_many(&initial_datagrams.inner).await;
         // here we ignore the error, as the connection might be closed
@@ -645,16 +648,4 @@ impl UdpInitialDatagramsBufferPool {
 
     tx
   }
-}
-
-/* ---------------------------------------------------------- */
-/// Handle UDP access log
-fn udp_access_log(conn: &crate::udp_conn::UdpConnection, probed_protocol: &UdpProbedProtocol) {
-  use crate::access_log::{AccessLogProtocolType, access_log};
-  let proto = match probed_protocol {
-    UdpProbedProtocol::Any => AccessLogProtocolType::Udp(UdpProtocolType::Any),
-    UdpProbedProtocol::Wireguard => AccessLogProtocolType::Udp(UdpProtocolType::Wireguard),
-    UdpProbedProtocol::Quic(_) => AccessLogProtocolType::Udp(UdpProtocolType::Quic),
-  };
-  access_log(&proto, conn.src_addr(), conn.dst_addr());
 }

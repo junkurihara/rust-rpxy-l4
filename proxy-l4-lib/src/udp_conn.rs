@@ -143,16 +143,15 @@ pub(crate) struct UdpConnection {
 impl UdpConnection {
   /// Send a datagram to the UdpConnection
   pub(crate) async fn send(&self, datagram: &[u8]) -> Result<(), ProxyError> {
-    if let Err(e) = self.tx.send(datagram.to_owned()).await {
+    self.tx.send(datagram.to_owned()).await.map_err(|e| {
       error!("Error sending datagram to UdpConnection: {e}");
       error!(
         "Stopping UdpConnection from {} to {}",
         self.inner.src_addr, self.inner.dst_addr
       );
       self.inner.cancel_token.cancel(); // cancellation will remove the connection from the pool
-      return Err(ProxyError::BrokenUdpConnection);
-    }
-    Ok(())
+      ProxyError::BrokenUdpConnection
+    })
   }
   /// Send multiple datagrams to the UdpConnection
   pub(crate) async fn send_many(&self, datagrams: &[Vec<u8>]) -> Result<(), ProxyError> {
@@ -308,7 +307,7 @@ impl UdpConnectionInner {
           Ok(res) => res,
         };
 
-        debug!(
+        trace!(
           "[{} <- {}] received {} bytes from upstream",
           self.src_addr, self.dst_addr, buf_size
         );

@@ -168,12 +168,13 @@ impl TcpDestinationMux {
         let TcpProbedProtocol::Tls(client_hello_buf) = probed_protocol else {
           return Err(ProxyError::NoDestinationAddressForProtocol);
         };
-        if let Some(found) = tls_destinations.find(&client_hello_buf.client_hello) {
-          debug!("Setting up dest addr for {proto_type}");
-          return Ok(FoundTcpDestination::Tls(found.clone()));
-        } else {
-          return Err(ProxyError::NoDestinationAddressForProtocol);
-        }
+        return tls_destinations
+          .find(&client_hello_buf.client_hello)
+          .ok_or(ProxyError::NoDestinationAddressForProtocol)
+          .map(|found| {
+            debug!("Setting up dest addr for {proto_type}");
+            FoundTcpDestination::Tls(found.clone())
+          });
       }
       _ => {}
     };

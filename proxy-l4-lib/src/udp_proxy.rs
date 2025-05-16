@@ -158,10 +158,9 @@ impl UdpDestinationMuxBuilder {
     let udp_dest_inner = udp_dest.unwrap();
     let mut inner = self.inner.clone().unwrap_or_default();
 
-    let mut current_quic = if let Some(UdpDestination::Quic(current)) = inner.get(&UdpProtocolType::Quic).cloned() {
-      current
-    } else {
-      QuicDestinations::new()
+    let mut current_quic = match inner.get(&UdpProtocolType::Quic).cloned() {
+      Some(UdpDestination::Quic(current)) => current,
+      _ => QuicDestinations::new(), // If not found, create a new one
     };
     current_quic.add(
       server_names.unwrap_or_default(),
@@ -195,12 +194,13 @@ impl UdpDestinationMux {
         let UdpProbedProtocol::Quic(client_hello) = probed_protocol else {
           return Err(ProxyError::NoDestinationAddressForProtocol);
         };
-        if let Some(found) = quic_destinations.find(client_hello) {
-          debug!("Setting up dest addr for {proto_type}");
-          return Ok(FoundUdpDestination::Quic(found.clone()));
-        } else {
-          return Err(ProxyError::NoDestinationAddressForProtocol);
-        }
+        return quic_destinations
+          .find(client_hello)
+          .ok_or(ProxyError::NoDestinationAddressForProtocol)
+          .map(|found| {
+            debug!("Setting up dest addr for {proto_type}");
+            FoundUdpDestination::Quic(found.clone())
+          });
       }
       _ => {}
     };

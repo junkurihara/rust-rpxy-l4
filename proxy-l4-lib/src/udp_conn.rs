@@ -1,6 +1,8 @@
 use crate::{
+  access_log::{AccessLogProtocolType, access_log_finish, access_log_start},
   constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
   error::ProxyError,
+  proto::UdpProtocolType,
   socket::bind_udp_socket,
   time_util::get_since_the_epoch,
   trace::*,
@@ -71,12 +73,14 @@ impl UdpConnectionPool {
     &self,
     src_addr: &SocketAddr,
     udp_dst: &UdpDestinationInner,
+    protocol: &UdpProtocolType,
     udp_socket_to_downstream: Arc<UdpSocket>,
   ) -> Result<UdpConnection, ProxyError> {
     // Connection limit is handled by the caller
 
     let conn = Arc::new(
       UdpConnectionInner::try_new(
+        protocol,
         src_addr,
         udp_dst,
         udp_socket_to_downstream,
@@ -95,9 +99,13 @@ impl UdpConnectionPool {
     let self_clone = self.clone();
     let src_addr = *src_addr;
     self.runtime_handle.spawn(async move {
+      // Here we are establishing a udp connection. Logging info for the connection as an access log.
+      udp_access_log_start(&conn);
       conn.serve(rx, self_clone.runtime_handle.clone()).await;
       // clean up if the connection service is closed, here the connection service was already closed
       self_clone.remove(&src_addr);
+      // finish log
+      udp_access_log_finish(&conn);
     });
 
     //   Ok(udp_connection)
@@ -131,7 +139,7 @@ impl UdpConnectionPool {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// Connection pool value
 pub(crate) struct UdpConnection {
   /// Sender to the UdpConnection
@@ -162,9 +170,12 @@ impl UdpConnection {
   }
 }
 /* ---------------------------------------------------------- */
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// Udp connection
 struct UdpConnectionInner {
+  /// Udp protocol type
+  protocol: UdpProtocolType,
+
   /// Remote socket address of the client
   src_addr: SocketAddr,
 
@@ -191,6 +202,7 @@ struct UdpConnectionInner {
 impl UdpConnectionInner {
   /// Create a new UdpConnection
   async fn try_new(
+    protocol: &UdpProtocolType,
     src_addr: &SocketAddr,
     udp_dst: &UdpDestinationInner,
     udp_socket_to_downstream: Arc<UdpSocket>,
@@ -210,6 +222,7 @@ impl UdpConnectionInner {
     let last_active = Arc::new(AtomicU64::new(get_since_the_epoch()));
 
     Ok(Self {
+      protocol: protocol.clone(),
       src_addr: *src_addr,
       dst_addr: *dst_addr,
       udp_socket_to_upstream,
@@ -227,7 +240,7 @@ impl UdpConnectionInner {
 
   /// Serve the UdpConnection
   async fn serve(&self, channel_rx: mpsc::Receiver<Vec<u8>>, runtime_handle: Handle) {
-    info!("UdpConnection from {} to {} started", self.src_addr, self.dst_addr);
+    debug!("UdpConnection from {} to {} started", self.src_addr, self.dst_addr);
     let udp_socket_to_upstream_tx = self.udp_socket_to_upstream.clone();
     let udp_socket_to_upstream_rx = self.udp_socket_to_upstream.clone();
 
@@ -269,7 +282,7 @@ impl UdpConnectionInner {
           error!("Error receiving datagram from channel");
           return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
         };
-        debug!(
+        trace!(
           "[{} -> {}] received {} bytes from downstream",
           self.src_addr,
           self.dst_addr,
@@ -334,6 +347,31 @@ impl UdpConnectionInner {
       }
     }
   }
+
+  /// Get the source address of the UdpConnection
+  fn src_addr(&self) -> &SocketAddr {
+    &self.src_addr
+  }
+  /// Get the destination address of the UdpConnection
+  fn dst_addr(&self) -> &SocketAddr {
+    &self.dst_addr
+  }
+  /// Get the protocol of the UdpConnection
+  fn protocol(&self) -> &UdpProtocolType {
+    &self.protocol
+  }
+}
+
+/* ---------------------------------------------------------- */
+/// Handle UDP access log when establishing a new connection
+fn udp_access_log_start(conn: &UdpConnectionInner) {
+  let protocol = AccessLogProtocolType::Udp(conn.protocol().to_owned());
+  access_log_start(&protocol, conn.src_addr(), conn.dst_addr());
+}
+/// Handle UDP access log when closing a connection
+fn udp_access_log_finish(conn: &UdpConnectionInner) {
+  let protocol = AccessLogProtocolType::Udp(conn.protocol().to_owned());
+  access_log_finish(&protocol, conn.src_addr(), conn.dst_addr());
 }
 
 /* ---------------------------------------------------------- */
@@ -373,9 +411,10 @@ mod tests {
 
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());
+    let protocol = UdpProtocolType::Any;
 
     let _udp_connection = udp_connection_pool
-      .create_new_connection(&src_addr, &udp_dst, udp_socket_to_downstream)
+      .create_new_connection(&src_addr, &udp_dst, &protocol, udp_socket_to_downstream)
       .await
       .unwrap();
 

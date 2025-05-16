@@ -54,6 +54,24 @@ You can run `rpxy-l4` with a configuration file like
 
 `rpxy-l4` always tracks the change of `config.toml` in the real-time manner and apply the change immediately without restarting the process.
 
+Full command line options are as follows:
+
+```bash
+% ./target/release/rpxy-l4 --help
+Usage: rpxy-l4 [OPTIONS] --config <FILE>
+
+Options:
+  -c, --config <FILE>      Configuration file path like ./config.toml
+  -l, --log-dir <LOG_DIR>  Directory for log files. If not specified, logs are printed to stdout.
+  -h, --help               Print help
+  -V, --version            Print version
+```
+
+If you set `--log-dir=<log_dir>`, the log files are created in the specified directory. Otherwise, the log is printed to stdout.
+
+- `${log_dir}/access.log` for access log
+- `${log_dir}/rpxy-l4.log` for system and error log
+
 ## Basic configuration
 
 > [!NOTE]

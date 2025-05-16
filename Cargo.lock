@@ -222,9 +222,9 @@ dependencies = [
 
 [[package]]
 name = "bitflags"
-version = "2.9.0"
+version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c8214115b7bf84099f1309324e63141d4c5d7cc26862f97a0a857dbefe165bd"
+checksum = "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967"
 
 [[package]]
 name = "block-buffer"
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-examples"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "clap",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-lib"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "bytes",
@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-quic-tls"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes",
  "aes-gcm",

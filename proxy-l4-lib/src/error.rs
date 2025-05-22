@@ -32,6 +32,13 @@ pub enum ProxyError {
 
   #[error("TLS Alert write error")]
   TlsAlertWriteError,
+
+  /* --------------------------------------- */
+  #[error("DNS resolution error: {0}")]
+  DnsResolutionError(String),
+
+  #[error("Invalid address: {0}")]
+  InvalidAddress(String),
 }
 
 /// Errors that happens during building the proxy

@@ -7,6 +7,7 @@ mod error;
 mod probe;
 mod proto;
 mod socket;
+mod target;
 mod tcp_proxy;
 mod time_util;
 mod trace;

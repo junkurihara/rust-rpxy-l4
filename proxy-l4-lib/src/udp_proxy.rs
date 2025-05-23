@@ -2,11 +2,12 @@ use crate::{
   config::EchProtocolConfig,
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
-  destination::{Destination, DestinationBuilder, LoadBalance, TlsDestinationItem},
+  destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::UdpProtocolType,
   socket::bind_udp_socket,
+  target::{DnsCache, TargetAddr},
   time_util::get_since_the_epoch,
   trace::*,
   udp_conn::UdpConnectionPool,
@@ -34,7 +35,7 @@ enum UdpDestination {
 /// Udp destination struct
 pub(crate) struct UdpDestinationInner {
   /// Destination socket address
-  inner: Destination,
+  inner: TargetDestination,
   /// Connection idle lifetime in seconds
   /// If set to 0, no limit is applied for the destination
   connection_idle_lifetime: u32,
@@ -49,19 +50,19 @@ enum FoundUdpDestination {
   Quic(TlsDestinationItem<UdpDestinationInner>),
 }
 
-impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestinationInner {
+impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>, Option<u32>)> for UdpDestinationInner {
   type Error = ProxyBuildError;
   fn try_from(
-    (dst_addrs, load_balance, connection_idle_lifetime): (&[SocketAddr], Option<&LoadBalance>, Option<u32>),
+    (dst_addrs, load_balance, dns_cache, connection_idle_lifetime): (
+      &[TargetAddr],
+      Option<&LoadBalance>,
+      &Arc<DnsCache>,
+      Option<u32>,
+    ),
   ) -> Result<Self, Self::Error> {
-    let binding = LoadBalance::default();
-    let load_balance = load_balance.unwrap_or(&binding);
+    let inner = TargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
     let connection_idle_lifetime = connection_idle_lifetime.unwrap_or(crate::constants::UDP_CONNECTION_IDLE_LIFETIME);
 
-    let inner = DestinationBuilder::default()
-      .dst_addrs(dst_addrs.to_vec())
-      .load_balance(*load_balance)
-      .build()?;
     Ok(Self {
       inner,
       connection_idle_lifetime,
@@ -71,8 +72,8 @@ impl TryFrom<(&[SocketAddr], Option<&LoadBalance>, Option<u32>)> for UdpDestinat
 
 impl UdpDestinationInner {
   /// Get the destination socket address
-  pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
-    self.inner.get_destination(src_addr)
+  pub(crate) async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
+    self.inner.get_destination(src_addr).await
   }
   /// Get the connection idle lifetime
   pub(crate) fn get_connection_idle_lifetime(&self) -> u32 {
@@ -83,10 +84,10 @@ impl UdpDestinationInner {
 #[allow(unused)]
 impl FoundUdpDestination {
   /// Get the destination socket address
-  pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
+  pub(crate) async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
     match self {
-      Self::Udp(dst) => dst.get_destination(src_addr),
-      Self::Quic(dst) => dst.destination().get_destination(src_addr),
+      Self::Udp(dst) => dst.get_destination(src_addr).await,
+      Self::Quic(dst) => dst.destination().get_destination(src_addr).await,
     }
   }
   /// Get the connection idle lifetime
@@ -112,11 +113,12 @@ impl UdpDestinationMuxBuilder {
   pub(crate) fn set_base(
     &mut self,
     proto_type: UdpProtocolType,
-    addrs: &[SocketAddr],
+    addrs: &[TargetAddr],
+    dns_cache: &Arc<DnsCache>,
     load_balance: Option<&LoadBalance>,
     lifetime: Option<u32>,
   ) -> &mut Self {
-    let udp_dest = UdpDestinationInner::try_from((addrs, load_balance, lifetime));
+    let udp_dest = UdpDestinationInner::try_from((addrs, load_balance, dns_cache, lifetime));
     if udp_dest.is_err() {
       return self;
     }
@@ -144,14 +146,15 @@ impl UdpDestinationMuxBuilder {
   /// Set Quic destinations, use this if alpn and server names are needed for protocol detection or ech is need to be configured
   pub(crate) fn set_quic(
     &mut self,
-    addrs: &[SocketAddr],
+    addrs: &[TargetAddr],
+    dns_cache: &Arc<DnsCache>,
     load_balance: Option<&LoadBalance>,
     lifetime: Option<u32>,
     server_names: Option<&[&str]>,
     alpn: Option<&[&str]>,
     _ech: Option<&EchProtocolConfig>, // TODO: Consider how to handle TLS ClientHello for QUIC + ECH, especially reassembling the datagram for TLS ClientHello Inner
   ) -> &mut Self {
-    let udp_dest = UdpDestinationInner::try_from((addrs, load_balance, lifetime));
+    let udp_dest = UdpDestinationInner::try_from((addrs, load_balance, dns_cache, lifetime));
     if udp_dest.is_err() {
       return self;
     }

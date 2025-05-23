@@ -1,11 +1,11 @@
 use crate::log::warn;
 use anyhow::anyhow;
-use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType};
+use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
 use serde::Deserialize;
 use std::{
   collections::{HashMap, HashSet},
   fs,
-  net::SocketAddr,
+  time::Duration,
 };
 
 #[derive(Deserialize, Debug, Default, PartialEq, Eq, Clone)]
@@ -22,6 +22,9 @@ pub struct ConfigToml {
   pub udp_target: Option<Vec<String>>,
   pub udp_load_balance: Option<String>,
   pub udp_idle_lifetime: Option<u32>,
+  // DNS cache configuration
+  pub dns_cache_min_ttl: Option<String>,
+  pub dns_cache_max_ttl: Option<String>,
   // protocols
   pub protocols: Option<ProtocolsToml>,
 }
@@ -95,7 +98,7 @@ impl TryFrom<ConfigToml> for Config {
         if target.is_empty() {
           return Err(anyhow!("target is empty for key: {name}"));
         }
-        let target = target.iter().map(|x| x.parse()).collect::<Result<Vec<SocketAddr>, _>>()?;
+        let target = target.iter().map(|x| x.parse()).collect::<Result<Vec<TargetAddr>, _>>()?;
 
         let load_balance: Option<LoadBalance> = protocol_toml
           .load_balance
@@ -136,7 +139,7 @@ impl TryFrom<ConfigToml> for Config {
     };
     let tcp_target = config_toml
       .tcp_target
-      .map(|x| x.iter().map(|x| x.parse()).collect::<Result<Vec<SocketAddr>, _>>())
+      .map(|x| x.iter().map(|x| x.parse()).collect::<Result<Vec<TargetAddr>, _>>())
       .transpose()?;
     let tcp_load_balance = config_toml
       .tcp_load_balance
@@ -145,12 +148,24 @@ impl TryFrom<ConfigToml> for Config {
       .transpose()?;
     let udp_target = config_toml
       .udp_target
-      .map(|x| x.iter().map(|x| x.parse()).collect::<Result<Vec<SocketAddr>, _>>())
+      .map(|x| x.iter().map(|x| x.parse()).collect::<Result<Vec<TargetAddr>, _>>())
       .transpose()?;
     let udp_load_balance = config_toml
       .udp_load_balance
       .as_ref()
       .map(|x| x.as_str().try_into())
+      .transpose()?;
+
+    // Parse DNS cache configuration
+    let dns_cache_min_ttl = config_toml
+      .dns_cache_min_ttl
+      .as_ref()
+      .map(|x| parse_duration(x))
+      .transpose()?;
+    let dns_cache_max_ttl = config_toml
+      .dns_cache_max_ttl
+      .as_ref()
+      .map(|x| parse_duration(x))
       .transpose()?;
 
     Ok(Self {
@@ -164,7 +179,36 @@ impl TryFrom<ConfigToml> for Config {
       udp_target,
       udp_load_balance,
       udp_idle_lifetime: config_toml.udp_idle_lifetime,
+      dns_cache_min_ttl,
+      dns_cache_max_ttl,
       protocols,
     })
   }
+}
+
+/// Parse duration string like "30s", "5m", "1h" into Duration
+fn parse_duration(s: &str) -> Result<Duration, anyhow::Error> {
+  let s = s.trim();
+  if s.is_empty() {
+    return Err(anyhow!("Empty duration string"));
+  }
+
+  let (num_part, unit_part) = if let Some(pos) = s.find(|c: char| c.is_alphabetic()) {
+    (&s[..pos], &s[pos..])
+  } else {
+    return Err(anyhow!("Duration must include a unit (s, m, h)"));
+  };
+
+  let num: u64 = num_part
+    .parse()
+    .map_err(|_| anyhow!("Invalid number in duration: {}", num_part))?;
+
+  let duration = match unit_part.to_lowercase().as_str() {
+    "s" | "sec" | "secs" | "second" | "seconds" => Duration::from_secs(num),
+    "m" | "min" | "mins" | "minute" | "minutes" => Duration::from_secs(num * 60),
+    "h" | "hr" | "hrs" | "hour" | "hours" => Duration::from_secs(num * 3600),
+    _ => return Err(anyhow!("Invalid duration unit: {}. Use s, m, or h", unit_part)),
+  };
+
+  Ok(duration)
 }

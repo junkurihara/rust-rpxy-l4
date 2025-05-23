@@ -61,9 +61,9 @@ pub enum ProxyBuildError {
   #[error("Invalid load balance: {0}")]
   InvalidLoadBalance(String),
 
-  /// Single destination builder error
-  #[error("Destination builder error: {0}")]
-  DestinationBuilderError(#[from] crate::destination::DestinationBuilderError),
+  /// Single target destination builder error
+  #[error("Target destination builder error: {0}")]
+  TargetDestinationBuilderError(#[from] crate::destination::TargetDestinationBuilderError),
 
   /* --------------------------------------- */
   /// Multiplexer builder error UDP

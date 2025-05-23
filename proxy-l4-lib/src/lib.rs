@@ -14,12 +14,17 @@ mod trace;
 mod udp_conn;
 mod udp_proxy;
 
+use constants::{DNS_CACHE_MAX_TTL, DNS_CACHE_MIN_TTL};
+use std::sync::Arc;
+use target::DnsCache;
+
 pub use config::{Config, EchProtocolConfig, ProtocolConfig};
 pub use constants::log_event_names;
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
 pub use error::{ProxyBuildError, ProxyError};
 pub use proto::ProtocolType;
+pub use target::TargetAddr;
 pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProxy, TcpProxyBuilder};
 pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpProxyBuilder};
 
@@ -29,11 +34,18 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
   let mut tcp_mux_builder = TcpDestinationMuxBuilder::default();
   let mut udp_mux_builder = UdpDestinationMuxBuilder::default();
 
+  // Generate DNS cache
+  let dns_cache = Arc::new(DnsCache::new(
+    config.dns_cache_min_ttl.unwrap_or(DNS_CACHE_MIN_TTL),
+    config.dns_cache_max_ttl.unwrap_or_else(|| DNS_CACHE_MAX_TTL),
+  ));
+
   // For default targets
   if let Some(tcp_target) = config.tcp_target.as_ref() {
     tcp_mux_builder.set_base(
       proto::TcpProtocolType::Any,
       tcp_target.as_slice(),
+      &dns_cache,
       config.tcp_load_balance.as_ref(),
     );
   }
@@ -41,6 +53,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
     udp_mux_builder.set_base(
       proto::UdpProtocolType::Any,
       udp_target.as_slice(),
+      &dns_cache,
       config.udp_load_balance.as_ref(),
       config.udp_idle_lifetime,
     );
@@ -56,17 +69,18 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
     }
     match spec.protocol {
       ProtocolType::Http => {
-        tcp_mux_builder.set_base(proto::TcpProtocolType::Http, target, spec.load_balance.as_ref());
+        tcp_mux_builder.set_base(proto::TcpProtocolType::Http, target, &dns_cache, spec.load_balance.as_ref());
       }
       /* ---------------------------------------- */
       ProtocolType::Ssh => {
-        tcp_mux_builder.set_base(proto::TcpProtocolType::Ssh, target, spec.load_balance.as_ref());
+        tcp_mux_builder.set_base(proto::TcpProtocolType::Ssh, target, &dns_cache, spec.load_balance.as_ref());
       }
       /* ---------------------------------------- */
       ProtocolType::Wireguard => {
         udp_mux_builder.set_base(
           proto::UdpProtocolType::Wireguard,
           target,
+          &dns_cache,
           spec.load_balance.as_ref(),
           spec.idle_lifetime,
         );
@@ -83,6 +97,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
           .map(|v| v.iter().map(|x| x.as_str()).collect::<Vec<&str>>());
         tcp_mux_builder.set_tls(
           target,
+          &dns_cache,
           spec.load_balance.as_ref(),
           server_names.as_deref(),
           alpn.as_deref(),
@@ -105,6 +120,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
         }
         udp_mux_builder.set_quic(
           target,
+          &dns_cache,
           spec.load_balance.as_ref(),
           spec.idle_lifetime,
           server_names.as_deref(),

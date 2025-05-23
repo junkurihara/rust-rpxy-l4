@@ -208,7 +208,7 @@ impl UdpConnectionInner {
     udp_socket_to_downstream: Arc<UdpSocket>,
     cancel_token: CancellationToken,
   ) -> Result<Self, ProxyError> {
-    let dst_addr = udp_dst.get_destination(src_addr)?;
+    let dst_addr = udp_dst.get_destination(src_addr).await?;
     let idle_lifetime = udp_dst.get_connection_idle_lifetime() as u64;
     let udp_socket_to_upstream = match dst_addr {
       SocketAddr::V4(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V4.get().unwrap())?),
@@ -224,7 +224,7 @@ impl UdpConnectionInner {
     Ok(Self {
       protocol: protocol.clone(),
       src_addr: *src_addr,
-      dst_addr: *dst_addr,
+      dst_addr,
       udp_socket_to_upstream,
       udp_socket_to_downstream,
       cancel_token,
@@ -377,6 +377,8 @@ fn udp_access_log_finish(conn: &UdpConnectionInner) {
 /* ---------------------------------------------------------- */
 #[cfg(test)]
 mod tests {
+  use crate::target::{DnsCache, TargetAddr};
+
   use super::*;
   use std::str::FromStr;
   use tracing_subscriber::{fmt, prelude::*};
@@ -406,8 +408,14 @@ mod tests {
     let udp_connection_pool = UdpConnectionPool::new(runtime_handle.clone(), cancel_token.clone());
 
     let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let udp_dst =
-      UdpDestinationInner::try_from((["127.0.0.1:54321".parse::<SocketAddr>().unwrap()].as_slice(), None, Some(10))).unwrap();
+    let dns_cache = Arc::new(DnsCache::default());
+    let udp_dst = UdpDestinationInner::try_from((
+      ["127.0.0.1:54321".parse::<TargetAddr>().unwrap()].as_slice(),
+      None,
+      &dns_cache,
+      Some(10),
+    ))
+    .unwrap();
 
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());

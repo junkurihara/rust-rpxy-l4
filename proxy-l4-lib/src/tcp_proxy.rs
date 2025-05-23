@@ -3,11 +3,12 @@ use crate::{
   config::EchProtocolConfig,
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
-  destination::{Destination, LoadBalance, TlsDestinationItem},
+  destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::TcpProtocolType,
   socket::bind_tcp_socket,
+  target::{DnsCache, TargetAddr},
   trace::*,
 };
 use bytes::BytesMut;
@@ -37,7 +38,7 @@ enum TcpDestination {
 /// Tcp destination struct
 struct TcpDestinationInner {
   /// Destination inner
-  inner: Destination,
+  inner: TargetDestination,
 }
 
 #[derive(Debug, Clone)]
@@ -49,27 +50,29 @@ enum FoundTcpDestination {
   Tls(TlsDestinationItem<TcpDestinationInner>),
 }
 
-impl TryFrom<(&[SocketAddr], Option<&LoadBalance>)> for TcpDestinationInner {
+impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>)> for TcpDestinationInner {
   type Error = ProxyBuildError;
-  fn try_from((dst_addrs, load_balance): (&[SocketAddr], Option<&LoadBalance>)) -> Result<Self, Self::Error> {
-    let inner = Destination::try_from((dst_addrs, load_balance))?;
+  fn try_from(
+    (dst_addrs, load_balance, dns_cache): (&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>),
+  ) -> Result<Self, Self::Error> {
+    let inner = TargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
     Ok(Self { inner })
   }
 }
 
 impl TcpDestinationInner {
   /// Get the destination socket address
-  pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
-    self.inner.get_destination(src_addr)
+  pub(crate) async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
+    self.inner.get_destination(src_addr).await
   }
 }
 
 impl FoundTcpDestination {
   /// Get the destination socket address
-  fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
+  async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
     match self {
-      Self::Tcp(tcp_destination) => tcp_destination.get_destination(src_addr),
-      Self::Tls(tls_destination) => tls_destination.destination().get_destination(src_addr),
+      Self::Tcp(tcp_destination) => tcp_destination.get_destination(src_addr).await,
+      Self::Tls(tls_destination) => tls_destination.destination().get_destination(src_addr).await,
     }
   }
 }
@@ -88,10 +91,11 @@ impl TcpDestinationMuxBuilder {
   pub(crate) fn set_base(
     &mut self,
     proto_type: TcpProtocolType,
-    addrs: &[SocketAddr],
+    addrs: &[TargetAddr],
+    dns_cache: &Arc<DnsCache>,
     load_balance: Option<&LoadBalance>,
   ) -> &mut Self {
-    let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance));
+    let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance, dns_cache));
     if tcp_dest.is_err() {
       return self;
     }
@@ -119,13 +123,14 @@ impl TcpDestinationMuxBuilder {
   /// Set TLS destinations, use this if alpn and server names are needed for protocol detection or ech is need to be configured
   pub(crate) fn set_tls(
     &mut self,
-    addrs: &[SocketAddr],
+    addrs: &[TargetAddr],
+    dns_cache: &Arc<DnsCache>,
     load_balance: Option<&LoadBalance>,
     server_names: Option<&[&str]>,
     alpn: Option<&[&str]>,
     ech: Option<&EchProtocolConfig>,
   ) -> &mut Self {
-    let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance));
+    let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance, dns_cache));
     if tcp_dest.is_err() {
       return self;
     }
@@ -430,7 +435,7 @@ async fn handle_tcp_connection(
     }
   };
 
-  let Ok(dst_addr) = found_dst.get_destination(&src_addr) else {
+  let Ok(dst_addr) = found_dst.get_destination(&src_addr).await else {
     error!("Failed to get destination address for {src_addr}");
     connection_count.decrement();
     return;
@@ -535,16 +540,17 @@ mod tests {
   #[tokio::test]
   async fn test_tcp_proxy() {
     let handle = tokio::runtime::Handle::current();
+    let dns_cache = Arc::new(DnsCache::default());
     let dst_any = &["127.0.0.1:50053".parse().unwrap()];
     let dst_ssh = &["127.0.0.1:50022".parse().unwrap()];
     let dst_tls_1 = &["127.0.0.1:50443".parse().unwrap()];
     let dst_tls_2 = &["127.0.0.1:50444".parse().unwrap()];
     let dst_mux = Arc::new(
       TcpDestinationMuxBuilder::default()
-        .set_base(TcpProtocolType::Any, dst_any, None)
-        .set_base(TcpProtocolType::Ssh, dst_ssh, None)
-        .set_base(TcpProtocolType::Tls, dst_tls_1, None)
-        .set_tls(dst_tls_2, None, Some(&["example.com"]), None, None)
+        .set_base(TcpProtocolType::Any, dst_any, &dns_cache, None)
+        .set_base(TcpProtocolType::Ssh, dst_ssh, &dns_cache, None)
+        .set_base(TcpProtocolType::Tls, dst_tls_1, &dns_cache, None)
+        .set_tls(dst_tls_2, &dns_cache, None, Some(&["example.com"]), None, None)
         .build()
         .unwrap(),
       // .dst_http(dst_http, None)
@@ -562,8 +568,8 @@ mod tests {
     chb.client_hello.add_replace_sni(&sni);
 
     let found = dst_mux.find_destination(&TcpProbedProtocol::Tls(chb)).unwrap();
-    let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).unwrap();
-    assert_eq!(destination, &"127.0.0.1:50444".parse().unwrap());
+    let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
+    assert_eq!(destination, "127.0.0.1:50444".parse().unwrap());
 
     // check for unspecified tls
     let mut sni = ServerNameIndication::default();
@@ -572,8 +578,8 @@ mod tests {
     chb.client_hello.add_replace_sni(&sni);
 
     let found = dst_mux.find_destination(&TcpProbedProtocol::Tls(chb)).unwrap();
-    let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).unwrap();
-    assert_eq!(destination, &"127.0.0.1:50443".parse().unwrap());
+    let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
+    assert_eq!(destination, "127.0.0.1:50443".parse().unwrap());
 
     let listen_on: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let tcp_proxy = TcpProxyBuilder::default()
@@ -583,6 +589,22 @@ mod tests {
       .build()
       .unwrap();
     assert_eq!(tcp_proxy.backlog, super::super::constants::TCP_BACKLOG);
+  }
+
+  #[tokio::test]
+  async fn test_tcp_proxy_with_domain_name_one_one_one_one() {
+    let dns_cache = Arc::new(DnsCache::default());
+    let dst_any = &["one.one.one.one:53".parse().unwrap()];
+    let dst_mux = Arc::new(
+      TcpDestinationMuxBuilder::default()
+        .set_base(TcpProtocolType::Any, dst_any, &dns_cache, None)
+        .build()
+        .unwrap(),
+    );
+
+    let found = dst_mux.find_destination(&TcpProbedProtocol::Any).unwrap();
+    let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
+    assert!(["1.1.1.1:53".parse().unwrap(), "1.0.0.1:53".parse().unwrap()].contains(&destination));
   }
 }
 

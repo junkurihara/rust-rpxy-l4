@@ -25,8 +25,8 @@ udp_max_connections = 2048
 # (Optional) Default targets for TCP connections. [default: empty]
 # If specified, connections that are not detected as specified protocols will be forwarded to these targets.
 # Otherwise, only specified protocols pass through and others are dropped.
-# Format: ["<ip>:<port>", "<ip>:<port>", ...]
-tcp_target = ["192.168.122.4:53"]
+# Format: ["<ip|domain>:<port>", "<ip|domain>:<port>", ...]
+tcp_target = ["192.168.122.4:53"] # ip:port or domain:port
 
 # (Optional) Load balancing method for default targets [default: none]
 # - source_ip: based on source IP hash
@@ -36,7 +36,7 @@ tcp_target = ["192.168.122.4:53"]
 tcp_load_balance = "source_ip" # source_ip, source_socket, random, or none
 
 # (Optional) Default targets for UDP connections. [default: empty]
-udp_target = ["192.168.122.4:53"]
+udp_target = ["192.168.122.4:53"] # ip:port or domain:port
 
 # (Optional) Load balancing method for default targets [default: none]
 udp_load_balance = "source_ip"
@@ -44,6 +44,15 @@ udp_load_balance = "source_ip"
 # (Optional) Udp connection idle lifetime in seconds [default: 30]
 udp_idle_lifetime = 30
 
+# (Optional) DNS cache minimum TTL in duration format (e.g., "30s", "1m", "1h") [default: 30s]
+# This sets the minimum time resolved DNS records are cached, even if the DNS response
+# specifies a shorter TTL.
+dns_cache_min_ttl = "30s"
+
+# (Optional) DNS cache maximum TTL in duration format [default: 1h]
+# This sets the maximum time resolved DNS records are cached, even if the DNS response
+# specifies a longer TTL.
+dns_cache_max_ttl = "1h"
 
 #########################
 # Per-protocol settings #
@@ -60,7 +69,7 @@ udp_idle_lifetime = 30
 protocol = "tls"
 
 # Target for connections detected as the `protocol`.
-target = ["192.168.122.4:443"]
+target = ["192.168.122.4:443"] # ip:port or domain:port
 
 # (Optional) Load balancing method specific to this connections [default: none]
 load_balance = "source_ip"
@@ -70,7 +79,7 @@ load_balance = "source_ip"
 ### Example for TLS with SNI routing
 [protocols."tls_2"]
 protocol = "tls"
-target = ["192.168.122.5:443"]
+target = ["192.168.122.5:443"] # ip:port or domain:port
 load_balance = "source_ip"
 
 # (Optional) SNI-based routing for TLS/QUIC connections, only valid when `protocol = "tls"` or `"quic"`.
@@ -82,7 +91,7 @@ server_names = ["example.com", "example.org"]
 ### Example for TLS with SNI routing
 [protocols."tls_3"]
 protocol = "tls"
-target = ["192.168.122.6:443"]
+target = ["192.168.122.6:443"] # ip:port or domain:port
 load_balance = "source_ip"
 
 # (Optional) ALPN-based routing for TLS/QUIC connections, only valid when `protocol = "tls"` or `"quic"`.
@@ -96,8 +105,10 @@ alpns = ["h2", "http/1.1"]
 ### Example for TLS with ECH support
 [protocols."tls_4"]
 protocol = "tls"
-# TODO: consider if this can be resolved by DNS from the decrypted SNI
-target = ["192.168.122.7:443"]
+target = [
+  "192.168.122.7:443",
+  "my-private-backend.example.com:443",
+] # ip:port or domain:port
 load_balance = "source_ip"
 # (Optional) If specified, TLS connection with SNI in the intersection of `server_names` and [`ech_config.content.public_name`] are evaluated.
 # In other words, even if not specified, allowed public names in ech config are only evaluated and possibly passed to the target.
@@ -105,9 +116,9 @@ load_balance = "source_ip"
 server_names = ["my-public-name.example.com"]
 
 # (Optional) Support for encrypted client hello (ECH) for TLS connections, only valid when `protocol = "tls"` or `"quic"` and `server_name` is set.
-# If specified, the proxy will attempts to decrypt the encrypted InnerClientHello contained in the OuterClientHello matched to the SNI-matched connections.
+# If specified, the proxy will attempt to decrypt the encrypted InnerClientHello contained in the OuterClientHello matched to the SNI-matched connections.
 # For instance, when TLS ClientHello with SNI "example.net" (Outer) is given, the proxy will decrypts the encrypted part of the ClientHello (Inner).
-# Then it forwards the plaintext ClientHello to the target. If ech_config.server_names is given, only inner client hello matched to the entry is forwarded.
+# Then it forwards the plaintext ClientHello to the target. Only when given ech_config.server_names matches the SNI of inner client hello, the connection is passed to the target.
 # If decryption fails (e.g. the ECHConfigList is not matched to the OuterClientHello), the connection simply be passed to the target with no modification.
 [protocols."tls_4".ech]
 # ECHConfigList for the server, base64 encoded.
@@ -115,8 +126,10 @@ ech_config_list = "<base64 encoded ECHConfigList>"
 # Private keys for ECH decryption, matched to entries in ech_config_list.
 private_keys = ["<base64 encoded private key>"]
 
-# (Optional) Server names that only be routed after ECH decryption towards the target address
-server_names = ["example.org"] # TODO: not implemented
+# (Optional) Private server names that only be routed after ECH decryption towards the target address
+private_server_names = [
+  "my-private-backend.example.com",
+] # TODO: not implemented
 
 
 #########################

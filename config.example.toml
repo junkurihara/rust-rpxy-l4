@@ -1,15 +1,30 @@
 # Example configuration file for rpxy-L4
 
+# Global settings
 listen_port = 8448
 listen_ipv6 = true
 tcp_backlog = 1024
 tcp_max_connections = 1024
 udp_max_connections = 2048
-tcp_target = ["1.1.1.1:53"] # dns
-tcp_load_balance = "none"
-udp_target = ["8.8.8.8:53"] # dns
-udp_load_balance = "none"
-udp_idle_lifetime = 5
+
+# DNS cache configuration
+dns_cache_min_ttl = "30s" # Minimum DNS cache TTL
+dns_cache_max_ttl = "1h"  # Maximum DNS cache TTL
+
+# Default TCP target using domain names and IPs
+tcp_target = [
+  "one.one.one.one:53", # Cloudflare DNS (resolved via DNS)
+  "1.1.1.1:53",         # Direct IP
+]
+tcp_load_balance = "source_ip"
+
+# Default UDP target using domain names
+udp_target = [
+  "dns.google:53", # Google DNS (resolved via DNS)
+  "8.8.8.8:53",    # Direct IP
+]
+udp_load_balance = "source_ip"
+udp_idle_lifetime = 30
 
 [protocols]
 
@@ -20,37 +35,49 @@ protocol = "http"
 target = ["1.1.1.1:80"]
 load_balance = "none"
 
-# DNS over TLS
+# DNS over TLS with domain name resolution
 [protocols."tls_1"]
 # check with `dig t.co @localhost -p 8448 +tls`
 protocol = "tls"
-target = ["1.1.1.1:853"]
+target = [
+  "dot.cloudflare.com:853", # Will be resolved via DNS
+  "1.1.1.1:853",            # Direct IP as fallback
+]
 load_balance = "source_ip"
 alpn = ["dot"]
 
-# HTTP/2 over TLS
+# HTTP/2 over TLS with mixed targets
 [protocols."tls_2"]
 # check with `curl https://localhost:8448 -v --http2 --insecure`
 protocol = "tls"
-target = ["127.0.0.1:4433"]  # host `rpxy` on localhost:4433
+target = [
+  "api.internal:4433",  # Will be resolved via DNS
+  "backend.local:4433", # Will be resolved via DNS
+  "127.0.0.1:4433",     # Direct IP as fallback
+]
 load_balance = "source_ip"
 server_names = ["localhost"]
 alpn = ["h2"]
 
-# HTTP/3 over QUIC
+# HTTP/3 over QUIC with domain targets
 [protocols."quic_1"]
 # check with `curl https://localhost:8448 -v --http3-only --insecure`
 protocol = "quic"
-target = ["127.0.0.1:4433"]  # host `rpxy` on localhost:4433
+target = [
+  "h3.example.com:4433", # Will be resolved via DNS
+  "127.0.0.1:4433",      # Direct IP as fallback
+]
 load_balance = "source_ip"
 idle_lifetime = 30
 alpn = ["h3"]
 server_names = ["localhost"]
 
-# WireGuard
+# WireGuard with domain target
 [protocols."wireguard_1"]
 protocol = "wireguard"
-target = ["192.168.1.2:51820"]
-load_balance = "none"
-# longer than the keepalive interval of the wireguard tunnel
-idle_lifetime = 30
+target = [
+  "wg.example.com:51820", # Will be resolved via DNS
+  "192.168.1.2:51820",    # Direct IP as fallback
+]
+load_balance = "source_ip" # Consistent hashing for domain targets
+idle_lifetime = 30 # Longer than the keepalive interval

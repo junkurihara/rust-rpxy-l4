@@ -32,6 +32,8 @@ pub enum TlsClientHelloError {
   PublicNameMismatch,
   #[error("Invalid Ech ClientHello Inner recomposition attempt")]
   InvalidClientHelloRecomposition,
+  #[error("No SNI in decrypted ClientHello")]
+  NoSniInDecryptedClientHello,
 
   #[error("Error in serialization/deserialization")]
   SerDeserError(#[from] SerDeserError),

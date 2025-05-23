@@ -107,7 +107,7 @@ alpns = ["h2", "http/1.1"]
 protocol = "tls"
 target = [
   "192.168.122.7:443",
-  "my-private-backend.example.com:443",
+  "default-backend.example.com:443",
 ] # ip:port or domain:port
 load_balance = "source_ip"
 # (Optional) If specified, TLS connection with SNI in the intersection of `server_names` and [`ech_config.content.public_name`] are evaluated.
@@ -118,18 +118,24 @@ server_names = ["my-public-name.example.com"]
 # (Optional) Support for encrypted client hello (ECH) for TLS connections, only valid when `protocol = "tls"` or `"quic"` and `server_name` is set.
 # If specified, the proxy will attempt to decrypt the encrypted InnerClientHello contained in the OuterClientHello matched to the SNI-matched connections.
 # For instance, when TLS ClientHello with SNI "example.net" (Outer) is given, the proxy will decrypts the encrypted part of the ClientHello (Inner).
-# Then it forwards the plaintext ClientHello to the target. Only when given ech_config.server_names matches the SNI of inner client hello, the connection is passed to the target.
-# If decryption fails (e.g. the ECHConfigList is not matched to the OuterClientHello), the connection simply be passed to the target with no modification.
+# Then it does not forward the plaintext ClientHello to the target specified above. The decrypted ClientHello Inner will be routed to the private target server contained in itself.
+# For instance, if the ClientHello Inner contains the SNI "my-private-backend.example.com" (Inner),
+# the connection will be routed to the private target server "my-private-backend.example.com:8448",
+# where the port number is preserved from the OuterClientHello, i.e., 8448 (listen port), *unless specified".
+# If it is specified with the port number, e.g., "xxx.com:443", the port number is forced to be used as the target port instead of listen port.
+# If decryption fails (e.g. the ECHConfigList is not matched to the OuterClientHello), the connection simply be passed to the target with no modification. Namely, the server names give above are the default target.
 [protocols."tls_4".ech]
 # ECHConfigList for the server, base64 encoded.
 ech_config_list = "<base64 encoded ECHConfigList>"
 # Private keys for ECH decryption, matched to entries in ech_config_list.
 private_keys = ["<base64 encoded private key>"]
-
-# (Optional) Private server names that only be routed after ECH decryption towards the target address
+# Private server names that only be routed after ECH decryption towards the target address
+# This is used to route the connection to the private backend server.
+# Then port is the same as the listen port unless specified.
 private_server_names = [
   "my-private-backend.example.com",
-] # TODO: not implemented
+  "my-private-backend.example.org:8448",
+]
 
 
 #########################

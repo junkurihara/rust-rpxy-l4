@@ -109,7 +109,7 @@ impl TcpDestinationMuxBuilder {
         } else {
           TlsDestinations::new()
         };
-        current_tls.add(&[], &[], tcp_dest_inner, None);
+        current_tls.add(&[], &[], tcp_dest_inner, None, &dns_cache);
         inner.insert(proto_type, TcpDestination::Tls(current_tls));
       }
       _ => {
@@ -147,6 +147,7 @@ impl TcpDestinationMuxBuilder {
       alpn.unwrap_or_default(),
       tcp_dest_inner,
       ech.cloned(),
+      &dns_cache,
     );
 
     inner.insert(TcpProtocolType::Tls, TcpDestination::Tls(current_tls));
@@ -435,13 +436,8 @@ async fn handle_tcp_connection(
     }
   };
 
-  let Ok(dst_addr) = found_dst.get_destination(&src_addr).await else {
+  let Ok(mut dst_addr) = found_dst.get_destination(&src_addr).await else {
     error!("Failed to get destination address for {src_addr}");
-    connection_count.decrement();
-    return;
-  };
-  let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await else {
-    error!("Failed to connect to the destination: {dst_addr}");
     connection_count.decrement();
     return;
   };
@@ -449,7 +445,7 @@ async fn handle_tcp_connection(
   let to_be_written = match (&found_dst, &probed_protocol) {
     (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) => {
       // Handle tls, especially ECH
-      let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination) else {
+      let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination, &mut dst_addr).await else {
         // Error means that illegal parameter must be sent back when error
         error!("Failed to handle TLS client hello, sending illegal_parameter alert back to the client");
         let illegal_parameter_alert = TlsAlertBuffer::default();
@@ -465,6 +461,12 @@ async fn handle_tcp_connection(
       // handle non-tls
       initial_buf.freeze()
     }
+  };
+
+  let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await else {
+    error!("Failed to connect to the destination: {dst_addr}");
+    connection_count.decrement();
+    return;
   };
 
   if let Err(e) = outgoing_stream.write_all(&to_be_written).await {
@@ -487,9 +489,10 @@ async fn handle_tcp_connection(
 /// handle tls, especially ECH
 /// This returns as is (Ok(...)) in Bytes when no matching config_id is found (case of GREASE), otherwise returns decrypted ClientHello record in Bytes
 /// If this returns Err(...), it means that it failed to be decrypted or that the decrypted result is illegal. Then we must send some error back to the client.
-fn handle_tls_client_hello<T>(
+async fn handle_tls_client_hello<T>(
   orig_ch_buf: &TlsClientHelloBuffer,
   tls_destination: &TlsDestinationItem<T>,
+  dst_addr: &mut SocketAddr,
 ) -> Result<bytes::Bytes, ProxyError> {
   if orig_ch_buf.is_ech_outer() && tls_destination.ech().is_some() {
     trace!("Handling ECH ClientHello Outer");
@@ -497,7 +500,33 @@ fn handle_tls_client_hello<T>(
     let Some(decrypted_ch) = orig_ch_buf.client_hello.decrypt_ech(&ech.private_keys, false)? else {
       return Ok(orig_ch_buf.try_to_bytes()?);
     };
+    // Decryption succeeded, so we need to replace the destination address with the one in the decrypted ClientHello Inner
+    trace!("Decrypted ClientHello Inner: {decrypted_ch:#?}");
 
+    let sni = decrypted_ch.sni();
+    let Some(private_server_name) = sni.iter().next() else {
+      error!("No SNI in decrypted ClientHello");
+      return Err(ProxyError::TlsError(
+        quic_tls::TlsClientHelloError::NoSniInDecryptedClientHello,
+      ));
+    };
+    let Some(private_target_addr) = ech.private_server_names.get(private_server_name) else {
+      error!("No matching private server name found in decrypted ClientHello");
+      return Err(ProxyError::EchNoMatchingPrivateServerName);
+    };
+    // Replace the destination address with the one in the decrypted ClientHello Inner
+    let dns_cache = tls_destination.dns_cache();
+    let resolved = private_target_addr.resolve_cached(&dns_cache).await?;
+    if resolved.is_empty() {
+      error!("No destination address found for {private_server_name}");
+      return Err(ProxyError::NoDestinationAddress);
+    }
+    *dst_addr = resolved[0];
+    debug!(
+      "Decryption succeeded, replacing destination address with private server address {private_server_name}: {dst_addr} (ECH)"
+    );
+
+    // New client hello (i.e., reconstructed inner) that will be sent to the destination
     let new_ch_buf = TlsClientHelloBuffer {
       client_hello: decrypted_ch,
       record_header: orig_ch_buf.record_header.clone(),

@@ -56,6 +56,8 @@ pub struct EchToml {
   pub ech_config_list: String,
   /// List of base64 encoded raw private keys
   pub private_keys: Vec<String>,
+  /// The list of accepted ECH private server names
+  pub private_server_names: Vec<String>,
 }
 
 impl ConfigToml {
@@ -84,6 +86,10 @@ impl TryFrom<ConfigToml> for Config {
   type Error = anyhow::Error;
 
   fn try_from(config_toml: ConfigToml) -> Result<Self, Self::Error> {
+    let Some(listen_port) = config_toml.listen_port else {
+      return Err(anyhow!("listen_port is required"));
+    };
+
     let mut protocols = HashMap::new();
 
     if let Some(protocols_toml) = config_toml.protocols {
@@ -109,7 +115,7 @@ impl TryFrom<ConfigToml> for Config {
         let ech = protocol_toml
           .ech
           .as_ref()
-          .map(|v| EchProtocolConfig::try_new(&v.ech_config_list, &v.private_keys))
+          .map(|v| EchProtocolConfig::try_new(&v.ech_config_list, &v.private_keys, &v.private_server_names, &listen_port))
           .transpose()?;
         if ech.is_some() {
           warn!("ECH is configured for protocol: {name}");
@@ -117,6 +123,10 @@ impl TryFrom<ConfigToml> for Config {
           warn!(
             "If DNS HTTPS RR is used for that, check if its value contains \"ech={}\"",
             &protocol_toml.ech.as_ref().unwrap().ech_config_list
+          );
+          warn!(
+            "For the configuration, ECH private server names accepted and routed are: {:?}",
+            protocol_toml.ech.as_ref().unwrap().private_server_names
           );
         }
 
@@ -134,9 +144,6 @@ impl TryFrom<ConfigToml> for Config {
       }
     }
 
-    let Some(listen_port) = config_toml.listen_port else {
-      return Err(anyhow!("listen_port is required"));
-    };
     let tcp_target = config_toml
       .tcp_target
       .map(|x| x.iter().map(|x| x.parse()).collect::<Result<Vec<TargetAddr>, _>>())

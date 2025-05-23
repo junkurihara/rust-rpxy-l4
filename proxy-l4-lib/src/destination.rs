@@ -41,65 +41,6 @@ impl TryFrom<&str> for LoadBalance {
   }
 }
 
-// /* ---------------------------------------------------------- */
-// #[derive(Debug, Clone, derive_builder::Builder)]
-// #[builder(build_fn(validate = "Self::validate"))]
-// /// Destination inner struct, contained in TcpDestination and UdpDestination
-// pub struct Destination {
-//   /// Destination socket address
-//   dst_addrs: Vec<SocketAddr>,
-
-//   #[builder(default = "LoadBalance::default()")]
-//   /// Load balancing policy
-//   load_balance: LoadBalance,
-
-//   /// Random source leveraged for load balancing policies [LoadBalance::SourceIp] and [LoadBalance::SourceSocket]
-//   #[builder(setter(skip), default = "ahash::RandomState::default()")]
-//   random: ahash::RandomState,
-// }
-// impl DestinationBuilder {
-//   fn validate(&self) -> Result<(), String> {
-//     if self.dst_addrs.is_none() {
-//       return Err("dst_addrs is required".to_string());
-//     }
-//     if self.dst_addrs.as_ref().unwrap().is_empty() {
-//       return Err("dst_addrs is empty".to_string());
-//     }
-//     Ok(())
-//   }
-// }
-// impl Destination {
-//   /// Get the destination socket address according to the given load balancing policy
-//   pub(crate) fn get_destination(&self, src_addr: &SocketAddr) -> Result<&SocketAddr, ProxyError> {
-//     let index = match self.load_balance {
-//       LoadBalance::SourceIp => {
-//         let src_ip = src_addr.ip();
-//         let hash = self.random.hash_one(src_ip);
-//         (hash % self.dst_addrs.len() as u64) as usize
-//       }
-//       LoadBalance::SourceSocket => {
-//         let hash = self.random.hash_one(src_addr);
-//         (hash % self.dst_addrs.len() as u64) as usize
-//       }
-//       LoadBalance::Random => rand::rng().random_range(0..self.dst_addrs.len()),
-//       LoadBalance::None => 0,
-//     };
-//     self.dst_addrs.get(index).ok_or(ProxyError::NoDestinationAddress)
-//   }
-// }
-
-// impl TryFrom<(&[SocketAddr], Option<&LoadBalance>)> for Destination {
-//   type Error = ProxyBuildError;
-//   fn try_from((dst_addrs, load_balance): (&[SocketAddr], Option<&LoadBalance>)) -> Result<Self, Self::Error> {
-//     let binding = LoadBalance::default();
-//     let load_balance = load_balance.unwrap_or(&binding);
-//     let res = DestinationBuilder::default()
-//       .dst_addrs(dst_addrs.to_vec())
-//       .load_balance(*load_balance)
-//       .build()?;
-//     Ok(res)
-//   }
-// }
 /* ---------------------------------------------------------- */
 /// Enhanced destination that supports both IP addresses and domain names with DNS caching
 #[derive(Debug, Clone, derive_builder::Builder)]
@@ -229,14 +170,17 @@ impl From<(&[&str], &[&str])> for TlsMatchingRule {
 /// TCP/UDP destinations + EchProtocolConfig
 pub(crate) struct TlsDestinationItem<T> {
   /// Destination (UdpDestination or TcpDestination)
+  /// If ECH decryption is failed (no matched ECH config), this destination will be used as the default destination
   dest: T,
-  // /// EchProtocolConfig
+  /// EchProtocolConfig
   ech: Option<EchProtocolConfig>,
+  /// DnsCache
+  dns_cache: Arc<DnsCache>,
 }
 impl<T> TlsDestinationItem<T> {
   /// Create a new instance
-  pub fn new(dest: T, ech: Option<EchProtocolConfig>) -> Self {
-    Self { dest, ech }
+  pub fn new(dest: T, ech: Option<EchProtocolConfig>, dns_cache: Arc<DnsCache>) -> Self {
+    Self { dest, ech, dns_cache }
   }
   /// Get the destination
   pub fn destination(&self) -> &T {
@@ -245,6 +189,10 @@ impl<T> TlsDestinationItem<T> {
   /// Get the ECH config
   pub fn ech(&self) -> Option<&EchProtocolConfig> {
     self.ech.as_ref()
+  }
+  /// Get the DNS cache
+  pub fn dns_cache(&self) -> &Arc<DnsCache> {
+    &self.dns_cache
   }
 }
 
@@ -260,8 +208,15 @@ impl<T> TlsDestinations<T> {
     Self { inner: Vec::new() }
   }
   /// Add a destination with SNI and ALPN
-  pub fn add(&mut self, server_names: &[&str], alpn: &[&str], dest: T, ech: Option<EchProtocolConfig>) {
-    let item = TlsDestinationItem::new(dest, ech);
+  pub fn add(
+    &mut self,
+    server_names: &[&str],
+    alpn: &[&str],
+    dest: T,
+    ech: Option<EchProtocolConfig>,
+    dns_cache: &Arc<DnsCache>,
+  ) {
+    let item = TlsDestinationItem::new(dest, ech, dns_cache.clone());
     self.inner.push((TlsMatchingRule::from((server_names, alpn)), item));
   }
   /// Find a destination by SNI and ALPN
@@ -354,13 +309,14 @@ mod tests {
 
   #[test]
   fn test_tls_destinations() {
+    let dns_cache = Arc::new(DnsCache::default());
     let mut tls_destinations = TlsDestinations::new();
-    tls_destinations.add(&["example.com"], &[], "127.0.0.1", None);
-    tls_destinations.add(&["example.org"], &[], "192.168.0.1", None);
-    tls_destinations.add(&[], &[], "1.1.1.1", None);
+    tls_destinations.add(&["example.com"], &[], "127.0.0.1", None, &dns_cache);
+    tls_destinations.add(&["example.org"], &[], "192.168.0.1", None, &dns_cache);
+    tls_destinations.add(&[], &[], "1.1.1.1", None, &dns_cache);
 
-    tls_destinations.add(&[], &["h2"], "8.8.8.8", None);
-    tls_destinations.add(&["example.com"], &["h2"], "127.0.0.2", None);
+    tls_destinations.add(&[], &["h2"], "8.8.8.8", None, &dns_cache);
+    tls_destinations.add(&["example.com"], &["h2"], "127.0.0.2", None, &dns_cache);
 
     // Test SNI
     // Match only sni

@@ -132,7 +132,7 @@ impl UdpDestinationMuxBuilder {
         } else {
           QuicDestinations::new()
         };
-        current_quic.add(&[], &[], udp_dest_inner, None);
+        current_quic.add(&[], &[], udp_dest_inner, None, &dns_cache);
         inner.insert(proto_type, UdpDestination::Quic(current_quic));
       }
       _ => {
@@ -170,6 +170,7 @@ impl UdpDestinationMuxBuilder {
       alpn.unwrap_or_default(),
       udp_dest_inner,
       None, // TODO: currently NONE for ech
+      &dns_cache,
     );
 
     inner.insert(UdpProtocolType::Quic, UdpDestination::Quic(current_quic));

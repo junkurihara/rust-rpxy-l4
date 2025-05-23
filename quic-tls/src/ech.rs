@@ -153,6 +153,13 @@ impl TlsClientHello {
     let mut client_hello_inner: TlsClientHello = parse(&mut encoded_client_hello_inner.as_slice())?;
     // Recompose the ClientHelloInner
     self.recompose_client_hello_inner(&mut client_hello_inner)?;
+
+    // Check if the ClientHelloInner is valid
+    if client_hello_inner.sni().is_empty() {
+      error!("ClientHelloInner SNI is empty");
+      return Err(TlsClientHelloError::NoSniInDecryptedClientHello);
+    }
+
     Ok(client_hello_inner)
   }
 

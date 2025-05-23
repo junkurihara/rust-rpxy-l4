@@ -110,10 +110,10 @@ impl DnsCache {
     trace!("domain: {}", domain);
 
     // Perform DNS resolution
-    let response = match resolver.lookup_ip(domain).await {
-      Ok(r) => r,
-      Err(e) => return Err(ProxyError::DnsResolutionError(format!("Failed to resolve {}: {}", domain, e))),
-    };
+    let response = resolver
+      .lookup_ip(domain)
+      .await
+      .map_err(|e| ProxyError::DnsResolutionError(format!("Failed to resolve {}: {}", domain, e)))?;
 
     trace!("Response: {:?}", response);
 
@@ -198,6 +198,14 @@ impl TargetAddr {
     match self {
       TargetAddr::Socket(addr) => Ok(vec![*addr]),
       TargetAddr::Domain(domain, port) => cache.get_or_resolve(domain, *port).await,
+    }
+  }
+
+  /// Returns the domain or IP address as a string
+  pub fn domain_or_ip(&self) -> String {
+    match self {
+      TargetAddr::Socket(addr) => addr.ip().to_string(),
+      TargetAddr::Domain(domain, _) => domain.clone(),
     }
   }
 }

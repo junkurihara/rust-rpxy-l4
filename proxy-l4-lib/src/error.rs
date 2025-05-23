@@ -10,6 +10,11 @@ pub enum ProxyError {
   #[error("No destination address, possibly empty destination list")]
   NoDestinationAddress,
 
+  /// No ECH private destination server name,
+  /// happens when the decrypted private server name in ClientHello Inner is not in the configured ECH private server name list
+  #[error("No ECH private destination server name")]
+  EchNoMatchingPrivateServerName,
+
   /* --------------------------------------- */
   #[error("No destination address for the protocol")]
   NoDestinationAddressForProtocol,
@@ -52,6 +57,10 @@ pub enum ProxyBuildError {
   /// Invalid Ech private key
   #[error("Invalid ECH private key: {0}")]
   InvalidEchPrivateKey(String),
+
+  /// Invalid Ech private server name
+  #[error("Invalid ECH private server name: {0}")]
+  InvalidEchPrivateServerName(String),
 
   /// Configuration error: protocol
   #[error("Unsupported protocol: {0}")]

@@ -54,6 +54,24 @@ You can run `rpxy-l4` with a configuration file like
 
 `rpxy-l4` always tracks the change of `config.toml` in the real-time manner and apply the change immediately without restarting the process.
 
+Full command line options are as follows:
+
+```bash
+% ./target/release/rpxy-l4 --help
+Usage: rpxy-l4 [OPTIONS] --config <FILE>
+
+Options:
+  -c, --config <FILE>      Configuration file path like ./config.toml
+  -l, --log-dir <LOG_DIR>  Directory for log files. If not specified, logs are printed to stdout.
+  -h, --help               Print help
+  -V, --version            Print version
+```
+
+If you set `--log-dir=<log_dir>`, the log files are created in the specified directory. Otherwise, the log is printed to stdout.
+
+- `${log_dir}/access.log` for access log
+- `${log_dir}/rpxy-l4.log` for system and error log
+
 ## Basic configuration
 
 > [!NOTE]
@@ -68,11 +86,11 @@ The following is an example of the basic configuration for the TCP/UDP reverse p
 listen_port = 8448
 
 # Default targets for TCP connections. [default: empty]
-# Format: ["<ip>:<port>", "<ip>:<port>", ...]
+# Format: ["<ip|domain_name>:<port>", "<ip|domain_name>:<port>", ...]
 tcp_target = ["192.168.0.2:8000"]
 
 # Default targets for UDP connections. [default: empty]
-# Format: ["<ip>:<port>", "<ip>:<port>", ...]
+# Format: ["<ip|domain_name>:<port>", "<ip|domain_name>:<port>", ...]
 udp_target = ["192.168.0.3:4000"]
 ```
 
@@ -98,12 +116,14 @@ The above configuration works as the following manner.
 listen_port = 8448
 
 # Default targets for TCP connections. [default: empty]
+# Format: ["<ip|domain_name>:<port>", "<ip|domain_name>:<port>", ...]
 tcp_target = ["192.168.0.2:8000", "192.168.0.3:8000"]
 
 # Load balancing method for default targets [default: none]
 tcp_load_balance = "source_ip" # source_ip, source_socket, random, or none
 
 # Default targets for UDP connections. [default: empty]
+# Format: ["<ip|domain_name>:<port>", "<ip|domain_name>:<port>", ...]
 udp_target = ["192.168.0.2:4000", "192.168.0.3:4000"]
 
 # (Optional) Load balancing method for default targets [default: none]

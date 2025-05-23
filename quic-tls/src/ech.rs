@@ -63,10 +63,10 @@ impl TlsClientHello {
     };
 
     // Check the public name consistency
-    let matched_config_pulic_name = String::from_utf8_lossy(&config.public_name()).to_ascii_lowercase();
-    if !public_server_names.contains(&matched_config_pulic_name) {
-      warn!("Public name mismatch: {matched_config_pulic_name} not in {public_server_names:?}");
-      // TODO: As per https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1
+    let matched_config_public_name = String::from_utf8_lossy(&config.public_name()).to_ascii_lowercase();
+    if !public_server_names.contains(&matched_config_public_name) {
+      warn!("Public name mismatch: {matched_config_public_name} not in {public_server_names:?}");
+      // https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1
       // Dispatch illegal_parameter alert
       return Err(TlsClientHelloError::PublicNameMismatch);
     }
@@ -153,6 +153,13 @@ impl TlsClientHello {
     let mut client_hello_inner: TlsClientHello = parse(&mut encoded_client_hello_inner.as_slice())?;
     // Recompose the ClientHelloInner
     self.recompose_client_hello_inner(&mut client_hello_inner)?;
+
+    // Check if the ClientHelloInner is valid
+    if client_hello_inner.sni().is_empty() {
+      error!("ClientHelloInner SNI is empty");
+      return Err(TlsClientHelloError::NoSniInDecryptedClientHello);
+    }
+
     Ok(client_hello_inner)
   }
 

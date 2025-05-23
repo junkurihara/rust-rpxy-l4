@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 /// TCP backlog size
 pub const TCP_BACKLOG: u32 = 1024;
 
@@ -36,3 +38,17 @@ pub const UDP_CONNECTION_PRUNE_INTERVAL: u64 = 10;
 
 /// UDP initial buffer packet lifetime in seconds
 pub const UDP_INITIAL_BUFFER_LIFETIME: u64 = 1;
+
+/// Logging event name TODO: Other separated logs?
+pub mod log_event_names {
+  /// access log
+  pub const ACCESS_LOG_START: &str = "rpxy-l4::conn::start";
+  pub const ACCESS_LOG_FINISH: &str = "rpxy-l4::conn::finish";
+}
+
+/// DNS cache minimum TTL
+/// Default: 30 seconds
+pub const DNS_CACHE_MIN_TTL: Duration = Duration::from_secs(30);
+/// DNS cache maximum TTL
+/// Default: 1 hour
+pub const DNS_CACHE_MAX_TTL: Duration = Duration::from_secs(3600);

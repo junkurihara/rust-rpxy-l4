@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 LOG_DIR=/rpxy-l4/log
-LOG_FILE=${LOG_DIR}/rpxy-l4.log
+SYSTEM_LOG_FILE=${LOG_DIR}/rpxy-l4.log
+ACCESS_LOG_FILE=${LOG_DIR}/access.log
 LOG_SIZE=10M
 LOG_NUM=10
 
@@ -43,8 +44,24 @@ include /etc/logrotate.d
 # system-specific logs may be also be configured here.
 EOF
 
-  cat > /etc/logrotate.d/rpxy-l4.conf << EOF
-${LOG_FILE} {
+  cat > /etc/logrotate.d/rpxy-l4-system.conf << EOF
+${SYSTEM_LOG_FILE} {
+    dateext
+    daily
+    missingok
+    rotate ${LOG_NUM}
+    notifempty
+    compress
+    delaycompress
+    dateformat -%Y-%m-%d-%s
+    size ${LOG_SIZE}
+    copytruncate
+    su ${USER} ${USER}
+}
+EOF
+
+  cat > /etc/logrotate.d/rpxy-l4-access.conf << EOF
+${ACCESS_LOG_FILE} {
     dateext
     daily
     missingok
@@ -120,10 +137,4 @@ fi
 # Run rpxy-l4
 cd /rpxy-l4
 echo "rpxy-l4: Start with user: ${USER} (${USER_ID}:${GROUP_ID})"
-if "${LOGGING}"; then
-  echo "rpxy-l4: Start with writing log file"
-  su-exec ${USER} sh -c "/rpxy-l4/run.sh 2>&1 | tee ${LOG_FILE}"
-else
-  echo "rpxy-l4: Start without writing log file"
-  su-exec ${USER} sh -c "/rpxy-l4/run.sh 2>&1"
-fi
+su-exec ${USER} sh -c "/rpxy-l4/run.sh 2>&1"

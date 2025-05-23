@@ -30,7 +30,7 @@ async-trait = { version = "0.1.88" }
 # TODO: Workaround since musl build failure for mimalloc v2.2.4 https://github.com/microsoft/mimalloc/issues/1056
 # memory allocator
 mimalloc = { version = "=0.1.44", default-features = false }
-libmimalloc-sys = { version = "=0.1.40" }
+libmimalloc-sys = { version = "=0.1.42" }
 
 # async runtime
 tokio = { version = "1.45.0", default-features = false, features = [

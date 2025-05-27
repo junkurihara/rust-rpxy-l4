@@ -38,7 +38,7 @@ tokio = { version = "1.45.1", default-features = false, features = [
 tokio-util = { version = "0.7.15", default-features = false }
 
 # network
-socket2 = { version = "0.5.9" }
+socket2 = { version = "0.5.10" }
 hickory-resolver = { version = "0.25.2" }
 
 # quic and tls

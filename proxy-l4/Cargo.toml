@@ -20,7 +20,7 @@ tracing = { version = "0.1.41" }
 tracing-subscriber = { version = "0.3.19" }
 
 # config
-clap = { version = "4.5.38", features = ["std", "cargo", "wrap_help"] }
+clap = { version = "4.5.39", features = ["std", "cargo", "wrap_help"] }
 toml = { version = "0.8.22", default-features = false, features = ["parse"] }
 hot_reload = { version = "0.1.9" }
 serde = { version = "1.0.219", default-features = false, features = ["derive"] }
@@ -33,7 +33,7 @@ mimalloc = { version = "=0.1.44", default-features = false }
 libmimalloc-sys = { version = "=0.1.40" }
 
 # async runtime
-tokio = { version = "1.45.0", default-features = false, features = [
+tokio = { version = "1.45.1", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",

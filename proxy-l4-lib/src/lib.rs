@@ -54,9 +54,9 @@ pub use protocol::{
   udp::*,
 };
 pub use target::TargetAddr;
-pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProbedProtocol, TcpProxy, TcpProxyBuilder};
+pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProxy, TcpProxyBuilder};
 pub use udp_conn::UdpConnectionPool;
-pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProbedProtocol, UdpProxy, UdpProxyBuilder};
+pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpProxyBuilder};
 
 /* ---------------------------------------- */
 /// Build TCP and UDP multiplexers from the configuration

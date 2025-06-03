@@ -4,7 +4,7 @@
 //! including connection lifecycle, metrics tracking, and protocol handling.
 
 use super::{ConnectionContext, ConnectionManager, ConnectionMetrics};
-use crate::{count::ConnectionCount, error::ConnectionError, tcp_proxy::TcpProbedProtocol, trace::*};
+use crate::{count::ConnectionCount, error::ConnectionError, protocol::tcp::TcpProtocol, trace::*};
 use std::net::SocketAddr;
 use tokio::io::copy_bidirectional;
 use tokio::net::TcpStream;
@@ -28,7 +28,7 @@ pub struct TcpConnection {
   /// Connection metrics and metadata
   pub metrics: ConnectionMetrics,
   /// The protocol that was detected for this connection
-  pub protocol: TcpProbedProtocol,
+  pub protocol: TcpProtocol,
   /// Connection context for logging and error reporting
   pub context: ConnectionContext,
   /// Initial buffer that was read during protocol detection
@@ -63,7 +63,7 @@ impl TcpConnectionManager {
 #[async_trait::async_trait]
 impl ConnectionManager for TcpConnectionManager {
   type Connection = TcpConnection;
-  type ConnectionInfo = (TcpProbedProtocol, bytes::Bytes);
+  type ConnectionInfo = (TcpProtocol, bytes::Bytes);
 
   async fn create_connection(
     &self,
@@ -186,7 +186,7 @@ impl TcpConnection {
   pub fn new(
     incoming: TcpStream,
     outgoing: TcpStream,
-    protocol: TcpProbedProtocol,
+    protocol: TcpProtocol,
     initial_buffer: bytes::Bytes,
     src_addr: SocketAddr,
     dst_addr: SocketAddr,
@@ -205,7 +205,7 @@ impl TcpConnection {
   }
 
   /// Get the protocol for this connection
-  pub fn protocol(&self) -> &TcpProbedProtocol {
+  pub fn protocol(&self) -> &TcpProtocol {
     &self.protocol
   }
 
@@ -228,7 +228,7 @@ impl TcpConnection {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::tcp_proxy::TcpProbedProtocol;
+  use crate::protocol::tcp::TcpProtocol;
 
   #[test]
   fn test_tcp_connection_manager_creation() {
@@ -267,7 +267,7 @@ mod tests {
 
     let src = "127.0.0.1:8080".parse().unwrap();
     let dst = "127.0.0.1:8081".parse().unwrap();
-    let protocol = TcpProbedProtocol::Any;
+    let protocol = TcpProtocol::Any;
     let buffer = bytes::Bytes::new();
 
     let result = manager.create_connection(src, dst, (protocol, buffer)).await;

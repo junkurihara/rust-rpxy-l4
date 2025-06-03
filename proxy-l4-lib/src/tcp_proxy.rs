@@ -167,7 +167,7 @@ impl TcpDestinationMux {
     self.inner.is_empty()
   }
   /// Get the destination socket address for the given protocol
-  fn find_destination(&self, probed_protocol: &TcpProbedProtocol) -> Result<FoundTcpDestination, ProxyError> {
+  fn find_destination(&self, probed_protocol: &TcpProtocol) -> Result<FoundTcpDestination, ProxyError> {
     let proto_type = probed_protocol.proto_type();
     match self.inner.get(&proto_type) {
       // Found non-TLS protocol
@@ -177,7 +177,7 @@ impl TcpDestinationMux {
       }
       // Found TLS protocol
       Some(TcpDestination::Tls(tls_destinations)) => {
-        let TcpProbedProtocol::Tls(client_hello_buf) = probed_protocol else {
+        let TcpProtocol::Tls(client_hello_buf) = probed_protocol else {
           return Err(ProxyError::no_destination_address_for_protocol());
         };
         return tls_destinations
@@ -210,20 +210,6 @@ impl TcpDestinationMux {
 }
 
 /* ---------------------------------------------------------- */
-// Re-export TcpProtocol as TcpProbedProtocol for backward compatibility
-pub use crate::protocol::tcp::TcpProtocol as TcpProbedProtocol;
-
-impl TcpProtocol {
-  fn proto_type(&self) -> TcpProtocolType {
-    match self {
-      Self::Any => TcpProtocolType::Any,
-      Self::Ssh => TcpProtocolType::Ssh,
-      Self::Http => TcpProtocolType::Http,
-      Self::Tls(_) => TcpProtocolType::Tls,
-    }
-  }
-}
-
 /// Poll the incoming TCP stream to detect the protocol
 async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<usize, ProxyError> {
   let read_len = incoming_stream.read_buf(buf).await?;
@@ -235,6 +221,15 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
 }
 
 impl TcpProtocol {
+  fn proto_type(&self) -> TcpProtocolType {
+    match self {
+      Self::Any => TcpProtocolType::Any,
+      Self::Ssh => TcpProtocolType::Ssh,
+      Self::Http => TcpProtocolType::Http,
+      Self::Tls(_) => TcpProtocolType::Tls,
+    }
+  }
+
   /// Detect the protocol from the first few bytes of the incoming stream using the registry
   async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<Self>, ProxyError> {
     let registry = TcpProtocolRegistry::default();
@@ -532,7 +527,7 @@ mod tests {
     let mut chb = TlsClientHelloBuffer::default();
     chb.client_hello.add_replace_sni(&sni);
 
-    let found = dst_mux.find_destination(&TcpProbedProtocol::Tls(chb)).unwrap();
+    let found = dst_mux.find_destination(&TcpProtocol::Tls(chb)).unwrap();
     let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
     assert_eq!(destination, "127.0.0.1:50444".parse().unwrap());
 
@@ -542,7 +537,7 @@ mod tests {
     let mut chb = TlsClientHelloBuffer::default();
     chb.client_hello.add_replace_sni(&sni);
 
-    let found = dst_mux.find_destination(&TcpProbedProtocol::Tls(chb)).unwrap();
+    let found = dst_mux.find_destination(&TcpProtocol::Tls(chb)).unwrap();
     let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
     assert_eq!(destination, "127.0.0.1:50443".parse().unwrap());
 
@@ -567,7 +562,7 @@ mod tests {
         .unwrap(),
     );
 
-    let found = dst_mux.find_destination(&TcpProbedProtocol::Any).unwrap();
+    let found = dst_mux.find_destination(&TcpProtocol::Any).unwrap();
     let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
     assert!(["1.1.1.1:53".parse().unwrap(), "1.0.0.1:53".parse().unwrap()].contains(&destination));
   }
@@ -575,12 +570,12 @@ mod tests {
 
 /* ---------------------------------------------------------- */
 /// Handle TCP access log, when establishing a connection
-fn tcp_access_log_start(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
+fn tcp_access_log_start(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProtocol) {
   let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
   access_log_start(&proto, src_addr, dst_addr);
 }
 /// Handle TCP access log, when closing a connection
-fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
+fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProtocol) {
   let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
   crate::access_log::access_log_finish(&proto, src_addr, dst_addr);
 }

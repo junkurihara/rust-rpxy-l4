@@ -4,7 +4,7 @@
 //! including connection pooling, idle timeout handling, and metrics tracking.
 
 use super::{ConnectionContext, ConnectionManager, ConnectionMetrics};
-use crate::{error::ConnectionError, trace::*, udp_conn::UdpConnectionPool, udp_proxy::UdpProbedProtocol};
+use crate::{error::ConnectionError, protocol::udp::UdpProtocol, trace::*, udp_conn::UdpConnectionPool};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::UdpSocket;
 
@@ -39,7 +39,7 @@ pub struct UdpConnection {
   /// Connection metrics and metadata
   pub metrics: ConnectionMetrics,
   /// The protocol that was detected for this connection
-  pub protocol: UdpProbedProtocol,
+  pub protocol: UdpProtocol,
   /// Connection context for logging and error reporting
   pub context: ConnectionContext,
   /// Idle timeout duration
@@ -50,7 +50,7 @@ pub struct UdpConnection {
 #[derive(Debug, Clone)]
 pub struct UdpConnectionInfo {
   /// The detected protocol
-  pub protocol: UdpProbedProtocol,
+  pub protocol: UdpProtocol,
   /// Idle timeout for the connection
   pub idle_timeout: Duration,
   /// Client-facing socket
@@ -313,7 +313,7 @@ impl UdpConnection {
     server_socket: UdpSocket,
     client_addr: SocketAddr,
     server_addr: SocketAddr,
-    protocol: UdpProbedProtocol,
+    protocol: UdpProtocol,
     idle_timeout: Duration,
   ) -> Self {
     let metrics = ConnectionMetrics::new(protocol.to_string(), client_addr, server_addr);
@@ -332,7 +332,7 @@ impl UdpConnection {
   }
 
   /// Get the protocol for this connection
-  pub fn protocol(&self) -> &UdpProbedProtocol {
+  pub fn protocol(&self) -> &UdpProtocol {
     &self.protocol
   }
 
@@ -359,7 +359,7 @@ impl UdpConnection {
 
 impl UdpConnectionInfo {
   /// Create new UDP connection info
-  pub fn new(protocol: UdpProbedProtocol, idle_timeout: Duration, client_socket: Arc<UdpSocket>) -> Self {
+  pub fn new(protocol: UdpProtocol, idle_timeout: Duration, client_socket: Arc<UdpSocket>) -> Self {
     Self {
       protocol,
       idle_timeout,
@@ -387,13 +387,11 @@ mod tests {
 
   #[tokio::test]
   async fn test_udp_connection_info_creation() {
-    use crate::udp_proxy::UdpProbedProtocol;
-
     let socket = Arc::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap());
-    let info = UdpConnectionInfo::new(UdpProbedProtocol::Any, Duration::from_secs(30), socket.clone());
+    let info = UdpConnectionInfo::new(UdpProtocol::Any, Duration::from_secs(30), socket.clone());
 
     assert_eq!(info.idle_timeout, Duration::from_secs(30));
-    assert!(matches!(info.protocol, UdpProbedProtocol::Any));
+    assert!(matches!(info.protocol, UdpProtocol::Any));
   }
 
   #[tokio::test]
@@ -409,7 +407,7 @@ mod tests {
       server_socket,
       client_addr,
       server_addr,
-      crate::udp_proxy::UdpProbedProtocol::Any,
+      UdpProtocol::Any,
       Duration::from_secs(30),
     );
 

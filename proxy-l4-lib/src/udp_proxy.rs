@@ -2,7 +2,11 @@ use crate::{
   config::EchProtocolConfig,
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
-  destination::{LoadBalance, integration::TlsDestinations, tls::TlsDestinationItem},
+  destination::{
+    LoadBalance,
+    integration::{TargetDestination, TlsDestinations},
+    tls::TlsDestinationItem,
+  },
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::UdpProtocolType,
@@ -36,14 +40,14 @@ enum UdpDestination {
 /// Udp destination struct - now using modern target destination
 pub(crate) struct UdpDestinationInner {
   /// Modern destination inner
-  inner: crate::destination::integration::TargetDestination,
+  inner: TargetDestination,
   /// Connection idle lifetime in seconds
   /// If set to 0, no limit is applied for the destination
   connection_idle_lifetime: u32,
 }
 
 #[derive(Debug, Clone)]
-/// Destination struct found in the multiplexer from UdpProbedProtocol
+/// Destination struct found in the multiplexer from UdpProtocol
 enum FoundUdpDestination {
   /// Udp destination
   Udp(UdpDestinationInner),
@@ -187,7 +191,7 @@ impl UdpDestinationMux {
     self.inner.is_empty()
   }
   /// Get the destination socket address for the given protocol
-  fn find_destination(&self, probed_protocol: &UdpProbedProtocol) -> Result<FoundUdpDestination, ProxyError> {
+  fn find_destination(&self, probed_protocol: &UdpProtocol) -> Result<FoundUdpDestination, ProxyError> {
     let proto_type = probed_protocol.proto_type();
     match self.inner.get(&proto_type) {
       // Found non-Quic protocol
@@ -197,7 +201,7 @@ impl UdpDestinationMux {
       }
       // Found Quic protocol
       Some(UdpDestination::Quic(quic_destinations)) => {
-        let UdpProbedProtocol::Quic(client_hello) = probed_protocol else {
+        let UdpProtocol::Quic(client_hello) = probed_protocol else {
           return Err(ProxyError::no_destination_address_for_protocol());
         };
         return quic_destinations
@@ -230,8 +234,6 @@ impl UdpDestinationMux {
 }
 
 /* ---------------------------------------------------------- */
-// Re-export UdpProtocol as UdpProbedProtocol for backward compatibility
-pub use crate::protocol::udp::UdpProtocol as UdpProbedProtocol;
 
 impl UdpProtocol {
   fn proto_type(&self) -> UdpProtocolType {
@@ -425,7 +427,7 @@ struct UdpInitialDatagrams {
   /// created at
   created_at: Arc<AtomicU64>,
   /// Protocols that were detected as 'poll_next'
-  probed_as_pollnext: std::collections::HashSet<UdpProbedProtocol>,
+  probed_as_pollnext: std::collections::HashSet<UdpProtocol>,
 }
 
 impl UdpInitialDatagrams {
@@ -523,7 +525,7 @@ impl UdpInitialDatagramsBufferPool {
         };
 
         // Handle with probe result
-        let Ok(probe_result) = UdpProbedProtocol::detect_protocol(&mut initial_datagrams).await else {
+        let Ok(probe_result) = UdpProtocol::detect_protocol(&mut initial_datagrams).await else {
           error!("Failed to probe protocol from the incoming datagram");
           continue;
         };

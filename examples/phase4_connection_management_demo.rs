@@ -9,8 +9,7 @@
 
 use rpxy_l4_lib::{
   ConnectionContext, ConnectionError, ConnectionManager, ConnectionMetrics, ConnectionPool, DashMapConnectionPool,
-  TcpConnectionCount, TcpConnectionManager, TcpProbedProtocol, UdpConnectionInfo, UdpConnectionManager, UdpConnectionPool,
-  UdpProbedProtocol,
+  TcpConnectionCount, TcpConnectionManager, TcpProtocol, UdpConnectionInfo, UdpConnectionManager, UdpConnectionPool, UdpProtocol,
 };
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::UdpSocket;
@@ -54,7 +53,7 @@ async fn demo_tcp_connection_management() -> Result<(), Box<dyn std::error::Erro
   // Test connection limit handling
   let src = "127.0.0.1:8080".parse::<SocketAddr>()?;
   let dst = "127.0.0.1:8081".parse::<SocketAddr>()?;
-  let protocol = TcpProbedProtocol::Any;
+  let protocol = TcpProtocol::Any;
   let buffer = bytes::Bytes::new();
 
   println!("  - Testing connection creation (may fail due to no actual server):");
@@ -90,7 +89,7 @@ async fn demo_udp_connection_management() -> Result<(), Box<dyn std::error::Erro
 
   // Create UDP connection info
   let client_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await?);
-  let protocol = UdpProbedProtocol::Any;
+  let protocol = UdpProtocol::Any;
   let idle_timeout = Duration::from_secs(30);
   let conn_info = UdpConnectionInfo::new(protocol, idle_timeout, client_socket);
 

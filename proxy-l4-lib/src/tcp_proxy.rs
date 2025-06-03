@@ -9,9 +9,8 @@ use crate::{
     tls::TlsDestinationItem,
   },
   error::{ProxyBuildError, ProxyError},
-  probe::ProbeResult,
   proto::TcpProtocolType,
-  protocol::{registry::TcpProtocolRegistry, tcp::TcpProtocol},
+  protocol::{ProbeResult, registry::TcpProtocolRegistry, tcp::TcpProtocol},
   socket::bind_tcp_socket,
   target::{DnsCache, TargetAddr},
   trace::*,
@@ -222,7 +221,7 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
 
 /// Detect the protocol from the first few bytes of the incoming stream using the registry
 async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<TcpProtocol>, ProxyError> {
-  let registry = TcpProtocolRegistry::default();
+  let mut registry = TcpProtocolRegistry::default();
 
   // Keep reading data until we get a definitive result
   loop {

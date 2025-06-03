@@ -1,5 +1,5 @@
-use crate::proto::TcpProtocolType;
-use crate::{error::ProxyError, probe::ProbeResult, protocol::ProtocolDetector};
+use super::probe::ProbeResult;
+use crate::{error::ProxyError, proto::TcpProtocolType, protocol::ProtocolDetector};
 use bytes::BytesMut;
 use quic_tls::{TlsClientHelloBuffer, TlsProbeFailure, probe_tls_handshake};
 use std::future::Future;

@@ -8,9 +8,8 @@ use crate::{
     tls::TlsDestinationItem,
   },
   error::{ProxyBuildError, ProxyError},
-  probe::ProbeResult,
   proto::UdpProtocolType,
-  protocol::{registry::UdpProtocolRegistry, udp::UdpProtocol},
+  protocol::{ProbeResult, registry::UdpProtocolRegistry, udp::UdpProtocol},
   socket::bind_udp_socket,
   target::{DnsCache, TargetAddr},
   time_util::get_since_the_epoch,
@@ -237,7 +236,7 @@ impl UdpDestinationMux {
 
 /// Detect the protocol from the first few bytes of the incoming datagram using the registry
 async fn detect_protocol(initial_datagrams: &mut UdpInitialDatagrams) -> Result<ProbeResult<UdpProtocol>, ProxyError> {
-  let registry = UdpProtocolRegistry::default();
+  let mut registry = UdpProtocolRegistry::default();
 
   // Convert the UDP datagrams to a BytesMut for the registry
   let first_datagram = match initial_datagrams.first() {

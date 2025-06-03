@@ -1,7 +1,10 @@
-use crate::{error::ProxyError, probe::ProbeResult};
+use crate::error::ProxyError;
 use bytes::BytesMut;
 use std::future::Future;
 use std::pin::Pin;
+
+mod probe;
+pub use probe::ProbeResult;
 
 pub mod registry;
 pub mod tcp;

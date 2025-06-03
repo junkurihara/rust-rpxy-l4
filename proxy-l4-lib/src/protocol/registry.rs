@@ -1,6 +1,6 @@
+use super::probe::ProbeResult;
 use crate::{
   error::ProxyError,
-  probe::ProbeResult,
   protocol::{ProtocolDetector, tcp::*, udp::*},
 };
 use bytes::BytesMut;
@@ -41,20 +41,26 @@ impl TcpProtocolRegistry {
   /// This method will try detectors in priority order and return the first
   /// successful detection, or continue with poll_next results until a
   /// definitive result is reached.
-  pub async fn detect_protocol(&self, buffer: &mut BytesMut) -> Result<ProbeResult<TcpProtocol>, ProxyError> {
-    let mut poll_next_detectors = Vec::new();
+  pub async fn detect_protocol(&mut self, buffer: &mut BytesMut) -> Result<ProbeResult<TcpProtocol>, ProxyError> {
+    let mut poll_next_indices = Vec::new();
 
     // First round: try all detectors
-    for detector in &self.detectors {
+    for (i, detector) in self.detectors.iter().enumerate() {
       match detector.detect(buffer).await? {
         ProbeResult::Success(protocol) => return Ok(ProbeResult::Success(protocol)),
-        ProbeResult::PollNext => poll_next_detectors.push(detector),
+        ProbeResult::PollNext => poll_next_indices.push(i),
         ProbeResult::Failure => continue,
       }
     }
 
     // If any detectors returned PollNext, we need more data
-    if !poll_next_detectors.is_empty() {
+    // Overwrite detectors with those that returned PollNext
+    if !poll_next_indices.is_empty() {
+      let mut remaining_detectors = Vec::new();
+      for &i in &poll_next_indices {
+        remaining_detectors.push(self.detectors.swap_remove(i - remaining_detectors.len()));
+      }
+      self.detectors = remaining_detectors;
       return Ok(ProbeResult::PollNext);
     }
 
@@ -108,20 +114,26 @@ impl UdpProtocolRegistry {
   /// This method will try detectors in priority order and return the first
   /// successful detection, or continue with poll_next results until a
   /// definitive result is reached.
-  pub async fn detect_protocol(&self, buffer: &mut BytesMut) -> Result<ProbeResult<UdpProtocol>, ProxyError> {
-    let mut poll_next_detectors = Vec::new();
+  pub async fn detect_protocol(&mut self, buffer: &mut BytesMut) -> Result<ProbeResult<UdpProtocol>, ProxyError> {
+    let mut poll_next_indices = Vec::new();
 
     // First round: try all detectors
-    for detector in &self.detectors {
+    for (i, detector) in self.detectors.iter().enumerate() {
       match detector.detect(buffer).await? {
         ProbeResult::Success(protocol) => return Ok(ProbeResult::Success(protocol)),
-        ProbeResult::PollNext => poll_next_detectors.push(detector),
+        ProbeResult::PollNext => poll_next_indices.push(i),
         ProbeResult::Failure => continue,
       }
     }
 
     // If any detectors returned PollNext, we need more data
-    if !poll_next_detectors.is_empty() {
+    // Overwrite detectors with those that returned PollNext
+    if !poll_next_indices.is_empty() {
+      let mut remaining_detectors = Vec::new();
+      for &i in &poll_next_indices {
+        remaining_detectors.push(self.detectors.swap_remove(i - remaining_detectors.len()));
+      }
+      self.detectors = remaining_detectors;
       return Ok(ProbeResult::PollNext);
     }
 
@@ -146,7 +158,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_tcp_protocol_registry_default() {
-    let registry = TcpProtocolRegistry::default();
+    let mut registry = TcpProtocolRegistry::default();
     assert_eq!(registry.len(), 3); // SSH, HTTP, TLS
     assert!(!registry.is_empty());
 
@@ -168,7 +180,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_udp_protocol_registry_default() {
-    let registry = UdpProtocolRegistry::default();
+    let mut registry = UdpProtocolRegistry::default();
     assert_eq!(registry.len(), 2); // WireGuard, QUIC
     assert!(!registry.is_empty());
 
@@ -187,7 +199,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_empty_registry() {
-    let registry = TcpProtocolRegistry::new();
+    let mut registry = TcpProtocolRegistry::new();
     assert_eq!(registry.len(), 0);
     assert!(registry.is_empty());
 

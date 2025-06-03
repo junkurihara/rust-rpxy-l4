@@ -5,7 +5,6 @@ mod constants;
 mod count;
 pub mod destination;
 mod error;
-mod probe;
 mod proto;
 mod protocol;
 mod socket;
@@ -45,10 +44,10 @@ pub use destination::{
   TlsRoutingRule,
 };
 pub use error::{ConfigurationError, ConnectionError, ErrorContext, NetworkError, ProtocolError, ProxyBuildError, ProxyError};
-pub use probe::ProbeResult;
+
 pub use proto::ProtocolType;
 pub use protocol::{
-  ProtocolDetector,
+  ProbeResult, ProtocolDetector,
   registry::{TcpProtocolRegistry, UdpProtocolRegistry},
   tcp::*,
   udp::*,

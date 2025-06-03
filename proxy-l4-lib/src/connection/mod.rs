@@ -3,6 +3,10 @@
 //! This module provides unified abstractions for managing connection lifecycles
 //! across different protocols (TCP, UDP) and enables better testing, monitoring,
 //! and resource management.
+//!
+//! TODO:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//! TODO:!!!!!!! CONNECTION MANAGEMENT IS NOT YET INTEGRATED INTO THE PROXY TODO:!!!!!!
+//! TODO:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 use crate::error::ConnectionError;
 use std::net::SocketAddr;

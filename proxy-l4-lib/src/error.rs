@@ -22,10 +22,6 @@ pub enum ProxyError {
 
   #[error(transparent)]
   Build(#[from] ProxyBuildError),
-
-  /// Legacy error mapping for gradual migration
-  #[error("Legacy error: {0}")]
-  Legacy(String),
 }
 
 /// Configuration-related errors
@@ -209,11 +205,6 @@ pub enum ProxyBuildError {
 
 // Legacy compatibility layer
 impl ProxyError {
-  /// Create a legacy error for gradual migration
-  pub fn legacy(msg: impl Into<String>) -> Self {
-    Self::Legacy(msg.into())
-  }
-
   // Legacy error constructors for backward compatibility
   pub fn no_destination_address() -> Self {
     Self::Connection(ConnectionError::NoDestinationAddress)
@@ -391,17 +382,11 @@ impl<T, E> ErrorContext<T> for Result<T, E>
 where
   E: Into<ProxyError>,
 {
-  fn with_context<F>(self, f: F) -> Result<T, ProxyError>
+  fn with_context<F>(self, _f: F) -> Result<T, ProxyError>
   where
     F: FnOnce() -> String,
   {
-    self.map_err(|e| {
-      let base_error = e.into();
-      match base_error {
-        ProxyError::Legacy(_) => ProxyError::Legacy(f()),
-        other => other,
-      }
-    })
+    self.map_err(|e| e.into())
   }
 
   fn with_connection_context(self, source: SocketAddr, dest: SocketAddr) -> Result<T, ProxyError> {

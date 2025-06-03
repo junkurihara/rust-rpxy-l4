@@ -13,7 +13,7 @@ use rpxy_l4_lib::{
   UdpProbedProtocol,
 };
 use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]

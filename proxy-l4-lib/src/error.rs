@@ -1,4 +1,3 @@
-use anyhow::Context;
 /// Comprehensive error handling system for rust-rpxy-l4
 ///
 /// This module provides categorized error types with detailed context information

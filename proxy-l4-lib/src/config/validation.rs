@@ -1,4 +1,4 @@
-use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolType, target::TargetAddr};
+use crate::{destination::LoadBalance, proto::ProtocolType, target::TargetAddr};
 use std::time::Duration;
 
 /// Validation errors specific to configuration

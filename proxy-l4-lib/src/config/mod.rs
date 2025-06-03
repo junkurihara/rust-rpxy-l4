@@ -1,4 +1,4 @@
-use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolType, target::TargetAddr};
+use crate::{error::ProxyBuildError, proto::ProtocolType};
 use quic_tls::{EchConfigList, EchPrivateKey};
 use std::{str::FromStr, time::Duration};
 

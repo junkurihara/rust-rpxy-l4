@@ -7,12 +7,13 @@ use crate::{
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::TcpProtocolType,
+  protocol::{registry::TcpProtocolRegistry, tcp::TcpProtocol},
   socket::bind_tcp_socket,
   target::{DnsCache, TargetAddr},
   trace::*,
 };
 use bytes::BytesMut;
-use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer, TlsProbeFailure, probe_tls_handshake};
+use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
   io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional},
@@ -205,39 +206,16 @@ impl TcpDestinationMux {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Probed TCP proxy protocol, specific protocols like SSH, and default is "any".
-pub enum TcpProbedProtocol {
-  /// any, default
-  Any,
-  /// SSH
-  Ssh,
-  /// Plaintext HTTP
-  Http,
-  /// TLS
-  Tls(TlsClientHelloBuffer),
-  // TODO: and more ...
-}
+// Re-export TcpProtocol as TcpProbedProtocol for backward compatibility
+pub use crate::protocol::tcp::TcpProtocol as TcpProbedProtocol;
 
-impl TcpProbedProtocol {
+impl TcpProtocol {
   fn proto_type(&self) -> TcpProtocolType {
     match self {
       Self::Any => TcpProtocolType::Any,
       Self::Ssh => TcpProtocolType::Ssh,
       Self::Http => TcpProtocolType::Http,
       Self::Tls(_) => TcpProtocolType::Tls,
-    }
-  }
-}
-
-impl std::fmt::Display for TcpProbedProtocol {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::Any => write!(f, "Any"),
-      Self::Ssh => write!(f, "SSH"),
-      Self::Http => write!(f, "HTTP"),
-      Self::Tls(_) => write!(f, "TLS"),
-      // TODO: and more...
     }
   }
 }
@@ -252,77 +230,31 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
   Ok(read_len)
 }
 
-/// Is SSH
-fn is_ssh(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
-  if buf.len() < 4 {
-    return ProbeResult::PollNext;
-  }
-  if buf.starts_with(b"SSH-") {
-    debug!("SSH connection detected");
-    ProbeResult::Success(TcpProbedProtocol::Ssh)
-  } else {
-    ProbeResult::Failure
-  }
-}
-
-/// Is HTTP
-fn is_http(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
-  if buf.len() < 4 {
-    return ProbeResult::PollNext;
-  }
-  if buf.windows(4).any(|w| w.eq(b"HTTP")) {
-    debug!("HTTP connection detected");
-    ProbeResult::Success(TcpProbedProtocol::Http)
-  } else {
-    ProbeResult::Failure
-  }
-}
-
-/// Is TLS handshake
-fn is_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
-  let mut buf = BytesMut::from(buf);
-  match probe_tls_handshake(&mut buf) {
-    Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
-    Err(TlsProbeFailure::PollNext) => ProbeResult::PollNext,
-    Ok(chi) => ProbeResult::Success(TcpProbedProtocol::Tls(chi)),
-  }
-}
-
-impl TcpProbedProtocol {
-  /// Detect the protocol from the first few bytes of the incoming stream
+impl TcpProtocol {
+  /// Detect the protocol from the first few bytes of the incoming stream using the registry
   async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<Self>, ProxyError> {
-    let mut probe_functions = vec![is_ssh, is_http, is_tls_handshake];
+    let registry = TcpProtocolRegistry::default();
 
-    while !probe_functions.is_empty() {
-      // Read the first several bytes to probe. at the first loop, the buffer is empty.
-      let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
-      let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
-      buf.extend_from_slice(&next_buf[..]);
+    // Keep reading data until we get a definitive result
+    loop {
+      // Try detection with current buffer
+      match registry.detect_protocol(buf).await? {
+        ProbeResult::Success(protocol) => return Ok(ProbeResult::Success(protocol)),
+        ProbeResult::Failure => return Ok(ProbeResult::Success(Self::Any)), // fallback to Any
+        ProbeResult::PollNext => {
+          // Need more data - read from stream
+          let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+          let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
+          buf.extend_from_slice(&next_buf[..]);
 
-      // Check probe functions
-      #[allow(clippy::type_complexity)]
-      let (new_probe_fns, probe_res): (Vec<fn(&[u8]) -> ProbeResult<_>>, Vec<_>) = probe_functions
-        .into_iter()
-        .filter_map(|f| {
-          let res = f(buf);
-          match res {
-            ProbeResult::Success(_) | ProbeResult::PollNext => Some((f, res)),
-            _ => None,
+          // Prevent infinite loops - if buffer gets too large, give up
+          if buf.len() > TCP_PROTOCOL_DETECTION_BUFFER_SIZE * 4 {
+            debug!("Protocol detection buffer too large, defaulting to Any");
+            return Ok(ProbeResult::Success(Self::Any));
           }
-        })
-        .unzip();
-
-      // If any of them returns Success, return the protocol.
-      if let Some(probe_success) = probe_res.into_iter().find(|r| matches!(r, ProbeResult::Success(_))) {
-        return Ok(probe_success);
-      };
-
-      // If the rest returned PollNext, fetch more data
-      probe_functions = new_probe_fns;
+        }
+      }
     }
-
-    debug!("Untyped TCP connection");
-    Ok(ProbeResult::Success(Self::Any))
   }
 }
 
@@ -410,7 +342,7 @@ async fn handle_tcp_connection(
   let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
   let Ok(probe_result) = timeout(
     Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
-    TcpProbedProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
+    TcpProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
   )
   .await
   else {
@@ -443,7 +375,7 @@ async fn handle_tcp_connection(
   };
 
   let to_be_written = match (&found_dst, &probed_protocol) {
-    (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) => {
+    (FoundTcpDestination::Tls(tls_destination), TcpProtocol::Tls(client_hello_buf)) => {
       // Handle tls, especially ECH
       let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination, &mut dst_addr).await else {
         // Error means that illegal parameter must be sent back when error

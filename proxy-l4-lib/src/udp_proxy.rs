@@ -6,13 +6,13 @@ use crate::{
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::UdpProtocolType,
+  protocol::{registry::UdpProtocolRegistry, udp::UdpProtocol},
   socket::bind_udp_socket,
   target::{DnsCache, TargetAddr},
   time_util::get_since_the_epoch,
   trace::*,
   udp_conn::UdpConnectionPool,
 };
-use quic_tls::{TlsClientHello, TlsProbeFailure, probe_quic_initial_packets};
 use std::{
   net::SocketAddr,
   sync::{Arc, atomic::AtomicU64},
@@ -228,19 +228,10 @@ impl UdpDestinationMux {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// UDP probed protocol, specific protocols like SSH, and default is "any".
-pub enum UdpProbedProtocol {
-  /// any, default
-  Any,
-  /// wireguard
-  Wireguard,
-  /// quic
-  Quic(TlsClientHello),
-  // TODO: and more ...
-}
+// Re-export UdpProtocol as UdpProbedProtocol for backward compatibility
+pub use crate::protocol::udp::UdpProtocol as UdpProbedProtocol;
 
-impl UdpProbedProtocol {
+impl UdpProtocol {
   fn proto_type(&self) -> UdpProtocolType {
     match self {
       Self::Any => UdpProtocolType::Any,
@@ -250,89 +241,37 @@ impl UdpProbedProtocol {
   }
 }
 
-impl std::fmt::Display for UdpProbedProtocol {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::Any => write!(f, "Any"),
-      Self::Wireguard => write!(f, "Wireguard"),
-      Self::Quic(_) => write!(f, "QUIC"),
-      // TODO: and more...
-    }
-  }
-}
-
-/* ------ */
-/// Is Wireguard protocol?
-fn is_wireguard(initial_datagrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProbedProtocol> {
-  // Wireguard protocol 'initiation' detection [only Handshake]
-  // Thus this may not be a reliable way to detect Wireguard protocol
-  // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
-  // https://www.wireguard.com/protocol/
-  let Some(first) = initial_datagrams.first() else {
-    return ProbeResult::Failure; // unreachable. just in case.
-  };
-
-  if first.len() == 148 && first[0] == 0x01 && first[1] == 0x00 && first[2] == 0x00 && first[3] == 0x00 {
-    debug!("Wireguard protocol (initiator to responder first message) detected");
-    ProbeResult::Success(UdpProbedProtocol::Wireguard)
-  } else {
-    ProbeResult::Failure
-  }
-}
-
-/// Is QUIC protocol?
-fn is_quic_initial(initial_dagatgrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProbedProtocol> {
-  let initial_datagrams_inner = initial_dagatgrams.inner.as_slice();
-
-  match probe_quic_initial_packets(initial_datagrams_inner) {
-    Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
-    Err(TlsProbeFailure::PollNext) => {
-      initial_dagatgrams
-        .probed_as_pollnext
-        .insert(UdpProbedProtocol::Quic(Default::default()));
-      ProbeResult::PollNext
-    }
-    Ok(client_hello_info) => ProbeResult::Success(UdpProbedProtocol::Quic(client_hello_info)),
-  }
-}
-
-impl UdpProbedProtocol {
-  /// Detect the protocol from the first few bytes of the incoming datagram
+impl UdpProtocol {
+  /// Detect the protocol from the first few bytes of the incoming datagram using the registry
   async fn detect_protocol(initial_datagrams: &mut UdpInitialDatagrams) -> Result<ProbeResult<Self>, ProxyError> {
-    // TODO: Add more protocol detection patterns
+    use bytes::BytesMut;
 
-    // Probe functions
-    let probe_functions = if initial_datagrams.probed_as_pollnext.is_empty() {
-      // No candidate probed as PollNext, i.e., Round 1
-      vec![is_wireguard, is_quic_initial]
-    } else {
-      // Round 2 or later
-      initial_datagrams
-        .probed_as_pollnext
-        .iter()
-        .map(|p| match p {
-          UdpProbedProtocol::Wireguard => is_wireguard,
-          UdpProbedProtocol::Quic(_) => is_quic_initial,
-          _ => unreachable!(),
-        })
-        .collect()
+    let registry = UdpProtocolRegistry::default();
+
+    // Convert the UDP datagrams to a BytesMut for the registry
+    let first_datagram = match initial_datagrams.first() {
+      Some(datagram) => datagram,
+      None => return Ok(ProbeResult::Success(Self::Any)),
     };
 
-    let probe_res = probe_functions.into_iter().map(|f| f(initial_datagrams)).collect::<Vec<_>>();
+    let mut buffer = BytesMut::from(first_datagram);
 
-    // In case any of the probe results is a success, return it
-    if let Some(probe_success) = probe_res.iter().find(|r| matches!(r, ProbeResult::Success(_))) {
-      return Ok(probe_success.clone());
-    };
+    // Try detection with the registry
+    match registry.detect_protocol(&mut buffer).await? {
+      ProbeResult::Success(protocol) => Ok(ProbeResult::Success(protocol)),
+      ProbeResult::Failure => {
+        debug!("Untyped UDP connection detected");
+        Ok(ProbeResult::Success(Self::Any))
+      }
+      ProbeResult::PollNext => {
+        // For UDP, we usually have all the data we need in the first packet
+        // If we need more, return PollNext to indicate we need more datagrams
 
-    // In case any of the probe results is PollNext, return it
-    if let Some(probe_pollnext) = probe_res.iter().find(|r| matches!(r, ProbeResult::PollNext)) {
-      return Ok(probe_pollnext.to_owned());
-    };
-
-    // All detection finished as failure
-    debug!("Untyped UDP connection detected");
-    Ok(ProbeResult::Success(Self::Any))
+        // Store the protocol that requested more data (for compatibility)
+        initial_datagrams.probed_as_pollnext.insert(Self::Any);
+        Ok(ProbeResult::PollNext)
+      }
+    }
   }
 }
 

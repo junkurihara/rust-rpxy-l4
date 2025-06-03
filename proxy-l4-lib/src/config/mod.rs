@@ -2,6 +2,14 @@ use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolTyp
 use quic_tls::{EchConfigList, EchPrivateKey};
 use std::{str::FromStr, time::Duration};
 
+pub mod builder;
+pub mod protocols;
+pub mod validation;
+
+pub use builder::{ConfigBuilder, ProtocolConfigBuilder};
+pub use protocols::*;
+pub use validation::{ConfigValidationError, ValidationResult};
+
 /// Configuration for the proxy service
 pub struct Config {
   /// Listening port
@@ -33,6 +41,7 @@ pub struct Config {
 }
 
 /// Protocol specific configuration
+#[derive(Debug)]
 pub struct ProtocolConfig {
   /// Protocol type name
   pub protocol: ProtocolType,

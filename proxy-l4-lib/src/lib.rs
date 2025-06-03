@@ -1,5 +1,5 @@
 mod access_log;
-mod config;
+pub mod config;
 mod constants;
 mod count;
 mod destination;
@@ -19,7 +19,7 @@ use constants::{DNS_CACHE_MAX_TTL, DNS_CACHE_MIN_TTL};
 use std::sync::Arc;
 use target::DnsCache;
 
-pub use config::{Config, EchProtocolConfig, ProtocolConfig};
+pub use config::{Config, EchProtocolConfig, ProtocolConfig, ConfigBuilder, ProtocolConfigBuilder};
 pub use constants::log_event_names;
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;

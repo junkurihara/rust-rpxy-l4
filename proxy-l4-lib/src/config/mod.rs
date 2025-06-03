@@ -5,6 +5,8 @@ use std::{str::FromStr, time::Duration};
 pub mod builder;
 pub mod protocols;
 pub mod validation;
+#[cfg(test)]
+mod integration_tests;
 
 pub use builder::{ConfigBuilder, ProtocolConfigBuilder};
 pub use protocols::*;

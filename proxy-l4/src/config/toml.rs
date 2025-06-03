@@ -1,6 +1,6 @@
 use crate::log::warn;
 use anyhow::anyhow;
-use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
+use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolType};
 use serde::Deserialize;
 use std::{
   collections::{HashMap, HashSet},
@@ -86,12 +86,92 @@ impl TryFrom<ConfigToml> for Config {
   type Error = anyhow::Error;
 
   fn try_from(config_toml: ConfigToml) -> Result<Self, Self::Error> {
+    use rpxy_l4_lib::config::{ConfigBuilder, ProtocolConfigBuilder};
+
     let Some(listen_port) = config_toml.listen_port else {
       return Err(anyhow!("listen_port is required"));
     };
 
-    let mut protocols = HashMap::new();
+    // Use the new ConfigBuilder with validation
+    let mut builder = ConfigBuilder::new()
+      .with_listen_port(listen_port)
+      .map_err(|e| anyhow!("Invalid listen port: {}", e))?
+      .with_ipv6(config_toml.listen_ipv6.unwrap_or(false));
 
+    // Set TCP configuration
+    if let Some(backlog) = config_toml.tcp_backlog {
+      builder = builder
+        .with_tcp_backlog(backlog)
+        .map_err(|e| anyhow!("Invalid TCP backlog: {}", e))?;
+    }
+
+    if let Some(max_conn) = config_toml.tcp_max_connections {
+      builder = builder
+        .with_tcp_max_connections(max_conn)
+        .map_err(|e| anyhow!("Invalid TCP max connections: {}", e))?;
+    }
+
+    if let Some(max_conn) = config_toml.udp_max_connections {
+      builder = builder
+        .with_udp_max_connections(max_conn)
+        .map_err(|e| anyhow!("Invalid UDP max connections: {}", e))?;
+    }
+
+    // Set TCP target and load balance
+    if let Some(tcp_targets) = config_toml.tcp_target {
+      let tcp_target_strs: Vec<&str> = tcp_targets.iter().map(|s| s.as_str()).collect();
+      builder = builder
+        .with_tcp_target(tcp_target_strs)
+        .map_err(|e| anyhow!("Invalid TCP targets: {}", e))?;
+
+      if let Some(lb) = config_toml.tcp_load_balance {
+        let load_balance: LoadBalance = lb.as_str().try_into()?;
+        builder = builder
+          .with_tcp_load_balance(load_balance)
+          .map_err(|e| anyhow!("Invalid TCP load balance: {}", e))?;
+      }
+    }
+
+    // Set UDP target and load balance
+    if let Some(udp_targets) = config_toml.udp_target {
+      let udp_target_strs: Vec<&str> = udp_targets.iter().map(|s| s.as_str()).collect();
+      builder = builder
+        .with_udp_target(udp_target_strs)
+        .map_err(|e| anyhow!("Invalid UDP targets: {}", e))?;
+
+      if let Some(lb) = config_toml.udp_load_balance {
+        let load_balance: LoadBalance = lb.as_str().try_into()?;
+        builder = builder
+          .with_udp_load_balance(load_balance)
+          .map_err(|e| anyhow!("Invalid UDP load balance: {}", e))?;
+      }
+    }
+
+    if let Some(lifetime) = config_toml.udp_idle_lifetime {
+      builder = builder
+        .with_udp_idle_lifetime(lifetime)
+        .map_err(|e| anyhow!("Invalid UDP idle lifetime: {}", e))?;
+    }
+
+    // Parse and set DNS cache configuration
+    let dns_cache_min_ttl = config_toml
+      .dns_cache_min_ttl
+      .as_ref()
+      .map(|x| parse_duration(x))
+      .transpose()?;
+    let dns_cache_max_ttl = config_toml
+      .dns_cache_max_ttl
+      .as_ref()
+      .map(|x| parse_duration(x))
+      .transpose()?;
+
+    if dns_cache_min_ttl.is_some() || dns_cache_max_ttl.is_some() {
+      builder = builder
+        .with_dns_cache_ttl(dns_cache_min_ttl, dns_cache_max_ttl)
+        .map_err(|e| anyhow!("Invalid DNS cache TTL: {}", e))?;
+    }
+
+    // Process protocol configurations using ProtocolConfigBuilder
     if let Some(protocols_toml) = config_toml.protocols {
       for (name, protocol_toml) in protocols_toml.0 {
         let Some(proto_type) = protocol_toml.protocol.as_ref() else {
@@ -104,92 +184,75 @@ impl TryFrom<ConfigToml> for Config {
         if target.is_empty() {
           return Err(anyhow!("target is empty for key: {name}"));
         }
-        let target = target.iter().map(|x| x.parse()).collect::<Result<Vec<TargetAddr>, _>>()?;
 
-        let load_balance: Option<LoadBalance> = protocol_toml
-          .load_balance
-          .as_ref()
-          .map(|x| x.as_str().try_into())
-          .transpose()?;
+        // Use ProtocolConfigBuilder for validation
+        let target_strs: Vec<&str> = target.iter().map(|s| s.as_str()).collect();
+        let mut protocol_builder = ProtocolConfigBuilder::new()
+          .with_protocol(proto_type)
+          .with_targets(target_strs)
+          .map_err(|e| anyhow!("Invalid targets for protocol '{}': {}", name, e))?;
 
-        let ech = protocol_toml
-          .ech
-          .as_ref()
-          .map(|v| EchProtocolConfig::try_new(&v.ech_config_list, &v.private_keys, &v.private_server_names, &listen_port))
-          .transpose()?;
-        if ech.is_some() {
+        if let Some(lb) = protocol_toml.load_balance {
+          let load_balance: LoadBalance = lb.as_str().try_into()?;
+          protocol_builder = protocol_builder
+            .with_load_balance(load_balance)
+            .map_err(|e| anyhow!("Invalid load balance for protocol '{}': {}", name, e))?;
+        }
+
+        if let Some(lifetime) = protocol_toml.idle_lifetime {
+          protocol_builder = protocol_builder
+            .with_idle_lifetime(lifetime)
+            .map_err(|e| anyhow!("Invalid idle lifetime for protocol '{}': {}", name, e))?;
+        }
+
+        if let Some(alpn) = protocol_toml.alpn {
+          protocol_builder = protocol_builder
+            .with_alpn(alpn)
+            .map_err(|e| anyhow!("Invalid ALPN for protocol '{}': {}", name, e))?;
+        }
+
+        if let Some(server_names) = protocol_toml.server_names {
+          protocol_builder = protocol_builder
+            .with_server_names(server_names)
+            .map_err(|e| anyhow!("Invalid server names for protocol '{}': {}", name, e))?;
+        }
+
+        if let Some(ech_toml) = protocol_toml.ech {
+          let ech = EchProtocolConfig::try_new(
+            &ech_toml.ech_config_list,
+            &ech_toml.private_keys,
+            &ech_toml.private_server_names,
+            &listen_port,
+          )?;
+
           warn!("ECH is configured for protocol: {name}");
           warn!("Make sure that the ECH config has been set up correctly as the client can refer to it.");
           warn!(
             "If DNS HTTPS RR is used for that, check if its value contains \"ech={}\"",
-            &protocol_toml.ech.as_ref().unwrap().ech_config_list
+            &ech_toml.ech_config_list
           );
           warn!(
             "For the configuration, ECH private server names accepted and routed are: {:?}",
-            protocol_toml.ech.as_ref().unwrap().private_server_names
+            ech_toml.private_server_names
           );
+
+          protocol_builder = protocol_builder.with_ech(ech);
         }
 
-        let protocol = ProtocolConfig {
-          protocol: proto_type,
-          target,
-          load_balance,
-          idle_lifetime: protocol_toml.idle_lifetime,
-          alpn: protocol_toml.alpn,
-          server_names: protocol_toml.server_names,
-          ech,
-        };
+        let protocol_config = protocol_builder
+          .build()
+          .map_err(|e| anyhow!("Failed to build protocol config for '{}': {}", name, e))?;
 
-        protocols.insert(name, protocol);
+        builder = builder
+          .with_protocol(name, protocol_config)
+          .map_err(|e| anyhow!("Failed to add protocol: {}", e))?;
       }
     }
 
-    let tcp_target = config_toml
-      .tcp_target
-      .map(|x| x.iter().map(|x| x.parse()).collect::<Result<Vec<TargetAddr>, _>>())
-      .transpose()?;
-    let tcp_load_balance = config_toml
-      .tcp_load_balance
-      .as_ref()
-      .map(|x| x.as_str().try_into())
-      .transpose()?;
-    let udp_target = config_toml
-      .udp_target
-      .map(|x| x.iter().map(|x| x.parse()).collect::<Result<Vec<TargetAddr>, _>>())
-      .transpose()?;
-    let udp_load_balance = config_toml
-      .udp_load_balance
-      .as_ref()
-      .map(|x| x.as_str().try_into())
-      .transpose()?;
-
-    // Parse DNS cache configuration
-    let dns_cache_min_ttl = config_toml
-      .dns_cache_min_ttl
-      .as_ref()
-      .map(|x| parse_duration(x))
-      .transpose()?;
-    let dns_cache_max_ttl = config_toml
-      .dns_cache_max_ttl
-      .as_ref()
-      .map(|x| parse_duration(x))
-      .transpose()?;
-
-    Ok(Self {
-      listen_port,
-      listen_ipv6: config_toml.listen_ipv6.unwrap_or(false),
-      tcp_backlog: config_toml.tcp_backlog,
-      tcp_max_connections: config_toml.tcp_max_connections,
-      udp_max_connections: config_toml.udp_max_connections,
-      tcp_target,
-      tcp_load_balance,
-      udp_target,
-      udp_load_balance,
-      udp_idle_lifetime: config_toml.udp_idle_lifetime,
-      dns_cache_min_ttl,
-      dns_cache_max_ttl,
-      protocols,
-    })
+    // Build the final configuration with validation
+    builder
+      .build()
+      .map_err(|e| anyhow!("Configuration validation failed: {}", e))
   }
 }
 

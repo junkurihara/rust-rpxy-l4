@@ -35,7 +35,7 @@ type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 /* ---------------------------------------------------------- */
 #[derive(Clone)]
 /// Udp connection pool
-pub(crate) struct UdpConnectionPool {
+pub struct UdpConnectionPool {
   /// inner hashmap
   inner: DashMap<SocketAddr, UdpConnection>,
   /// parent cancel token to cancel all connections
@@ -46,7 +46,7 @@ pub(crate) struct UdpConnectionPool {
 
 impl UdpConnectionPool {
   /// Create a new UdpConnectionManager
-  pub(crate) fn new(runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
+  pub fn new(runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
     init_once_lock();
 
     let inner: DashMap<SocketAddr, UdpConnection> = DashMap::default();

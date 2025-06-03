@@ -1696,6 +1696,7 @@ name = "rpxy-l4-examples"
 version = "0.2.0"
 dependencies = [
  "base64",
+ "bytes",
  "clap",
  "env_logger",
  "log",
@@ -1703,6 +1704,9 @@ dependencies = [
  "rpxy-l4-lib",
  "rustls 0.23.27 (git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend)",
  "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
  "webpki-roots",
 ]
 
@@ -1712,6 +1716,7 @@ version = "0.2.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "async-trait",
  "bytes",
  "dashmap",
  "derive_builder",
@@ -1724,6 +1729,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

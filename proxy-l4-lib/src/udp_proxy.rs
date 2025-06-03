@@ -230,7 +230,7 @@ impl UdpDestinationMux {
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// UDP probed protocol, specific protocols like SSH, and default is "any".
-pub(crate) enum UdpProbedProtocol {
+pub enum UdpProbedProtocol {
   /// any, default
   Any,
   /// wireguard

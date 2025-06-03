@@ -207,7 +207,7 @@ impl TcpDestinationMux {
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Probed TCP proxy protocol, specific protocols like SSH, and default is "any".
-enum TcpProbedProtocol {
+pub enum TcpProbedProtocol {
   /// any, default
   Any,
   /// SSH

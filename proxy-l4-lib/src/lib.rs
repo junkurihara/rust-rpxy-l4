@@ -1,5 +1,6 @@
 mod access_log;
 pub mod config;
+pub mod connection;
 mod constants;
 mod count;
 mod destination;
@@ -20,12 +21,16 @@ use std::sync::Arc;
 use target::DnsCache;
 
 pub use config::{Config, ConfigBuilder, EchProtocolConfig, ProtocolConfig, ProtocolConfigBuilder};
+pub use connection::{
+  ConnectionContext, ConnectionManager, ConnectionMetrics,
+  pool::{ConnectionPool, DashMapConnectionPool, PoolEntry, PoolStats},
+  tcp::{TcpConnection, TcpConnectionManager},
+  udp::{UdpConnection, UdpConnectionInfo, UdpConnectionManager},
+};
 pub use constants::log_event_names;
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
-pub use error::{
-  ProxyBuildError, ProxyError, ConfigurationError, NetworkError, ProtocolError, ConnectionError, ErrorContext
-};
+pub use error::{ConfigurationError, ConnectionError, ErrorContext, NetworkError, ProtocolError, ProxyBuildError, ProxyError};
 pub use probe::ProbeResult;
 pub use proto::ProtocolType;
 pub use protocol::{
@@ -35,8 +40,9 @@ pub use protocol::{
   udp::*,
 };
 pub use target::TargetAddr;
-pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProxy, TcpProxyBuilder};
-pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpProxyBuilder};
+pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProbedProtocol, TcpProxy, TcpProxyBuilder};
+pub use udp_conn::UdpConnectionPool;
+pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProbedProtocol, UdpProxy, UdpProxyBuilder};
 
 /* ---------------------------------------- */
 /// Build TCP and UDP multiplexers from the configuration

@@ -158,6 +158,20 @@ pub enum ConnectionError {
 
   #[error("No ECH private destination server name found")]
   EchNoMatchingPrivateServerName,
+
+  #[error("Connection failed to {address}: {source}")]
+  ConnectionFailed {
+    address: SocketAddr,
+    #[source]
+    source: std::io::Error,
+  },
+
+  #[error("Socket bind failed for {address}: {source}")]
+  BindFailed {
+    address: SocketAddr,
+    #[source]
+    source: std::io::Error,
+  },
 }
 
 /// Errors that occur during proxy or component building/initialization
@@ -410,13 +424,13 @@ where
       let base_error = e.into();
       match &base_error {
         ProxyError::Network(NetworkError::IoError { source }) => match operation {
-          "connect" => ProxyError::Network(NetworkError::ConnectionFailed { 
-            address, 
-            source: std::io::Error::new(source.kind(), source.to_string()) 
+          "connect" => ProxyError::Network(NetworkError::ConnectionFailed {
+            address,
+            source: std::io::Error::new(source.kind(), source.to_string()),
           }),
-          "bind" => ProxyError::Network(NetworkError::BindFailed { 
-            address, 
-            source: std::io::Error::new(source.kind(), source.to_string()) 
+          "bind" => ProxyError::Network(NetworkError::BindFailed {
+            address,
+            source: std::io::Error::new(source.kind(), source.to_string()),
           }),
           _ => base_error,
         },

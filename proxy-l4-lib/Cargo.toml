@@ -24,6 +24,12 @@ ahash = { version = "0.8.12" }
 thiserror = { version = "2.0.12" }
 anyhow = { version = "1.0" }
 
+# async traits
+async-trait = { version = "0.1" }
+
+# unique identifiers for connections
+uuid = { version = "1.0", features = ["v4"] }
+
 # traces and logs
 tracing = { version = "0.1.41" }
 

@@ -1702,6 +1702,7 @@ dependencies = [
  "log",
  "mio",
  "rpxy-l4-lib",
+ "rpxy-l4-quic-tls",
  "rustls 0.23.27 (git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend)",
  "tokio",
  "tokio-util",

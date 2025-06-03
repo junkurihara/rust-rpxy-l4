@@ -3,13 +3,13 @@ pub mod config;
 pub mod connection;
 mod constants;
 mod count;
-mod destination;
+pub mod destination;
 mod error;
 mod probe;
 mod proto;
 mod protocol;
 mod socket;
-mod target;
+pub mod target;
 mod tcp_proxy;
 mod time_util;
 mod trace;
@@ -29,7 +29,21 @@ pub use connection::{
 };
 pub use constants::log_event_names;
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
-pub use destination::LoadBalance;
+pub use destination::{
+  CachingDnsResolver,
+  // New Phase 5 exports
+  DnsResolver,
+  FirstAvailableLoadBalancer,
+  LoadBalance,
+  LoadBalancer,
+  MockDnsResolver,
+  RandomLoadBalancer,
+  RoundRobinLoadBalancer,
+  SourceIpLoadBalancer,
+  SourceSocketLoadBalancer,
+  TlsRouter,
+  TlsRoutingRule,
+};
 pub use error::{ConfigurationError, ConnectionError, ErrorContext, NetworkError, ProtocolError, ProxyBuildError, ProxyError};
 pub use probe::ProbeResult;
 pub use proto::ProtocolType;

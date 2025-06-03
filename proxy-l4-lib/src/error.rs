@@ -185,11 +185,8 @@ pub enum ProxyBuildError {
     source: quic_tls::EchConfigError,
   },
 
-  #[error("Target destination builder error: {source}")]
-  TargetDestinationBuilderError {
-    #[source]
-    source: crate::destination::TargetDestinationBuilderError,
-  },
+  #[error("Target destination builder error: {message}")]
+  TargetDestinationBuilderError { message: String },
 
   #[error("UDP destination mux error: {source}")]
   UdpDestinationMuxError {
@@ -322,9 +319,9 @@ impl From<quic_tls::EchConfigError> for ProxyBuildError {
   }
 }
 
-impl From<crate::destination::TargetDestinationBuilderError> for ProxyBuildError {
-  fn from(err: crate::destination::TargetDestinationBuilderError) -> Self {
-    ProxyBuildError::TargetDestinationBuilderError { source: err }
+impl From<String> for ProxyBuildError {
+  fn from(err: String) -> Self {
+    ProxyBuildError::TargetDestinationBuilderError { message: err }
   }
 }
 

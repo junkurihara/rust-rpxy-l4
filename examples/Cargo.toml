@@ -28,6 +28,7 @@ tokio = { version = "1.45.1" }
 tokio-util = { version = "0.7" }
 mio = { version = "1", features = ["net", "os-poll"] }
 rpxy-l4-lib = { path = "../proxy-l4-lib" }
+rpxy-l4-quic-tls = { path = "../quic-tls" }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
 bytes = { version = "1.0" }

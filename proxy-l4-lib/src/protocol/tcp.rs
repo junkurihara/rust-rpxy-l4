@@ -1,3 +1,4 @@
+use crate::proto::TcpProtocolType;
 use crate::{error::ProxyError, probe::ProbeResult, protocol::ProtocolDetector};
 use bytes::BytesMut;
 use quic_tls::{TlsClientHelloBuffer, TlsProbeFailure, probe_tls_handshake};
@@ -24,6 +25,17 @@ impl std::fmt::Display for TcpProtocol {
       Self::Ssh => write!(f, "SSH"),
       Self::Http => write!(f, "HTTP"),
       Self::Tls(_) => write!(f, "TLS"),
+    }
+  }
+}
+
+impl TcpProtocol {
+  pub(crate) fn proto_type(&self) -> TcpProtocolType {
+    match self {
+      Self::Any => TcpProtocolType::Any,
+      Self::Ssh => TcpProtocolType::Ssh,
+      Self::Http => TcpProtocolType::Http,
+      Self::Tls(_) => TcpProtocolType::Tls,
     }
   }
 }

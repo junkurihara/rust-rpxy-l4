@@ -235,46 +235,32 @@ impl UdpDestinationMux {
 
 /* ---------------------------------------------------------- */
 
-impl UdpProtocol {
-  fn proto_type(&self) -> UdpProtocolType {
-    match self {
-      Self::Any => UdpProtocolType::Any,
-      Self::Wireguard => UdpProtocolType::Wireguard,
-      Self::Quic(_) => UdpProtocolType::Quic,
+/// Detect the protocol from the first few bytes of the incoming datagram using the registry
+async fn detect_protocol(initial_datagrams: &mut UdpInitialDatagrams) -> Result<ProbeResult<UdpProtocol>, ProxyError> {
+  let registry = UdpProtocolRegistry::default();
+
+  // Convert the UDP datagrams to a BytesMut for the registry
+  let first_datagram = match initial_datagrams.first() {
+    Some(datagram) => datagram,
+    None => return Ok(ProbeResult::Success(UdpProtocol::Any)),
+  };
+
+  let mut buffer = bytes::BytesMut::from(first_datagram);
+
+  // Try detection with the registry
+  match registry.detect_protocol(&mut buffer).await? {
+    ProbeResult::Success(protocol) => Ok(ProbeResult::Success(protocol)),
+    ProbeResult::Failure => {
+      debug!("Untyped UDP connection detected");
+      Ok(ProbeResult::Success(UdpProtocol::Any))
     }
-  }
-}
+    ProbeResult::PollNext => {
+      // For UDP, we usually have all the data we need in the first packet
+      // If we need more, return PollNext to indicate we need more datagrams
 
-impl UdpProtocol {
-  /// Detect the protocol from the first few bytes of the incoming datagram using the registry
-  async fn detect_protocol(initial_datagrams: &mut UdpInitialDatagrams) -> Result<ProbeResult<Self>, ProxyError> {
-    use bytes::BytesMut;
-
-    let registry = UdpProtocolRegistry::default();
-
-    // Convert the UDP datagrams to a BytesMut for the registry
-    let first_datagram = match initial_datagrams.first() {
-      Some(datagram) => datagram,
-      None => return Ok(ProbeResult::Success(Self::Any)),
-    };
-
-    let mut buffer = BytesMut::from(first_datagram);
-
-    // Try detection with the registry
-    match registry.detect_protocol(&mut buffer).await? {
-      ProbeResult::Success(protocol) => Ok(ProbeResult::Success(protocol)),
-      ProbeResult::Failure => {
-        debug!("Untyped UDP connection detected");
-        Ok(ProbeResult::Success(Self::Any))
-      }
-      ProbeResult::PollNext => {
-        // For UDP, we usually have all the data we need in the first packet
-        // If we need more, return PollNext to indicate we need more datagrams
-
-        // Store the protocol that requested more data (for compatibility)
-        initial_datagrams.probed_as_pollnext.insert(Self::Any);
-        Ok(ProbeResult::PollNext)
-      }
+      // Store the protocol that requested more data (for compatibility)
+      initial_datagrams.probed_as_pollnext.insert(UdpProtocol::Any);
+      Ok(ProbeResult::PollNext)
     }
   }
 }
@@ -525,7 +511,7 @@ impl UdpInitialDatagramsBufferPool {
         };
 
         // Handle with probe result
-        let Ok(probe_result) = UdpProtocol::detect_protocol(&mut initial_datagrams).await else {
+        let Ok(probe_result) = detect_protocol(&mut initial_datagrams).await else {
           error!("Failed to probe protocol from the incoming datagram");
           continue;
         };

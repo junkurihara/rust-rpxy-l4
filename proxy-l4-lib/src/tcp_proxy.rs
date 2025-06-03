@@ -220,37 +220,26 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
   Ok(read_len)
 }
 
-impl TcpProtocol {
-  fn proto_type(&self) -> TcpProtocolType {
-    match self {
-      Self::Any => TcpProtocolType::Any,
-      Self::Ssh => TcpProtocolType::Ssh,
-      Self::Http => TcpProtocolType::Http,
-      Self::Tls(_) => TcpProtocolType::Tls,
-    }
-  }
+/// Detect the protocol from the first few bytes of the incoming stream using the registry
+async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<TcpProtocol>, ProxyError> {
+  let registry = TcpProtocolRegistry::default();
 
-  /// Detect the protocol from the first few bytes of the incoming stream using the registry
-  async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<Self>, ProxyError> {
-    let registry = TcpProtocolRegistry::default();
+  // Keep reading data until we get a definitive result
+  loop {
+    // Try detection with current buffer
+    match registry.detect_protocol(buf).await? {
+      ProbeResult::Success(protocol) => return Ok(ProbeResult::Success(protocol)),
+      ProbeResult::Failure => return Ok(ProbeResult::Success(TcpProtocol::Any)), // fallback to Any
+      ProbeResult::PollNext => {
+        // Need more data - read from stream
+        let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+        let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
+        buf.extend_from_slice(&next_buf[..]);
 
-    // Keep reading data until we get a definitive result
-    loop {
-      // Try detection with current buffer
-      match registry.detect_protocol(buf).await? {
-        ProbeResult::Success(protocol) => return Ok(ProbeResult::Success(protocol)),
-        ProbeResult::Failure => return Ok(ProbeResult::Success(Self::Any)), // fallback to Any
-        ProbeResult::PollNext => {
-          // Need more data - read from stream
-          let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
-          let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
-          buf.extend_from_slice(&next_buf[..]);
-
-          // Prevent infinite loops - if buffer gets too large, give up
-          if buf.len() > TCP_PROTOCOL_DETECTION_BUFFER_SIZE * 4 {
-            debug!("Protocol detection buffer too large, defaulting to Any");
-            return Ok(ProbeResult::Success(Self::Any));
-          }
+        // Prevent infinite loops - if buffer gets too large, give up
+        if buf.len() > TCP_PROTOCOL_DETECTION_BUFFER_SIZE * 4 {
+          debug!("Protocol detection buffer too large, defaulting to Any");
+          return Ok(ProbeResult::Success(TcpProtocol::Any));
         }
       }
     }
@@ -341,7 +330,7 @@ async fn handle_tcp_connection(
   let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
   let Ok(probe_result) = timeout(
     Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
-    TcpProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
+    detect_protocol(&mut incoming_stream, &mut initial_buf),
   )
   .await
   else {

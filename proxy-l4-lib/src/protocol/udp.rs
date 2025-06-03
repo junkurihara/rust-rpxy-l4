@@ -1,3 +1,4 @@
+use crate::proto::UdpProtocolType;
 use crate::{error::ProxyError, probe::ProbeResult, protocol::ProtocolDetector};
 use bytes::BytesMut;
 use quic_tls::{TlsClientHello, TlsProbeFailure, probe_quic_initial_packets};
@@ -21,6 +22,16 @@ impl std::fmt::Display for UdpProtocol {
       Self::Any => write!(f, "Any"),
       Self::Wireguard => write!(f, "Wireguard"),
       Self::Quic(_) => write!(f, "QUIC"),
+    }
+  }
+}
+
+impl UdpProtocol {
+  pub(crate) fn proto_type(&self) -> UdpProtocolType {
+    match self {
+      Self::Any => UdpProtocolType::Any,
+      Self::Wireguard => UdpProtocolType::Wireguard,
+      Self::Quic(_) => UdpProtocolType::Quic,
     }
   }
 }

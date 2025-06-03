@@ -1,5 +1,9 @@
 use crate::{
   config::EchProtocolConfig,
+  connection::{
+    ConnectionManager,
+    udp::{UdpConnectionInfo, UdpConnectionManager},
+  },
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
   destination::{
@@ -265,7 +269,7 @@ async fn detect_protocol(initial_datagrams: &mut UdpInitialDatagrams) -> Result<
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone, derive_builder::Builder)]
+#[derive(Clone, derive_builder::Builder)]
 /// Single Udp proxy struct
 pub struct UdpProxy {
   /// Bound socket address to listen on, exposed to the client
@@ -284,7 +288,44 @@ pub struct UdpProxy {
   /// Max UDP concurrent connections
   #[builder(default = "crate::constants::MAX_UDP_CONCURRENT_CONNECTIONS")]
   max_connections: usize,
+
+  /// UDP connection manager for handling connection lifecycle
+  #[builder(setter(skip), default = "self.build_connection_manager()?")]
+  connection_manager: UdpConnectionManager,
 }
+
+impl std::fmt::Debug for UdpProxy {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("UdpProxy")
+      .field("listen_on", &self.listen_on)
+      .field("destination_mux", &self.destination_mux)
+      .field("connection_count", &self.connection_count)
+      .field("max_connections", &self.max_connections)
+      .finish()
+  }
+}
+
+impl UdpProxyBuilder {
+  /// Build the connection manager from the current builder state
+  fn build_connection_manager(&self) -> Result<UdpConnectionManager, UdpProxyBuilderError> {
+    let runtime_handle = self.runtime_handle.clone().ok_or_else(|| {
+      UdpProxyBuilderError::ValidationError("Runtime handle is required for UDP connection manager".to_string())
+    })?;
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let pool = Arc::new(UdpConnectionPool::new(runtime_handle, cancel_token));
+    let max_connections = self
+      .max_connections
+      .unwrap_or(crate::constants::MAX_UDP_CONCURRENT_CONNECTIONS);
+    Ok(UdpConnectionManager::new(pool, max_connections))
+  }
+}
+
+// // Implement From trait to convert ProxyBuildError to UdpProxyBuilderError
+// impl From<ProxyBuildError> for UdpProxyBuilderError {
+//   fn from(err: ProxyBuildError) -> Self {
+//     UdpProxyBuilderError::ValidationError(err.to_string())
+//   }
+// }
 
 impl UdpProxy {
   pub async fn start(&self, cancel_token: CancellationToken) -> Result<(), ProxyError> {
@@ -299,8 +340,8 @@ impl UdpProxy {
     // clone for sending back upstream responses to the original source by each individual spawned task
     let udp_socket_tx = Arc::clone(&udp_socket_rx);
 
-    // Build the UDP connection pool
-    let udp_connection_pool = Arc::new(UdpConnectionPool::new(self.runtime_handle.clone(), cancel_token.clone()));
+    // Build the UDP connection pool from the connection manager
+    let udp_connection_pool = Arc::clone(self.connection_manager.connection_pool());
 
     // Set the initial connection count
     self.connection_count.set(self.listen_on, 0);
@@ -316,10 +357,10 @@ impl UdpProxy {
     /* ----------------- */
     // Prune inactive connections periodically
     self.runtime_handle.spawn({
-      let udp_connection_pool = udp_connection_pool.clone();
+      let connection_manager = self.connection_manager.clone();
       let cancel_token = cancel_token.clone();
       let connection_count = self.connection_count.clone();
-      connection_pruner_service(self.listen_on, connection_count, udp_connection_pool, cancel_token)
+      connection_pruner_service(self.listen_on, connection_count, connection_manager, cancel_token)
     });
 
     /* ----------------- */
@@ -334,8 +375,8 @@ impl UdpProxy {
         };
         trace!("received {} bytes from {} [source]", buf_size, src_addr);
 
-        // Prune inactive connections first
-        udp_connection_pool.prune_inactive_connections();
+        // Prune inactive connections first using connection manager
+        self.connection_manager.prune_expired_connections();
 
         if let Some(conn) = udp_connection_pool.get(&src_addr) {
           // Handle case there is an existing connection
@@ -374,7 +415,7 @@ impl UdpProxy {
 async fn connection_pruner_service(
   listen_on: SocketAddr,
   connection_count: ConnectionCountSum<SocketAddr>,
-  udp_connection_pool: Arc<UdpConnectionPool>,
+  connection_manager: UdpConnectionManager,
   cancel_token: CancellationToken,
 ) {
   let service = async {
@@ -383,11 +424,11 @@ async fn connection_pruner_service(
         crate::constants::UDP_CONNECTION_PRUNE_INTERVAL,
       ))
       .await;
-      udp_connection_pool.prune_inactive_connections();
-      connection_count.set(listen_on, udp_connection_pool.local_pool_size());
+      connection_manager.prune_expired_connections();
+      connection_count.set(listen_on, connection_manager.connection_count());
       debug!(
         "Current connection: (local: {}, global: {}) @{}",
-        udp_connection_pool.local_pool_size(),
+        connection_manager.connection_count(),
         connection_count.current(),
         listen_on,
       );
@@ -450,6 +491,9 @@ struct UdpInitialDatagramsBufferPool {
 
   /// Max UDP concurrent connections
   max_connections: usize,
+
+  /// UDP connection manager for handling connection lifecycle
+  connection_manager: UdpConnectionManager,
 }
 
 impl UdpInitialDatagramsBufferPool {
@@ -464,6 +508,7 @@ impl UdpInitialDatagramsBufferPool {
       runtime_handle: udp_proxy.runtime_handle.clone(),
       connection_count: udp_proxy.connection_count.clone(),
       max_connections: udp_proxy.max_connections,
+      connection_manager: udp_proxy.connection_manager.clone(),
     }
   }
   /// Start the UdpInitialDatagramsBufferPool
@@ -495,8 +540,8 @@ impl UdpInitialDatagramsBufferPool {
             datagrams
           }
           None => {
-            // Check the connection limit
-            if self_clone.max_connections > 0 && self_clone.connection_count.current() >= self_clone.max_connections {
+            // Check the connection limit using the connection manager
+            if !self_clone.connection_manager.can_accept_connection() {
               warn!("UDP connection limit reached: {}", self_clone.max_connections);
               continue;
             }
@@ -536,27 +581,58 @@ impl UdpInitialDatagramsBufferPool {
           FoundUdpDestination::Udp(dst) => dst,
           FoundUdpDestination::Quic(dst) => dst.destination(),
         };
-        let Ok(conn) = self_clone
-          .udp_connection_pool
-          .create_new_connection(
-            &src_addr,
-            udp_dst_inner,
-            &probed_protocol.proto_type(),
-            self_clone.udp_socket_tx.clone(),
-          )
-          .await
-        else {
-          continue;
+
+        // Create connection using the connection manager
+        let idle_timeout = std::time::Duration::from_secs(udp_dst_inner.get_connection_idle_lifetime() as u64);
+        let connection_info = UdpConnectionInfo::new(probed_protocol.clone(), idle_timeout, self_clone.udp_socket_tx.clone());
+
+        let dst_addr = match found_dst.get_destination(&src_addr).await {
+          Ok(addr) => addr,
+          Err(e) => {
+            error!("Failed to get destination address: {}", e);
+            continue;
+          }
         };
 
-        let _ = conn.send_many(&initial_datagrams.inner).await;
-        // here we ignore the error, as the connection might be closed
+        let udp_connection = match self_clone
+          .connection_manager
+          .create_connection(src_addr, dst_addr, connection_info)
+          .await
+        {
+          Ok(conn) => conn,
+          Err(e) => {
+            error!("Failed to create UDP connection: {}", e);
+            continue;
+          }
+        };
+
+        // Spawn task to handle the connection
+        self_clone.runtime_handle.spawn({
+          let connection_manager = self_clone.connection_manager.clone();
+          let initial_datagrams = initial_datagrams.inner.clone();
+          async move {
+            // Send initial datagrams
+            for datagram in &initial_datagrams {
+              if let Err(e) = udp_connection.server_socket.send(datagram).await {
+                warn!("Failed to send initial datagram: {}", e);
+                break;
+              }
+            }
+
+            // Handle the connection using the connection manager
+            if let Err(e) = connection_manager.handle_connection(udp_connection).await {
+              warn!("UDP connection handling failed: {}", e);
+            }
+          }
+        });
+
+        // Update connection count using the connection manager
         self_clone
           .connection_count
-          .set(self_clone.listen_on, self_clone.udp_connection_pool.local_pool_size());
+          .set(self_clone.listen_on, self_clone.connection_manager.connection_count());
         debug!(
           "Current connection: (local: {}, global: {}) @{}",
-          self_clone.udp_connection_pool.local_pool_size(),
+          self_clone.connection_manager.connection_count(),
           self_clone.connection_count.current(),
           self_clone.listen_on,
         );

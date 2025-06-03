@@ -1,6 +1,10 @@
 use crate::{
   access_log::{AccessLogProtocolType, access_log_start},
   config::EchProtocolConfig,
+  connection::{
+    ConnectionManager,
+    tcp::{TcpConnection, TcpConnectionManager},
+  },
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
   destination::{
@@ -19,7 +23,7 @@ use bytes::BytesMut;
 use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
-  io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional},
+  io::{AsyncReadExt, AsyncWriteExt},
   net::TcpStream,
   time::{Duration, timeout},
 };
@@ -268,9 +272,31 @@ pub struct TcpProxy {
   /// If `cnt` is shared with other spawned TCP proxies, this value is evaluated for the total number of connections
   max_connections: usize,
 
+  /// TCP connection manager for handling connection lifecycle
+  #[builder(setter(skip), default = "self.build_connection_manager()?")]
+  connection_manager: TcpConnectionManager,
+
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
 }
+
+impl TcpProxyBuilder {
+  /// Build the connection manager from the current builder state
+  fn build_connection_manager(&self) -> Result<TcpConnectionManager, TcpProxyBuilderError> {
+    let connection_count = self.connection_count.clone().unwrap_or_default();
+    let max_connections = self
+      .max_connections
+      .unwrap_or(crate::constants::MAX_TCP_CONCURRENT_CONNECTIONS);
+    Ok(TcpConnectionManager::new(connection_count, max_connections))
+  }
+}
+
+// // Implement From trait to convert ProxyBuildError to TcpProxyBuilderError
+// impl From<ProxyBuildError> for TcpProxyBuilderError {
+//   fn from(err: ProxyBuildError) -> Self {
+//     TcpProxyBuilderError::ValidationError(err.to_string())
+//   }
+// }
 
 impl TcpProxy {
   /// Start the TCP proxy
@@ -288,21 +314,21 @@ impl TcpProxy {
           }
           Ok(res) => res,
         };
-        // Connection limit
-        if self.connection_count.current() >= self.max_connections {
+        // Check connection limit using the connection manager
+        if !self.connection_manager.can_accept_connection() {
           warn!("TCP connection limit reached: {}", self.max_connections);
           continue;
         }
-        self.connection_count.increment();
+        self.connection_manager.increment_connections();
         debug!(
           "Accepted TCP connection from: {src_addr} (total: {})",
-          self.connection_count.current()
+          self.connection_manager.connection_count()
         );
 
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
-          let connection_count = self.connection_count.clone();
-          handle_tcp_connection(dst_mux, connection_count, incoming_stream, src_addr)
+          let connection_manager = self.connection_manager.clone();
+          handle_tcp_connection(dst_mux, connection_manager, incoming_stream, src_addr)
         });
       }
     };
@@ -319,10 +345,10 @@ impl TcpProxy {
 }
 
 /* ---------------------------------------------------------- */
-/// Handle TCP connection
+/// Handle TCP connection using the connection manager
 async fn handle_tcp_connection(
   dst_mux: Arc<TcpDestinationMux>,
-  connection_count: ConnectionCount,
+  connection_manager: TcpConnectionManager,
   mut incoming_stream: TcpStream,
   src_addr: SocketAddr,
 ) {
@@ -334,6 +360,7 @@ async fn handle_tcp_connection(
   .await
   else {
     error!("Timeout to probe the incoming TCP stream");
+    connection_manager.decrement_connections();
     return;
   };
   let probed_protocol = match probe_result {
@@ -341,7 +368,7 @@ async fn handle_tcp_connection(
     Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
     Err(e) => {
       error!("Failed to detect protocol: {e}");
-      connection_count.decrement();
+      connection_manager.decrement_connections();
       return;
     }
   };
@@ -350,14 +377,14 @@ async fn handle_tcp_connection(
     Ok(addr) => addr,
     Err(e) => {
       error!("No route for {probed_protocol}: {e}");
-      connection_count.decrement();
+      connection_manager.decrement_connections();
       return;
     }
   };
 
   let Ok(mut dst_addr) = found_dst.get_destination(&src_addr).await else {
     error!("Failed to get destination address for {src_addr}");
-    connection_count.decrement();
+    connection_manager.decrement_connections();
     return;
   };
 
@@ -371,7 +398,7 @@ async fn handle_tcp_connection(
         if let Err(e) = send_back_tls_alert(&mut incoming_stream, &illegal_parameter_alert).await {
           error!("Failed to send TLS alert: {e}");
         }
-        connection_count.decrement();
+        connection_manager.decrement_connections();
         return;
       };
       client_hello_bytes
@@ -382,27 +409,38 @@ async fn handle_tcp_connection(
     }
   };
 
-  let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await else {
+  // Connect to destination
+  let Ok(outgoing_stream) = TcpStream::connect(dst_addr).await else {
     error!("Failed to connect to the destination: {dst_addr}");
-    connection_count.decrement();
+    connection_manager.decrement_connections();
     return;
   };
 
-  if let Err(e) = outgoing_stream.write_all(&to_be_written).await {
-    error!("Failed to write the initial buffer to the outgoing stream: {e}");
-    connection_count.decrement();
-    return;
-  }
-  // Here we are establishing a bidirectional connection. Logging the connection.
+  // Create TCP connection directly
+  let tcp_connection = TcpConnection::new(
+    incoming_stream,
+    outgoing_stream,
+    probed_protocol.clone(),
+    to_be_written,
+    src_addr,
+    dst_addr,
+  );
+
+  // Log access log start
   tcp_access_log_start(&src_addr, &dst_addr, &probed_protocol);
-  // Then, copy bidirectional
-  if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
-    warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
+
+  // Handle the connection using the connection manager
+  if let Err(e) = connection_manager.handle_connection(tcp_connection).await {
+    warn!("TCP connection handling failed: {e}");
   }
+
   // finish log
   tcp_access_log_finish(&src_addr, &dst_addr, &probed_protocol);
-  connection_count.decrement();
-  debug!("TCP proxy connection closed (total: {})", connection_count.current());
+  connection_manager.decrement_connections();
+  debug!(
+    "TCP proxy connection closed (total: {})",
+    connection_manager.connection_count()
+  );
 }
 
 /// handle tls, especially ECH
@@ -530,9 +568,9 @@ mod tests {
     assert_eq!(destination, "127.0.0.1:50443".parse().unwrap());
 
     let listen_on: SocketAddr = "127.0.0.1:55555".parse().unwrap();
-    let tcp_proxy = TcpProxyBuilder::default()
+    let tcp_proxy = TcpProxyBuilder::create_empty()
       .listen_on(listen_on)
-      .destination_mux(dst_mux)
+      .destination_mux(dst_mux.clone())
       .runtime_handle(handle.clone())
       .build()
       .unwrap();

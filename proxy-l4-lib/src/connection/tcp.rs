@@ -10,7 +10,7 @@ use tokio::io::copy_bidirectional;
 use tokio::net::TcpStream;
 
 /// TCP connection manager responsible for creating and handling TCP connections
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TcpConnectionManager {
   /// Connection counter for tracking active connections
   connection_count: ConnectionCount,

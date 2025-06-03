@@ -167,14 +167,14 @@ impl ConnectionManager for UdpConnectionManager {
 
     // Log connection end
     info!(
-        connection_id = %conn.context.connection_id,
-        src_addr = %conn.context.src_addr,
-        dst_addr = %conn.context.dst_addr,
-        protocol = %conn.context.protocol,
-        duration_ms = conn.metrics.duration().as_millis(),
-        bytes_sent = conn.metrics.bytes_sent,
-        bytes_received = conn.metrics.bytes_received,
-        "UDP connection ended"
+      connection_id = %conn.context.connection_id,
+      src_addr = %conn.context.src_addr,
+      dst_addr = %conn.context.dst_addr,
+      protocol = %conn.context.protocol,
+      duration_ms = conn.metrics.duration().as_millis(),
+      bytes_sent = conn.metrics.bytes_sent,
+      bytes_received = conn.metrics.bytes_received,
+      "UDP connection ended"
     );
 
     result.map(|_| ())

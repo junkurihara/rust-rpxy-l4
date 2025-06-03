@@ -63,7 +63,7 @@ async fn dns_resolution_demo() -> Result<(), Box<dyn std::error::Error>> {
   println!("\n2. Mock DNS Resolver:");
   let mut mock_resolver = MockDnsResolver::new();
   mock_resolver.add_response(
-    "api.example.com",
+    "api.example.com".to_string(),
     vec![
       SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 0),
       SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)), 0),
@@ -290,8 +290,8 @@ mod tests {
   async fn test_mock_dns_resolver_functionality() {
     let mut resolver = MockDnsResolver::new();
     resolver.add_response(
-      "test.example.com",
-      vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 0)],
+      "test.example.com".to_string(),
+      vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 8080)],
     );
 
     let addresses = resolver.resolve("test.example.com", 8080).await.unwrap();

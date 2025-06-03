@@ -3,7 +3,7 @@ use crate::{
   config::EchProtocolConfig,
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
-  destination::{LoadBalance, integration::ModernTlsDestinations, legacy::TlsDestinationItem},
+  destination::{LoadBalance, integration::ModernTlsDestinations, tls::TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::TcpProtocolType,
@@ -110,7 +110,7 @@ impl TcpDestinationMuxBuilder {
         } else {
           TlsDestinations::new()
         };
-        current_tls.add(&[], &[], tcp_dest_inner, None, &dns_cache);
+        current_tls.add(&[], &[], tcp_dest_inner, None, dns_cache);
         inner.insert(proto_type, TcpDestination::Tls(current_tls));
       }
       _ => {
@@ -148,7 +148,7 @@ impl TcpDestinationMuxBuilder {
       alpn.unwrap_or_default(),
       tcp_dest_inner,
       ech.cloned(),
-      &dns_cache,
+      dns_cache,
     );
 
     inner.insert(TcpProtocolType::Tls, TcpDestination::Tls(current_tls));
@@ -377,7 +377,7 @@ async fn handle_tcp_connection(
   let to_be_written = match (&found_dst, &probed_protocol) {
     (FoundTcpDestination::Tls(tls_destination), TcpProtocol::Tls(client_hello_buf)) => {
       // Handle tls, especially ECH
-      let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination, &mut dst_addr).await else {
+      let Ok(client_hello_bytes) = handle_tls_client_hello(client_hello_buf, tls_destination, &mut dst_addr).await else {
         // Error means that illegal parameter must be sent back when error
         error!("Failed to handle TLS client hello, sending illegal_parameter alert back to the client");
         let illegal_parameter_alert = TlsAlertBuffer::default();
@@ -436,7 +436,7 @@ async fn handle_tls_client_hello<T>(
     trace!("Decrypted ClientHello Inner: {decrypted_ch:#?}");
 
     let sni = decrypted_ch.sni();
-    let Some(private_server_name) = sni.iter().next() else {
+    let Some(private_server_name) = sni.first() else {
       error!("No SNI in decrypted ClientHello");
       return Err(ProxyError::Protocol(crate::error::ProtocolError::TlsError {
         source: quic_tls::TlsClientHelloError::NoSniInDecryptedClientHello,
@@ -448,7 +448,7 @@ async fn handle_tls_client_hello<T>(
     };
     // Replace the destination address with the one in the decrypted ClientHello Inner
     let dns_cache = tls_destination.dns_cache();
-    let resolved = private_target_addr.resolve_cached(&dns_cache).await?;
+    let resolved = private_target_addr.resolve_cached(dns_cache).await?;
     if resolved.is_empty() {
       error!("No destination address found for {private_server_name}");
       return Err(ProxyError::no_destination_address());

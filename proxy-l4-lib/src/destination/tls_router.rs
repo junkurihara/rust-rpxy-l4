@@ -2,8 +2,6 @@
 //!
 //! This module provides improved TLS routing based on SNI and ALPN with priority-based matching.
 
-use crate::config::EchProtocolConfig;
-
 /// TLS routing rule with priority support
 #[derive(Debug, Clone)]
 pub struct TlsRoutingRule {
@@ -201,42 +199,7 @@ impl<T> Default for TlsRouter<T> {
   }
 }
 
-/// TLS destination item combining destination with ECH configuration
-#[derive(Debug, Clone)]
-pub struct TlsDestinationItem<T> {
-  /// The actual destination
-  pub destination: T,
-  /// Optional ECH configuration
-  pub ech_config: Option<EchProtocolConfig>,
-}
 
-impl<T> TlsDestinationItem<T> {
-  /// Create a new TLS destination item
-  pub fn new(destination: T) -> Self {
-    Self {
-      destination,
-      ech_config: None,
-    }
-  }
-
-  /// Create a new TLS destination item with ECH configuration
-  pub fn with_ech(destination: T, ech_config: EchProtocolConfig) -> Self {
-    Self {
-      destination,
-      ech_config: Some(ech_config),
-    }
-  }
-
-  /// Get the destination
-  pub fn destination(&self) -> &T {
-    &self.destination
-  }
-
-  /// Get the ECH configuration if available
-  pub fn ech_config(&self) -> Option<&EchProtocolConfig> {
-    self.ech_config.as_ref()
-  }
-}
 
 #[cfg(test)]
 mod tests {
@@ -326,12 +289,15 @@ mod tests {
 
   #[test]
   fn test_tls_destination_item() {
-    let item = TlsDestinationItem::new("test_destination");
+    // Import our TLS destination item from the tls module
+    use crate::destination::tls::TlsDestinationItem;
+    use crate::target::DnsCache;
+    use std::sync::Arc;
+    
+    let dns_cache = Arc::new(DnsCache::default());
+    let item = TlsDestinationItem::new("test_destination", None, dns_cache);
     assert_eq!(item.destination(), &"test_destination");
-    assert!(item.ech_config().is_none());
-
-    // Note: Can't easily test with_ech without creating a real EchProtocolConfig
-    // which requires more complex setup
+    assert!(item.ech().is_none());
   }
 
   #[test]

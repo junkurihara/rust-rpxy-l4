@@ -67,7 +67,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
   // Generate DNS cache
   let dns_cache = Arc::new(DnsCache::new(
     config.dns_cache_min_ttl.unwrap_or(DNS_CACHE_MIN_TTL),
-    config.dns_cache_max_ttl.unwrap_or_else(|| DNS_CACHE_MAX_TTL),
+    config.dns_cache_max_ttl.unwrap_or(DNS_CACHE_MAX_TTL),
   ));
 
   // For default targets

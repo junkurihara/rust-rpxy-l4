@@ -134,7 +134,7 @@ impl DnsCache {
     trace!("Addresses: {:?}", addresses);
 
     // Get minimum TTL from DNS response (or use default)
-    let expired_at = self.clamp_ttl(response.valid_until().clone());
+    let expired_at = self.clamp_ttl(response.valid_until());
 
     trace!("Expired at: {:?}", expired_at);
 

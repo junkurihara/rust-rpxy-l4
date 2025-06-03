@@ -250,9 +250,7 @@ impl TryFrom<ConfigToml> for Config {
     }
 
     // Build the final configuration with validation
-    builder
-      .build()
-      .map_err(|e| anyhow!("Configuration validation failed: {}", e))
+    builder.build().map_err(|e| anyhow!("Configuration validation failed: {}", e))
   }
 }
 

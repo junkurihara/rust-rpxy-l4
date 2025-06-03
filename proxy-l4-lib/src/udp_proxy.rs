@@ -2,7 +2,7 @@ use crate::{
   config::EchProtocolConfig,
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
-  destination::{LoadBalance, TargetDestination, TlsDestinationItem},
+  destination::{LoadBalance, integration::ModernTlsDestinations, tls::TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::UdpProtocolType,
@@ -20,8 +20,8 @@ use std::{
 use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
-/// Type alias for QUIC destinations
-type QuicDestinations = crate::destination::TlsDestinations<UdpDestinationInner>;
+/// Type alias for QUIC destinations - now using modern implementation
+type QuicDestinations = ModernTlsDestinations<UdpDestinationInner>;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
@@ -31,18 +31,19 @@ enum UdpDestination {
   /// Udp destinations specific for QUIC
   Quic(QuicDestinations),
 }
+
 #[derive(Debug, Clone)]
-/// Udp destination struct
+/// Udp destination struct - now using modern target destination
 pub(crate) struct UdpDestinationInner {
-  /// Destination socket address
-  inner: TargetDestination,
+  /// Modern destination inner
+  inner: crate::destination::integration::ModernTargetDestination,
   /// Connection idle lifetime in seconds
   /// If set to 0, no limit is applied for the destination
   connection_idle_lifetime: u32,
 }
 
 #[derive(Debug, Clone)]
-/// Destination struct found in the multiplexer from TcpProbedProtocol
+/// Destination struct found in the multiplexer from UdpProbedProtocol
 enum FoundUdpDestination {
   /// Udp destination
   Udp(UdpDestinationInner),
@@ -60,7 +61,7 @@ impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>, Option<u32>)>
       Option<u32>,
     ),
   ) -> Result<Self, Self::Error> {
-    let inner = TargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
+    let inner = crate::destination::integration::ModernTargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
     let connection_idle_lifetime = connection_idle_lifetime.unwrap_or(crate::constants::UDP_CONNECTION_IDLE_LIFETIME);
 
     Ok(Self {
@@ -103,7 +104,7 @@ impl FoundUdpDestination {
 /// Udp destination multiplexer
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct UdpDestinationMux {
-  /// Multiplexed TCP destinations
+  /// Multiplexed UDP destinations
   #[builder(default = "ahash::HashMap::default()")]
   inner: ahash::HashMap<UdpProtocolType, UdpDestination>,
 }
@@ -132,7 +133,7 @@ impl UdpDestinationMuxBuilder {
         } else {
           QuicDestinations::new()
         };
-        current_quic.add(&[], &[], udp_dest_inner, None, &dns_cache);
+        current_quic.add(&[], &[], udp_dest_inner, None, dns_cache);
         inner.insert(proto_type, UdpDestination::Quic(current_quic));
       }
       _ => {
@@ -144,6 +145,7 @@ impl UdpDestinationMuxBuilder {
   }
 
   /// Set Quic destinations, use this if alpn and server names are needed for protocol detection or ech is need to be configured
+  #[allow(clippy::too_many_arguments)]
   pub(crate) fn set_quic(
     &mut self,
     addrs: &[TargetAddr],
@@ -170,7 +172,7 @@ impl UdpDestinationMuxBuilder {
       alpn.unwrap_or_default(),
       udp_dest_inner,
       None, // TODO: currently NONE for ech
-      &dns_cache,
+      dns_cache,
     );
 
     inner.insert(UdpProtocolType::Quic, UdpDestination::Quic(current_quic));
@@ -288,7 +290,7 @@ pub struct UdpProxy {
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
 
-  /// Connection counter, set shared counter if #connections of all TCP proxies are needed
+  /// Connection counter, set shared counter if #connections of all UDP proxies are needed
   #[builder(default = "ConnectionCountSum::default()")]
   connection_count: ConnectionCountSum<SocketAddr>,
 
@@ -456,7 +458,7 @@ struct UdpInitialDatagramsBufferPool {
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
 
-  /// Connection counter, set shared counter if #connections of all TCP proxies are needed
+  /// Connection counter, set shared counter if #connections of all UDP proxies are needed
   connection_count: ConnectionCountSum<SocketAddr>,
 
   /// Max UDP concurrent connections
@@ -552,7 +554,7 @@ impl UdpInitialDatagramsBufferPool {
           .create_new_connection(
             &src_addr,
             udp_dst_inner,
-            &&probed_protocol.proto_type(),
+            &probed_protocol.proto_type(),
             self_clone.udp_socket_tx.clone(),
           )
           .await

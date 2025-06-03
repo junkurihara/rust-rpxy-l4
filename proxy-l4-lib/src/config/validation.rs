@@ -97,15 +97,12 @@ impl BasicConfigValidator {
 
   /// Validate DNS cache TTL settings
   pub fn validate_dns_cache_ttl(min_ttl: Option<Duration>, max_ttl: Option<Duration>) -> ValidationResult<()> {
-    match (min_ttl, max_ttl) {
-      (Some(min), Some(max)) => {
-        if min > max {
-          return Err(ConfigValidationError::ConflictingConfiguration {
-            reason: format!("DNS cache min_ttl ({:?}) cannot be greater than max_ttl ({:?})", min, max),
-          });
-        }
+    if let (Some(min), Some(max)) = (min_ttl, max_ttl) {
+      if min > max {
+        return Err(ConfigValidationError::ConflictingConfiguration {
+          reason: format!("DNS cache min_ttl ({:?}) cannot be greater than max_ttl ({:?})", min, max),
+        });
       }
-      _ => {}
     }
 
     // Validate reasonable TTL ranges

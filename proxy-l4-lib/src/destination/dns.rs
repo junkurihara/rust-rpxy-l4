@@ -11,7 +11,7 @@ use std::time::Duration;
 
 /// Trait for DNS resolution strategies
 #[async_trait::async_trait]
-pub trait DnsResolver {
+pub trait DnsResolver: Send + Sync {
   /// Resolve a hostname to socket addresses
   async fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>, NetworkError>;
 }

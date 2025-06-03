@@ -20,6 +20,9 @@ pub enum ProxyError {
   #[error(transparent)]
   Connection(#[from] ConnectionError),
 
+  #[error(transparent)]
+  Build(#[from] ProxyBuildError),
+
   /// Legacy error mapping for gradual migration
   #[error("Legacy error: {0}")]
   Legacy(String),

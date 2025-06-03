@@ -1700,6 +1700,7 @@ dependencies = [
  "env_logger",
  "log",
  "mio",
+ "rpxy-l4-lib",
  "rustls 0.23.27 (git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend)",
  "tokio",
  "webpki-roots",
@@ -1710,6 +1711,7 @@ name = "rpxy-l4-lib"
 version = "0.2.0"
 dependencies = [
  "ahash",
+ "anyhow",
  "bytes",
  "dashmap",
  "derive_builder",

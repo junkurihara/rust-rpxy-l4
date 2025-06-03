@@ -26,3 +26,8 @@ webpki-roots = { version = "1.0" }
 base64 = { version = "0.22.1" }
 tokio = { version = "1.45.1" }
 mio = { version = "1", features = ["net", "os-poll"] }
+rpxy-l4-lib = { path = "../proxy-l4-lib" }
+
+[[bin]]
+name = "phase3_error_demo"
+path = "phase3_error_demo.rs"

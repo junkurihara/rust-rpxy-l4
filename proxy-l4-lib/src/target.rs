@@ -103,7 +103,7 @@ impl DnsCache {
     let mut opts = ResolverOpts::default();
     opts.cache_size = 0; // Disable internal cache since we implement our own
     let resolver = TokioResolver::builder_tokio()
-      .map_err(|e| ProxyError::DnsResolutionError(format!("Failed to create resolver: {}", e)))?
+      .map_err(|e| ProxyError::dns_resolution_error(format!("Failed to create resolver: {}", e)))?
       .with_options(opts)
       .build();
 
@@ -113,7 +113,7 @@ impl DnsCache {
     let response = resolver
       .lookup_ip(domain)
       .await
-      .map_err(|e| ProxyError::DnsResolutionError(format!("Failed to resolve {}: {}", domain, e)))?;
+      .map_err(|e| ProxyError::dns_resolution_error(format!("Failed to resolve {}: {}", domain, e)))?;
 
     trace!("Response: {:?}", response);
 
@@ -123,7 +123,7 @@ impl DnsCache {
         debug!("No new addresses found, using last known good IPs for {}", domain);
         return Ok(entry.addresses.clone());
       }
-      return Err(ProxyError::DnsResolutionError(format!("No addresses found for {}", domain)));
+      return Err(ProxyError::dns_resolution_error(format!("No addresses found for {}", domain)));
     }
 
     trace!("Response IPs: {:?}", response);
@@ -237,17 +237,15 @@ impl FromStr for TargetAddr {
     match s.rsplit_once(':') {
       Some((domain, port)) => {
         if !Self::validate_domain(domain) {
-          return Err(ProxyError::InvalidAddress(String::from("Invalid domain name")));
+          return Err(ProxyError::invalid_address("Invalid domain name"));
         }
 
         let port = port
           .parse::<u16>()
-          .map_err(|_| ProxyError::InvalidAddress(String::from("Invalid port number")))?;
+          .map_err(|_| ProxyError::invalid_address("Invalid port number"))?;
         Ok(TargetAddr::Domain(domain.to_string(), port))
       }
-      None => Err(ProxyError::InvalidAddress(String::from(
-        "Invalid address format - missing port number",
-      ))),
+      None => Err(ProxyError::invalid_address("Invalid address format - missing port number")),
     }
   }
 }
@@ -370,7 +368,10 @@ mod tests {
 
     // Try with invalid domain, should fail with no fallback since no cache exists
     let err = cache.get_or_resolve("invalid.domain", 8080).await.unwrap_err();
-    assert!(matches!(err, ProxyError::DnsResolutionError(_)));
+    assert!(matches!(
+      err,
+      ProxyError::Network(crate::error::NetworkError::DnsError { .. })
+    ));
 
     // Try localhost again, should still work
     let resolved2 = cache.get_or_resolve("localhost", 8080).await.unwrap();

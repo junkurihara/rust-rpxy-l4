@@ -36,7 +36,7 @@ impl TryFrom<&str> for LoadBalance {
       "source_socket" => Ok(LoadBalance::SourceSocket),
       "random" => Ok(LoadBalance::Random),
       "none" => Ok(LoadBalance::None),
-      _ => Err(ProxyBuildError::InvalidLoadBalance(value.to_string())),
+      _ => Err(ProxyBuildError::invalid_load_balance(value.to_string())),
     }
   }
 }
@@ -95,13 +95,13 @@ impl TargetDestination {
       LoadBalance::None => 0,
     };
 
-    let target = self.dst_addrs.get(target_index).ok_or(ProxyError::NoDestinationAddress)?;
+    let target = self.dst_addrs.get(target_index).ok_or(ProxyError::no_destination_address())?;
 
     // Resolve the target to get actual socket addresses
     let resolved_addrs = target.resolve_cached(&self.dns_cache).await?;
 
     if resolved_addrs.is_empty() {
-      return Err(ProxyError::NoDestinationAddress);
+      return Err(ProxyError::no_destination_address());
     }
 
     // If we have multiple resolved addresses, select one consistently
@@ -142,7 +142,7 @@ impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, Arc<DnsCache>)> for TargetDes
       .load_balance(*load_balance)
       .dns_cache(dns_cache)
       .build()
-      .map_err(ProxyBuildError::TargetDestinationBuilderError)
+      .map_err(|e| ProxyBuildError::TargetDestinationBuilderError { source: e })
   }
 }
 

@@ -196,11 +196,11 @@ impl UdpDestinationMux {
       // Found Quic protocol
       Some(UdpDestination::Quic(quic_destinations)) => {
         let UdpProbedProtocol::Quic(client_hello) = probed_protocol else {
-          return Err(ProxyError::NoDestinationAddressForProtocol);
+          return Err(ProxyError::no_destination_address_for_protocol());
         };
         return quic_destinations
           .find(client_hello)
-          .ok_or(ProxyError::NoDestinationAddressForProtocol)
+          .ok_or(ProxyError::no_destination_address_for_protocol())
           .map(|found| {
             debug!("Setting up dest addr for {proto_type}");
             FoundUdpDestination::Quic(found.clone())
@@ -211,16 +211,16 @@ impl UdpDestinationMux {
 
     // if nothing is found, check for the default destination
     if proto_type == UdpProtocolType::Any {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::no_destination_address_for_protocol());
     }
     // Check for the default destination
     let destination_any = self
       .inner
       .get(&UdpProtocolType::Any)
       .cloned()
-      .ok_or(ProxyError::NoDestinationAddressForProtocol)?;
+      .ok_or(ProxyError::no_destination_address_for_protocol())?;
     let UdpDestination::Udp(dst) = destination_any else {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::no_destination_address_for_protocol());
     };
     debug!("Setting up dest addr for unspecified proto");
     Ok(FoundUdpDestination::Udp(dst.clone()))

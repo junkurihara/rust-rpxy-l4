@@ -173,11 +173,11 @@ impl TcpDestinationMux {
       // Found TLS protocol
       Some(TcpDestination::Tls(tls_destinations)) => {
         let TcpProbedProtocol::Tls(client_hello_buf) = probed_protocol else {
-          return Err(ProxyError::NoDestinationAddressForProtocol);
+          return Err(ProxyError::no_destination_address_for_protocol());
         };
         return tls_destinations
           .find(&client_hello_buf.client_hello)
-          .ok_or(ProxyError::NoDestinationAddressForProtocol)
+          .ok_or(ProxyError::no_destination_address_for_protocol())
           .map(|found| {
             debug!("Setting up dest addr for {proto_type}");
             FoundTcpDestination::Tls(found.clone())
@@ -188,16 +188,16 @@ impl TcpDestinationMux {
 
     // if nothing is found, check for the default destination
     if proto_type == TcpProtocolType::Any {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::no_destination_address_for_protocol());
     }
     // Check for the default destination
     let destination_any = self
       .inner
       .get(&TcpProtocolType::Any)
       .cloned()
-      .ok_or(ProxyError::NoDestinationAddressForProtocol)?;
+      .ok_or(ProxyError::no_destination_address_for_protocol())?;
     let TcpDestination::Tcp(dst) = destination_any else {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::no_destination_address_for_protocol());
     };
     debug!("Setting up dest addr for unspecified proto");
     Ok(FoundTcpDestination::Tcp(dst.clone()))
@@ -247,7 +247,7 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
   let read_len = incoming_stream.read_buf(buf).await?;
   if read_len == 0 {
     error!("No data received");
-    return Err(ProxyError::NoDataReceivedTcpStream);
+    return Err(ProxyError::no_data_received_tcp_stream());
   }
   Ok(read_len)
 }
@@ -506,20 +506,20 @@ async fn handle_tls_client_hello<T>(
     let sni = decrypted_ch.sni();
     let Some(private_server_name) = sni.iter().next() else {
       error!("No SNI in decrypted ClientHello");
-      return Err(ProxyError::TlsError(
-        quic_tls::TlsClientHelloError::NoSniInDecryptedClientHello,
-      ));
+      return Err(ProxyError::Protocol(crate::error::ProtocolError::TlsError {
+        source: quic_tls::TlsClientHelloError::NoSniInDecryptedClientHello,
+      }));
     };
     let Some(private_target_addr) = ech.private_server_names.get(private_server_name) else {
       error!("No matching private server name found in decrypted ClientHello");
-      return Err(ProxyError::EchNoMatchingPrivateServerName);
+      return Err(ProxyError::ech_no_matching_private_server_name());
     };
     // Replace the destination address with the one in the decrypted ClientHello Inner
     let dns_cache = tls_destination.dns_cache();
     let resolved = private_target_addr.resolve_cached(&dns_cache).await?;
     if resolved.is_empty() {
       error!("No destination address found for {private_server_name}");
-      return Err(ProxyError::NoDestinationAddress);
+      return Err(ProxyError::no_destination_address());
     }
     *dst_addr = resolved[0];
     debug!(
@@ -553,7 +553,7 @@ async fn send_back_tls_alert(incoming_stream: &mut TcpStream, alert_buf: &TlsAle
     }
     _ => {
       error!("Failed to write TLS alert to the incoming stream");
-      return Err(ProxyError::TlsAlertWriteError);
+      return Err(ProxyError::tls_alert_write_error());
     }
   }
 

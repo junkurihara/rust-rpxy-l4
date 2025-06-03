@@ -3,10 +3,10 @@ use quic_tls::{EchConfigList, EchPrivateKey};
 use std::{str::FromStr, time::Duration};
 
 pub mod builder;
-pub mod protocols;
-pub mod validation;
 #[cfg(test)]
 mod integration_tests;
+pub mod protocols;
+pub mod validation;
 
 pub use builder::{ConfigBuilder, ProtocolConfigBuilder};
 pub use protocols::*;
@@ -85,14 +85,14 @@ impl EchProtocolConfig {
     let private_keys = EchPrivateKey::try_compose_list_from_base64_with_config(private_keys, &ech_config_list)?;
 
     if private_keys.is_empty() {
-      return Err(ProxyBuildError::InvalidEchPrivateKey(format!(
+      return Err(ProxyBuildError::invalid_ech_private_key(format!(
         "No valid private keys found for ECH config list: {ech_config_list:?}"
       )));
     }
 
     if private_server_names.is_empty() {
-      return Err(ProxyBuildError::InvalidEchPrivateServerName(
-        "No valid private server names found for ECH config list".to_string(),
+      return Err(ProxyBuildError::invalid_ech_private_server_name(
+        "No valid private server names found for ECH config list",
       ));
     }
 

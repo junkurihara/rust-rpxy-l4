@@ -158,7 +158,7 @@ impl UdpConnection {
         self.inner.src_addr, self.inner.dst_addr
       );
       self.inner.cancel_token.cancel(); // cancellation will remove the connection from the pool
-      ProxyError::BrokenUdpConnection
+      ProxyError::broken_udp_connection()
     })
   }
   /// Send multiple datagrams to the UdpConnection
@@ -280,7 +280,7 @@ impl UdpConnectionInner {
       loop {
         let Some(datagram) = channel_rx.recv().await else {
           error!("Error receiving datagram from channel");
-          return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
+          return Err(ProxyError::broken_udp_connection()) as Result<(), ProxyError>;
         };
         trace!(
           "[{} -> {}] received {} bytes from downstream",
@@ -292,7 +292,7 @@ impl UdpConnectionInner {
 
         if let Err(e) = udp_socket_to_upstream_tx.send(datagram.as_slice()).await {
           error!("Error sending datagram to upstream: {e}");
-          return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
+          return Err(ProxyError::broken_udp_connection()) as Result<(), ProxyError>;
         };
       }
     };
@@ -315,7 +315,7 @@ impl UdpConnectionInner {
         let buf_size = match udp_socket_to_upstream_rx.recv(&mut udp_buf).await {
           Err(e) => {
             error!("Error in UDP listener for upstream: {e}");
-            return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
+            return Err(ProxyError::broken_udp_connection()) as Result<(), ProxyError>;
           }
           Ok(res) => res,
         };
@@ -334,7 +334,7 @@ impl UdpConnectionInner {
           .await
         {
           error!("Error sending datagram to downstream: {e}");
-          return Err(ProxyError::BrokenUdpConnection) as Result<(), ProxyError>;
+          return Err(ProxyError::broken_udp_connection()) as Result<(), ProxyError>;
         };
       }
     };

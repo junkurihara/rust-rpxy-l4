@@ -5,8 +5,8 @@ mod count;
 mod destination;
 mod error;
 mod probe;
-mod protocol;
 mod proto;
+mod protocol;
 mod socket;
 mod target;
 mod tcp_proxy;
@@ -19,14 +19,21 @@ use constants::{DNS_CACHE_MAX_TTL, DNS_CACHE_MIN_TTL};
 use std::sync::Arc;
 use target::DnsCache;
 
-pub use config::{Config, EchProtocolConfig, ProtocolConfig, ConfigBuilder, ProtocolConfigBuilder};
+pub use config::{Config, ConfigBuilder, EchProtocolConfig, ProtocolConfig, ProtocolConfigBuilder};
 pub use constants::log_event_names;
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
-pub use error::{ProxyBuildError, ProxyError};
+pub use error::{
+  ProxyBuildError, ProxyError, ConfigurationError, NetworkError, ProtocolError, ConnectionError, ErrorContext
+};
 pub use probe::ProbeResult;
 pub use proto::ProtocolType;
-pub use protocol::{ProtocolDetector, registry::{TcpProtocolRegistry, UdpProtocolRegistry}, tcp::*, udp::*};
+pub use protocol::{
+  ProtocolDetector,
+  registry::{TcpProtocolRegistry, UdpProtocolRegistry},
+  tcp::*,
+  udp::*,
+};
 pub use target::TargetAddr;
 pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProxy, TcpProxyBuilder};
 pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpProxyBuilder};
@@ -66,7 +73,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
   for (key, spec) in config.protocols.iter() {
     let target: &[_] = spec.target.as_ref();
     if target.is_empty() {
-      return Err(ProxyBuildError::BuildMultiplexersError(format!(
+      return Err(ProxyBuildError::build_multiplexers_error(format!(
         "target is empty for key: {key}"
       )));
     }

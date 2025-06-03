@@ -24,7 +24,7 @@ impl TryFrom<&str> for ProtocolType {
       "ssh" => Ok(ProtocolType::Ssh),
       "wireguard" => Ok(ProtocolType::Wireguard),
       "quic" => Ok(ProtocolType::Quic),
-      _ => Err(ProxyBuildError::UnsupportedProtocol(value.to_string())),
+      _ => Err(ProxyBuildError::unsupported_protocol(value.to_string())),
     }
   }
 }

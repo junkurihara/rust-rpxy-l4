@@ -4,10 +4,10 @@
 //! while maintaining backward compatibility.
 
 use super::{
-  dns::{CachingDnsResolver, DnsResolver},
   config::LoadBalance,
-  tls::TlsDestinationItem,
+  dns::{CachingDnsResolver, DnsResolver},
   load_balancer::{FirstAvailableLoadBalancer, LoadBalancer, RandomLoadBalancer, SourceIpLoadBalancer, SourceSocketLoadBalancer},
+  tls::TlsDestinationItem,
   tls_router::{TlsRouter, TlsRoutingRule},
 };
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
 use std::{fmt, net::SocketAddr, sync::Arc};
 
 // Debug implementations for the structs
-impl fmt::Debug for ModernTargetDestination {
+impl fmt::Debug for TargetDestination {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("ModernTargetDestination")
       .field("targets", &self.targets)
@@ -28,7 +28,7 @@ impl fmt::Debug for ModernTargetDestination {
   }
 }
 
-impl<T: fmt::Debug> fmt::Debug for ModernTlsDestinations<T> {
+impl<T: fmt::Debug> fmt::Debug for TlsDestinations<T> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("ModernTlsDestinations").field("router", &self.router).finish()
   }
@@ -37,13 +37,13 @@ impl<T: fmt::Debug> fmt::Debug for ModernTlsDestinations<T> {
 /// Modern replacement for legacy TargetDestination
 /// Combines DNS resolution and load balancing using new abstractions
 #[derive(Clone)]
-pub struct ModernTargetDestination {
+pub struct TargetDestination {
   targets: Vec<TargetAddr>,
   dns_resolver: Arc<dyn DnsResolver>,
   load_balancer: Arc<dyn LoadBalancer>,
 }
 
-impl ModernTargetDestination {
+impl TargetDestination {
   /// Create a new modern target destination
   pub fn new(targets: Vec<TargetAddr>, dns_resolver: Arc<dyn DnsResolver>, load_balancer: Arc<dyn LoadBalancer>) -> Self {
     Self {
@@ -90,7 +90,7 @@ pub fn create_load_balancer(load_balance: LoadBalance) -> Arc<dyn LoadBalancer> 
 }
 
 /// Convert legacy configuration to modern target destination
-impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, Arc<DnsCache>)> for ModernTargetDestination {
+impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, Arc<DnsCache>)> for TargetDestination {
   type Error = ProxyBuildError;
 
   fn try_from(
@@ -111,11 +111,11 @@ impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, Arc<DnsCache>)> for ModernTar
 /// Modern replacement for legacy TlsDestinations
 /// Uses the new TlsRouter with proper rule-based routing
 #[derive(Clone)]
-pub struct ModernTlsDestinations<T> {
+pub struct TlsDestinations<T> {
   router: TlsRouter<TlsDestinationItem<T>>,
 }
 
-impl<T> ModernTlsDestinations<T> {
+impl<T> TlsDestinations<T> {
   /// Create a new modern TLS destinations router
   pub fn new() -> Self {
     Self {
@@ -158,7 +158,7 @@ impl<T> ModernTlsDestinations<T> {
   }
 }
 
-impl<T> Default for ModernTlsDestinations<T> {
+impl<T> Default for TlsDestinations<T> {
   fn default() -> Self {
     Self::new()
   }
@@ -180,7 +180,7 @@ mod tests {
 
     let targets = vec![TargetAddr::Domain("example.com".to_string(), 80)];
 
-    let destination = ModernTargetDestination::new(targets, mock_dns, load_balancer);
+    let destination = TargetDestination::new(targets, mock_dns, load_balancer);
 
     let src_addr = "10.0.0.1:12345".parse().unwrap();
     let result = destination.get_destination(&src_addr).await.unwrap();
@@ -191,11 +191,12 @@ mod tests {
   #[tokio::test]
   async fn test_modern_tls_destinations() {
     let dns_cache = Arc::new(DnsCache::default());
-    let mut tls_destinations = ModernTlsDestinations::new();
+    let mut tls_destinations = TlsDestinations::new();
 
     // Mock destination type
     #[derive(Debug, Clone)]
     struct MockDestination {
+      #[allow(dead_code)]
       address: SocketAddr,
     }
 

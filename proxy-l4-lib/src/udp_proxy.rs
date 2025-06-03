@@ -2,7 +2,7 @@ use crate::{
   config::EchProtocolConfig,
   constants::UDP_BUFFER_SIZE,
   count::ConnectionCountSum,
-  destination::{LoadBalance, integration::ModernTlsDestinations, tls::TlsDestinationItem},
+  destination::{LoadBalance, integration::TlsDestinations, tls::TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::UdpProtocolType,
@@ -21,7 +21,7 @@ use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
 /// Type alias for QUIC destinations - now using modern implementation
-type QuicDestinations = ModernTlsDestinations<UdpDestinationInner>;
+type QuicDestinations = TlsDestinations<UdpDestinationInner>;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ enum UdpDestination {
 /// Udp destination struct - now using modern target destination
 pub(crate) struct UdpDestinationInner {
   /// Modern destination inner
-  inner: crate::destination::integration::ModernTargetDestination,
+  inner: crate::destination::integration::TargetDestination,
   /// Connection idle lifetime in seconds
   /// If set to 0, no limit is applied for the destination
   connection_idle_lifetime: u32,
@@ -61,7 +61,7 @@ impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>, Option<u32>)>
       Option<u32>,
     ),
   ) -> Result<Self, Self::Error> {
-    let inner = crate::destination::integration::ModernTargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
+    let inner = crate::destination::integration::TargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
     let connection_idle_lifetime = connection_idle_lifetime.unwrap_or(crate::constants::UDP_CONNECTION_IDLE_LIFETIME);
 
     Ok(Self {

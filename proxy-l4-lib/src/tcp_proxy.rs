@@ -3,7 +3,11 @@ use crate::{
   config::EchProtocolConfig,
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
-  destination::{LoadBalance, integration::ModernTlsDestinations, tls::TlsDestinationItem},
+  destination::{
+    LoadBalance,
+    integration::{self, TargetDestination},
+    tls::TlsDestinationItem,
+  },
   error::{ProxyBuildError, ProxyError},
   probe::ProbeResult,
   proto::TcpProtocolType,
@@ -23,7 +27,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 /// Type alias for TLS destinations - now using modern implementation
-type TlsDestinations = ModernTlsDestinations<TcpDestinationInner>;
+type TlsDestinations = integration::TlsDestinations<TcpDestinationInner>;
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone)]
@@ -39,11 +43,11 @@ enum TcpDestination {
 /// Tcp destination struct - now using modern target destination
 struct TcpDestinationInner {
   /// Modern destination inner
-  inner: crate::destination::integration::ModernTargetDestination,
+  inner: TargetDestination,
 }
 
 #[derive(Debug, Clone)]
-/// Destination struct found in the multiplexer from TcpProbedProtocol
+/// Destination struct found in the multiplexer from TcpProtocol
 enum FoundTcpDestination {
   /// Tcp destination
   Tcp(TcpDestinationInner),
@@ -56,7 +60,7 @@ impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>)> for TcpDesti
   fn try_from(
     (dst_addrs, load_balance, dns_cache): (&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>),
   ) -> Result<Self, Self::Error> {
-    let inner = crate::destination::integration::ModernTargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
+    let inner = crate::destination::integration::TargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
     Ok(Self { inner })
   }
 }

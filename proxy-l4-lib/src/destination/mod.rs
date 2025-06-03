@@ -13,7 +13,7 @@ pub mod tls_router;
 // Re-export public types
 pub use config::LoadBalance;
 pub use dns::{CachingDnsResolver, DnsResolver, MockDnsResolver};
-pub use integration::{ModernTargetDestination, ModernTlsDestinations, create_load_balancer};
+pub use integration::{TargetDestination, TlsDestinations, create_load_balancer};
 pub use load_balancer::{
   FirstAvailableLoadBalancer, LoadBalancer, RandomLoadBalancer, RoundRobinLoadBalancer, SourceIpLoadBalancer,
   SourceSocketLoadBalancer,

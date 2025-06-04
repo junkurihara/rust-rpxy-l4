@@ -265,11 +265,13 @@ pub struct TcpProxy {
 
   #[builder(default = "ConnectionCount::default()")]
   /// Connection counter, set shared counter if #connections of all TCP proxies are needed
+  /// TODO: これはconnection_manager内部のが良さそう
   connection_count: ConnectionCount,
 
   #[builder(default = "crate::constants::MAX_TCP_CONCURRENT_CONNECTIONS")]
   /// Maximum number of concurrent connections
   /// If `cnt` is shared with other spawned TCP proxies, this value is evaluated for the total number of connections
+  /// TODO: これはconnection_manager内部のが良さそう
   max_connections: usize,
 
   /// TCP connection manager for handling connection lifecycle
@@ -290,13 +292,6 @@ impl TcpProxyBuilder {
     Ok(TcpConnectionManager::new(connection_count, max_connections))
   }
 }
-
-// // Implement From trait to convert ProxyBuildError to TcpProxyBuilderError
-// impl From<ProxyBuildError> for TcpProxyBuilderError {
-//   fn from(err: ProxyBuildError) -> Self {
-//     TcpProxyBuilderError::ValidationError(err.to_string())
-//   }
-// }
 
 impl TcpProxy {
   /// Start the TCP proxy

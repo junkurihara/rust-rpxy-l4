@@ -13,6 +13,7 @@ use tokio::net::TcpStream;
 #[derive(Debug, Clone, Default)]
 pub struct TcpConnectionManager {
   /// Connection counter for tracking active connections
+  /// Set shared counter if #connections of all TCP proxies are needed
   connection_count: ConnectionCount,
   /// Maximum number of concurrent connections allowed
   max_connections: usize,
@@ -89,11 +90,11 @@ impl ConnectionManager for TcpConnectionManager {
     let context = ConnectionContext::new(src, dst, protocol.to_string());
 
     debug!(
-        connection_id = %context.connection_id,
-        src_addr = %src,
-        dst_addr = %dst,
-        protocol = %protocol,
-        "TCP connection created"
+      connection_id = %context.connection_id,
+      src_addr = %src,
+      dst_addr = %dst,
+      protocol = %protocol,
+      "TCP connection created"
     );
 
     // Note: The incoming stream will be provided when handle_connection is called

@@ -196,11 +196,11 @@ impl UdpDestinationMux {
       // Found Quic protocol
       Some(UdpDestination::Quic(quic_destinations)) => {
         let UdpProbedProtocol::Quic(client_hello) = probed_protocol else {
-          return Err(ProxyError::NoDestinationAddressForProtocol);
+          return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
         };
         return quic_destinations
           .find(client_hello)
-          .ok_or(ProxyError::NoDestinationAddressForProtocol)
+          .ok_or(ProxyError::NoDestinationAddressForProtocol(String::new()))
           .map(|found| {
             debug!("Setting up dest addr for {proto_type}");
             FoundUdpDestination::Quic(found.clone())
@@ -211,16 +211,16 @@ impl UdpDestinationMux {
 
     // if nothing is found, check for the default destination
     if proto_type == UdpProtocolType::Any {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
     }
     // Check for the default destination
     let destination_any = self
       .inner
       .get(&UdpProtocolType::Any)
       .cloned()
-      .ok_or(ProxyError::NoDestinationAddressForProtocol)?;
+      .ok_or(ProxyError::NoDestinationAddressForProtocol(String::new()))?;
     let UdpDestination::Udp(dst) = destination_any else {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
     };
     debug!("Setting up dest addr for unspecified proto");
     Ok(FoundUdpDestination::Udp(dst.clone()))
@@ -399,7 +399,10 @@ impl UdpProxy {
       loop {
         let (buf_size, src_addr) = match udp_socket_rx.recv_from(&mut udp_buf).await {
           Err(e) => {
-            error!("Error in UDP listener for downstream: {e}");
+            let contextual_error = ProxyError::IoError(e)
+              .with_source_context(self.listen_on)
+              .with_protocol_context("UDP");
+            error!("Error in UDP listener on {}: {contextual_error}", self.listen_on);
             break;
           }
           Ok(res) => res,
@@ -422,7 +425,7 @@ impl UdpProxy {
 
         // Buffer the initial datagram
         if let Err(e) = udp_initial_datagrams_tx.send((src_addr, udp_buf[..buf_size].to_vec())).await {
-          error!("Failed to buffer the initial UDP datagram: {e}");
+          error!("Failed to buffer initial UDP datagram from {src_addr}: {e}");
           continue;
         }
       }
@@ -569,7 +572,11 @@ impl UdpInitialDatagramsBufferPool {
           None => {
             // Check the connection limit
             if self_clone.max_connections > 0 && self_clone.connection_count.current() >= self_clone.max_connections {
-              warn!("UDP connection limit reached: {}", self_clone.max_connections);
+              let limit_error = ProxyError::TooManyUdpConnections(String::new()).with_source_context(src_addr);
+              warn!(
+                "UDP connection limit ({}) reached, rejecting connection from {src_addr}: {limit_error}",
+                self_clone.max_connections
+              );
               continue;
             }
             debug!("No existing initial datagram buffer for {}", src_addr);
@@ -582,8 +589,11 @@ impl UdpInitialDatagramsBufferPool {
         };
 
         // Handle with probe result
-        let Ok(probe_result) = UdpProbedProtocol::detect_protocol(&mut initial_datagrams).await else {
-          error!("Failed to probe protocol from the incoming datagram");
+        let Ok(probe_result) = UdpProbedProtocol::detect_protocol(&mut initial_datagrams).await.map_err(|e| {
+          let contextual_error = e.with_source_context(src_addr).with_protocol_context("UDP");
+          error!("Failed to detect UDP protocol from {src_addr}: {contextual_error}");
+          contextual_error
+        }) else {
           continue;
         };
         let probed_protocol = match probe_result {
@@ -600,8 +610,13 @@ impl UdpInitialDatagramsBufferPool {
         debug!("Release the datagram buffer for {}", src_addr);
         self_clone.inner.remove(&src_addr);
 
-        let Ok(found_dst) = self_clone.destination_mux.find_destination(&probed_protocol) else {
-          error!("No destination address found for protocol: {}", probed_protocol);
+        let Ok(found_dst) = self_clone.destination_mux.find_destination(&probed_protocol).map_err(|e| {
+          let contextual_error = e
+            .with_source_context(src_addr)
+            .with_protocol_context(&probed_protocol.to_string());
+          error!("No destination found for {probed_protocol} from {src_addr}: {contextual_error}");
+          contextual_error
+        }) else {
           continue;
         };
         let udp_dst_inner = match &found_dst {

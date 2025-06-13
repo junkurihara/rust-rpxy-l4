@@ -5,17 +5,17 @@ use crate::{
   count::ConnectionCount,
   destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
-  probe::ProbeResult,
+  probe::{ProbeResult, TcpProbedProtocol},
   proto::TcpProtocolType,
   socket::bind_tcp_socket,
   target::{DnsCache, TargetAddr},
   trace::*,
 };
 use bytes::BytesMut;
-use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer, TlsProbeFailure, probe_tls_handshake};
+use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
-  io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional},
+  io::{AsyncWriteExt, copy_bidirectional},
   net::TcpStream,
   time::{Duration, timeout},
 };
@@ -201,128 +201,6 @@ impl TcpDestinationMux {
     };
     debug!("Setting up dest addr for unspecified proto");
     Ok(FoundTcpDestination::Tcp(dst.clone()))
-  }
-}
-
-/* ---------------------------------------------------------- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Probed TCP proxy protocol, specific protocols like SSH, and default is "any".
-enum TcpProbedProtocol {
-  /// any, default
-  Any,
-  /// SSH
-  Ssh,
-  /// Plaintext HTTP
-  Http,
-  /// TLS
-  Tls(TlsClientHelloBuffer),
-  // TODO: and more ...
-}
-
-impl TcpProbedProtocol {
-  fn proto_type(&self) -> TcpProtocolType {
-    match self {
-      Self::Any => TcpProtocolType::Any,
-      Self::Ssh => TcpProtocolType::Ssh,
-      Self::Http => TcpProtocolType::Http,
-      Self::Tls(_) => TcpProtocolType::Tls,
-    }
-  }
-}
-
-impl std::fmt::Display for TcpProbedProtocol {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::Any => write!(f, "Any"),
-      Self::Ssh => write!(f, "SSH"),
-      Self::Http => write!(f, "HTTP"),
-      Self::Tls(_) => write!(f, "TLS"),
-      // TODO: and more...
-    }
-  }
-}
-
-/// Poll the incoming TCP stream to detect the protocol
-async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<usize, ProxyError> {
-  let read_len = incoming_stream.read_buf(buf).await?;
-  if read_len == 0 {
-    error!("No data received");
-    return Err(ProxyError::NoDataReceivedTcpStream(String::new()));
-  }
-  Ok(read_len)
-}
-
-/// Is SSH
-fn is_ssh(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
-  if buf.len() < 4 {
-    return ProbeResult::PollNext;
-  }
-  if buf.starts_with(b"SSH-") {
-    debug!("SSH connection detected");
-    ProbeResult::Success(TcpProbedProtocol::Ssh)
-  } else {
-    ProbeResult::Failure
-  }
-}
-
-/// Is HTTP
-fn is_http(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
-  if buf.len() < 4 {
-    return ProbeResult::PollNext;
-  }
-  if buf.windows(4).any(|w| w.eq(b"HTTP")) {
-    debug!("HTTP connection detected");
-    ProbeResult::Success(TcpProbedProtocol::Http)
-  } else {
-    ProbeResult::Failure
-  }
-}
-
-/// Is TLS handshake
-fn is_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
-  let mut buf = BytesMut::from(buf);
-  match probe_tls_handshake(&mut buf) {
-    Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
-    Err(TlsProbeFailure::PollNext) => ProbeResult::PollNext,
-    Ok(chi) => ProbeResult::Success(TcpProbedProtocol::Tls(chi)),
-  }
-}
-
-impl TcpProbedProtocol {
-  /// Detect the protocol from the first few bytes of the incoming stream
-  async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<Self>, ProxyError> {
-    let mut probe_functions = vec![is_ssh, is_http, is_tls_handshake];
-
-    while !probe_functions.is_empty() {
-      // Read the first several bytes to probe. at the first loop, the buffer is empty.
-      let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
-      let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
-      buf.extend_from_slice(&next_buf[..]);
-
-      // Check probe functions
-      #[allow(clippy::type_complexity)]
-      let (new_probe_fns, probe_res): (Vec<fn(&[u8]) -> ProbeResult<_>>, Vec<_>) = probe_functions
-        .into_iter()
-        .filter_map(|f| {
-          let res = f(buf);
-          match res {
-            ProbeResult::Success(_) | ProbeResult::PollNext => Some((f, res)),
-            _ => None,
-          }
-        })
-        .unzip();
-
-      // If any of them returns Success, return the protocol.
-      if let Some(probe_success) = probe_res.into_iter().find(|r| matches!(r, ProbeResult::Success(_))) {
-        return Ok(probe_success);
-      };
-
-      // If the rest returned PollNext, fetch more data
-      probe_functions = new_probe_fns;
-    }
-
-    debug!("Untyped TCP connection");
-    Ok(ProbeResult::Success(Self::Any))
   }
 }
 

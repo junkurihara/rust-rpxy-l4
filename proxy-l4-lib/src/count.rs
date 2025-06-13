@@ -60,3 +60,68 @@ where
     Self(Arc::new(DashMap::default()))
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_connection_count_basic() {
+    let count = ConnectionCount::default();
+
+    assert_eq!(count.current(), 0);
+
+    count.increment();
+    assert_eq!(count.current(), 1);
+
+    count.increment();
+    assert_eq!(count.current(), 2);
+
+    count.decrement();
+    assert_eq!(count.current(), 1);
+  }
+
+  #[test]
+  fn test_connection_count_multiple_operations() {
+    let count = ConnectionCount::default();
+
+    // Simulate multiple connections over time
+    for _ in 0..5 {
+      count.increment();
+      count.decrement();
+    }
+
+    assert_eq!(count.current(), 0);
+  }
+
+  #[test]
+  fn test_connection_count_sum_basic() {
+    let count = ConnectionCountSum::<&str>::default();
+
+    assert_eq!(count.current(), 0);
+
+    count.set("addr1", 3);
+    assert_eq!(count.current(), 3);
+
+    count.set("addr2", 2);
+    assert_eq!(count.current(), 5);
+
+    // Reducing connections
+    count.set("addr1", 1);
+    assert_eq!(count.current(), 3);
+  }
+
+  #[test]
+  fn test_connection_count_sum_operations() {
+    let count = ConnectionCountSum::<&str>::default();
+
+    // Test setting and updating values
+    let old = count.set("addr1", 5);
+    assert_eq!(old, 0);
+    assert_eq!(count.current(), 5);
+
+    let old = count.set("addr1", 8);
+    assert_eq!(old, 5);
+    assert_eq!(count.current(), 8);
+  }
+}

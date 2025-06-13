@@ -1,0 +1,108 @@
+name: Release
+on:
+  workflow_run:
+    workflows:
+      - "Build and Push Docker Image"
+    types:
+      - "completed"
+    branches:
+      - main
+      - develop
+  repository_dispatch:
+    types:
+      - release-event
+
+jobs:
+  on-success:
+    permissions:
+      contents: read
+      packages: read
+
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }} || ${{ github.event_name == 'repositry_dispatch' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: "musl"
+            platform: linux/amd64
+
+          - target: "musl"
+            platform: linux/arm64
+
+    steps:
+      - run: "echo 'The release triggering workflows passed'"
+
+      - name: "set env"
+        id: "set-env"
+        run: |
+          if [ ${{ matrix.platform }} == 'linux/amd64' ]; then PLATFORM_MAP="x86_64"; else PLATFORM_MAP="aarch64"; fi
+          if [ ${{ github.ref_name }} == 'main' ]; then BUILD_IMG="latest"; else BUILD_IMG="nightly"; fi
+          echo "build_img=${BUILD_IMG}" >> $GITHUB_OUTPUT
+          echo "target_name=rpxy-l4-${PLATFORM_MAP}-unknown-linux-${{ matrix.target }}" >> $GITHUB_OUTPUT
+
+      - name: "docker pull and extract binary from docker image"
+        id: "extract-binary"
+        run: |
+          CONTAINER_ID=`docker create --platform=${{ matrix.platform }} ghcr.io/junkurihara/rust-rpxy-l4:${{ steps.set-env.outputs.build_img }}`
+          docker cp ${CONTAINER_ID}:/rpxy-l4/bin/rpxy-l4 /tmp/${{ steps.set-env.outputs.target_name }}
+
+      - name: "upload artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.set-env.outputs.target_name }}
+          path: "/tmp/${{ steps.set-env.outputs.target_name }}"
+
+  on-failure:
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - run: echo 'The release triggering workflows failed'
+
+  release:
+    permissions:
+      contents: write
+
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'repository_dispatch' }}
+    needs: on-success
+    steps:
+      - name: check pull_request title
+        uses: kaisugi/action-regex-match@v1.0.1
+        id: regex-match
+        with:
+          text: ${{ github.event.client_payload.pull_request.title }}
+          regex: "^(\\d+\\.\\d+\\.\\d+)$"
+
+      - name: checkout
+        if: ${{ steps.regex-match.outputs.match != '' }}
+        uses: actions/checkout@v4
+
+      - name: download artifacts
+        if: ${{ steps.regex-match.outputs.match != ''}}
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/rpxy-l4
+
+      - name: make tar.gz of assets
+        if: ${{ steps.regex-match.outputs.match != ''}}
+        run: |
+          mkdir /tmp/assets
+          cd /tmp/rpxy-l4
+          for i in ./*; do sh -c "cd $i && tar zcvf $i.tar.gz $i && mv $i.tar.gz /tmp/assets/"; done
+          ls -lha /tmp/assets
+
+      - name: release
+        if: ${{ steps.regex-match.outputs.match != ''}}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/assets/*.tar.gz
+          name: ${{ github.event.client_payload.pull_request.title }}
+          tag_name: ${{ github.event.client_payload.pull_request.title }}
+          body: ${{ github.event.client_payload.pull_request.body }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true

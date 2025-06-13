@@ -1,0 +1,42 @@
+[package]
+name = "rpxy-l4-examples"
+description = "examples and utils for rpxy-l4"
+version.workspace = true
+edition.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+# rustls = { version = "0.23.25", features = ["logging"] }
+# rustls = { path = "../../rustls/rustls/", features = ["logging"] }
+rustls = { git = "https://github.com/junkurihara/rustls.git", package = "rustls", branch = "ech-split-backend", features = [
+  "logging",
+] }
+clap = { version = "4", features = ["derive"] }
+# hickory-resolver = { version = "0.25.1", features = [
+#   "webpki-roots",
+#   "https-aws-lc-rs",
+# ] }
+log = { version = "0.4.27" }
+env_logger = { version = "0.11" }
+webpki-roots = { version = "1.0" }
+base64 = { version = "0.22.1" }
+tokio = { version = "1.45.1" }
+tokio-util = { version = "0.7" }
+mio = { version = "1", features = ["net", "os-poll"] }
+rpxy-l4-lib = { path = "../proxy-l4-lib" }
+rpxy-l4-quic-tls = { path = "../quic-tls" }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3" }
+bytes = { version = "1.0" }
+
+[[bin]]
+name = "phase3_error_demo"
+path = "phase3_error_demo.rs"
+
+[[bin]]
+name = "phase4_connection_management_demo"
+path = "phase4_connection_management_demo.rs"

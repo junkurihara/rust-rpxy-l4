@@ -1,4 +1,3 @@
-use crate::trace::*;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{SocketAddr, UdpSocket};
 use tokio::net::TcpSocket;
@@ -16,10 +15,7 @@ pub(super) fn bind_tcp_socket(listening_on: &SocketAddr) -> Result<TcpSocket, st
   #[cfg(not(target_os = "windows"))]
   tcp_socket.set_reuseport(true)?;
 
-  if let Err(e) = tcp_socket.bind(*listening_on) {
-    error!("Failed to bind TCP socket: {}", e);
-    return Err(e);
-  };
+  tcp_socket.bind(*listening_on)?;
   Ok(tcp_socket)
 }
 
@@ -38,11 +34,6 @@ pub(super) fn bind_udp_socket(listening_on: &SocketAddr) -> Result<UdpSocket, st
 
   socket.set_nonblocking(true)?; // This is important to use `recv_from` in the UDP listener
 
-  if let Err(e) = socket.bind(&(*listening_on).into()) {
-    error!("Failed to bind UDP socket: {}", e);
-    return Err(e);
-  };
-  let udp_socket: UdpSocket = socket.into();
-
-  Ok(udp_socket)
+  socket.bind(&(*listening_on).into())?;
+  Ok(socket.into())
 }

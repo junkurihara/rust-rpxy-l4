@@ -1,175 +1,251 @@
 use crate::{
+  access_log::{AccessLogProtocolType, access_log_start},
+  config::EchProtocolConfig,
+  connection::{
+    ConnectionManager,
+    tcp::{TcpConnection, TcpConnectionManager},
+  },
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
-  error::ProxyError,
+  destination::{
+    LoadBalance,
+    integration::{self, TargetDestination},
+    tls::TlsDestinationItem,
+  },
+  error::{ProxyBuildError, ProxyError},
+  proto::TcpProtocolType,
+  protocol::{ProbeResult, registry::TcpProtocolRegistry, tcp::TcpProtocol},
   socket::bind_tcp_socket,
-  tls::is_tls_handshake,
+  target::{DnsCache, TargetAddr},
   trace::*,
 };
-
+use bytes::BytesMut;
+use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
-  io::copy_bidirectional,
+  io::{AsyncReadExt, AsyncWriteExt},
   net::TcpStream,
-  time::{timeout, Duration},
+  time::{Duration, timeout},
 };
 use tokio_util::sync::CancellationToken;
 
+/// Type alias for TLS destinations - now using modern implementation
+type TlsDestinations = integration::TlsDestinations<TcpDestinationInner>;
+
+/* ---------------------------------------------------------- */
+#[derive(Debug, Clone)]
+/// Tcp destination enum
+enum TcpDestination {
+  /// Tcp destination
+  Tcp(TcpDestinationInner),
+  /// Tcp destinations specific to Tls
+  Tls(TlsDestinations),
+}
+
+#[derive(Debug, Clone)]
+/// Tcp destination struct - now using modern target destination
+struct TcpDestinationInner {
+  /// Modern destination inner
+  inner: TargetDestination,
+}
+
+#[derive(Debug, Clone)]
+/// Destination struct found in the multiplexer from TcpProtocol
+enum FoundTcpDestination {
+  /// Tcp destination
+  Tcp(TcpDestinationInner),
+  /// Tls destination
+  Tls(TlsDestinationItem<TcpDestinationInner>),
+}
+
+impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>)> for TcpDestinationInner {
+  type Error = ProxyBuildError;
+  fn try_from(
+    (dst_addrs, load_balance, dns_cache): (&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>),
+  ) -> Result<Self, Self::Error> {
+    let inner = crate::destination::integration::TargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
+    Ok(Self { inner })
+  }
+}
+
+impl TcpDestinationInner {
+  /// Get the destination socket address
+  pub(crate) async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
+    self.inner.get_destination(src_addr).await
+  }
+}
+
+impl FoundTcpDestination {
+  /// Get the destination socket address
+  async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
+    match self {
+      Self::Tcp(tcp_destination) => tcp_destination.get_destination(src_addr).await,
+      Self::Tls(tls_destination) => tls_destination.destination().get_destination(src_addr).await,
+    }
+  }
+}
+
 /* ---------------------------------------------------------- */
 /// TCP destination multiplexer
-/// TODO: Load balance with multiple addresses
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct TcpDestinationMux {
-  /// destination socket address for any protocol
-  /// If this is set, it will be used for all protocols except the specific (non-None) protocols.
-  #[builder(setter(custom), default = "None")]
-  dst_any: Option<SocketAddr>,
-  /// destination socket address for SSH protocol
-  #[builder(setter(custom), default = "None")]
-  dst_ssh: Option<SocketAddr>,
-  #[builder(setter(custom), default = "None")]
-  dst_tls: Option<SocketAddr>,
-  #[builder(setter(custom), default = "None")]
-  dst_http: Option<SocketAddr>,
-  // TODO: Add more protocols
+  /// Multiplexed TCP destinations
+  #[builder(default = "ahash::HashMap::default()")]
+  inner: ahash::HashMap<TcpProtocolType, TcpDestination>,
 }
 
 impl TcpDestinationMuxBuilder {
-  pub fn dst_any(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_any = Some(Some(addr));
+  /// Create a new TCP destination multiplexer builder
+  pub(crate) fn set_base(
+    &mut self,
+    proto_type: TcpProtocolType,
+    addrs: &[TargetAddr],
+    dns_cache: &Arc<DnsCache>,
+    load_balance: Option<&LoadBalance>,
+  ) -> &mut Self {
+    let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance, dns_cache));
+    if tcp_dest.is_err() {
+      return self;
+    }
+    let tcp_dest_inner = tcp_dest.unwrap();
+
+    let mut inner = self.inner.clone().unwrap_or_default();
+    match proto_type {
+      TcpProtocolType::Tls => {
+        let mut current_tls = if let Some(TcpDestination::Tls(current)) = inner.get(&proto_type).cloned() {
+          current
+        } else {
+          TlsDestinations::new()
+        };
+        current_tls.add(&[], &[], tcp_dest_inner, None, dns_cache);
+        inner.insert(proto_type, TcpDestination::Tls(current_tls));
+      }
+      _ => {
+        inner.insert(proto_type, TcpDestination::Tcp(tcp_dest_inner));
+      }
+    }
+    self.inner = Some(inner);
     self
   }
-  pub fn dst_ssh(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_ssh = Some(Some(addr));
-    self
-  }
-  pub fn dst_tls(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_tls = Some(Some(addr));
-    self
-  }
-  pub fn dst_http(&mut self, addr: SocketAddr) -> &mut Self {
-    self.dst_http = Some(Some(addr));
+
+  /// Set TLS destinations, use this if alpn and server names are needed for protocol detection or ech is need to be configured
+  pub(crate) fn set_tls(
+    &mut self,
+    addrs: &[TargetAddr],
+    dns_cache: &Arc<DnsCache>,
+    load_balance: Option<&LoadBalance>,
+    server_names: Option<&[&str]>,
+    alpn: Option<&[&str]>,
+    ech: Option<&EchProtocolConfig>,
+  ) -> &mut Self {
+    let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance, dns_cache));
+    if tcp_dest.is_err() {
+      return self;
+    }
+    let tcp_dest_inner = tcp_dest.unwrap();
+    let mut inner = self.inner.clone().unwrap_or_default();
+
+    let mut current_tls = if let Some(TcpDestination::Tls(current)) = inner.get(&TcpProtocolType::Tls).cloned() {
+      current
+    } else {
+      TlsDestinations::new()
+    };
+    current_tls.add(
+      server_names.unwrap_or_default(),
+      alpn.unwrap_or_default(),
+      tcp_dest_inner,
+      ech.cloned(),
+      dns_cache,
+    );
+
+    inner.insert(TcpProtocolType::Tls, TcpDestination::Tls(current_tls));
+    self.inner = Some(inner);
     self
   }
 }
 
 impl TcpDestinationMux {
+  /// Check if the destination mux is empty
+  pub fn is_empty(&self) -> bool {
+    self.inner.is_empty()
+  }
   /// Get the destination socket address for the given protocol
-  pub fn get_destination(&self, protocol: &TcpProxyProtocol) -> Result<SocketAddr, ProxyError> {
-    match protocol {
-      // No matched protocol found from the pattern
-      TcpProxyProtocol::Any => {
-        if let Some(addr) = &self.dst_any {
-          debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
-        } else {
-          Err(ProxyError::NoDestinationAddressForProtocol)
-        }
-      }
-      // Found SSH protocol
-      TcpProxyProtocol::Ssh => {
-        if let Some(addr) = &self.dst_ssh {
-          debug!("Setting up dest addr specific to SSH");
-          Ok(*addr)
-        } else if let Some(addr) = &self.dst_any {
-          debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
-        } else {
-          Err(ProxyError::NoDestinationAddressForProtocol)
-        }
+  fn find_destination(&self, probed_protocol: &TcpProtocol) -> Result<FoundTcpDestination, ProxyError> {
+    let proto_type = probed_protocol.proto_type();
+    match self.inner.get(&proto_type) {
+      // Found non-TLS protocol
+      Some(TcpDestination::Tcp(tcp_destination)) => {
+        debug!("Setting up dest addr for {proto_type}");
+        return Ok(FoundTcpDestination::Tcp(tcp_destination.clone()));
       }
       // Found TLS protocol
-      TcpProxyProtocol::Tls => {
-        if let Some(addr) = &self.dst_tls {
-          debug!("Setting up dest addr specific to TLS");
-          Ok(*addr)
-        } else if let Some(addr) = &self.dst_any {
-          debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
-        } else {
-          Err(ProxyError::NoDestinationAddressForProtocol)
-        }
+      Some(TcpDestination::Tls(tls_destinations)) => {
+        let TcpProtocol::Tls(client_hello_buf) = probed_protocol else {
+          return Err(ProxyError::no_destination_address_for_protocol());
+        };
+        return tls_destinations
+          .find(&client_hello_buf.client_hello)
+          .ok_or(ProxyError::no_destination_address_for_protocol())
+          .map(|found| {
+            debug!("Setting up dest addr for {proto_type}");
+            FoundTcpDestination::Tls(found.clone())
+          });
       }
-      // Found HTTP protocol
-      TcpProxyProtocol::Http => {
-        if let Some(addr) = &self.dst_http {
-          debug!("Setting up dest addr specific to HTTP");
-          Ok(*addr)
-        } else if let Some(addr) = &self.dst_any {
-          debug!("Setting up dest addr for unspecified proto");
-          Ok(*addr)
-        } else {
-          Err(ProxyError::NoDestinationAddressForProtocol)
-        }
-      } // TODO: Add more protocols
+      _ => {}
+    };
+
+    // if nothing is found, check for the default destination
+    if proto_type == TcpProtocolType::Any {
+      return Err(ProxyError::no_destination_address_for_protocol());
     }
+    // Check for the default destination
+    let destination_any = self
+      .inner
+      .get(&TcpProtocolType::Any)
+      .cloned()
+      .ok_or(ProxyError::no_destination_address_for_protocol())?;
+    let TcpDestination::Tcp(dst) = destination_any else {
+      return Err(ProxyError::no_destination_address_for_protocol());
+    };
+    debug!("Setting up dest addr for unspecified proto");
+    Ok(FoundTcpDestination::Tcp(dst.clone()))
   }
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Debug, Clone)]
-/// TCP proxy protocol, specific protocols like SSH, and default is "any".
-pub enum TcpProxyProtocol {
-  /// any, default
-  Any,
-  /// SSH
-  Ssh,
-  /// TLS
-  Tls,
-  /// Plaintext HTTP
-  Http,
-  // TODO: and more ...
-}
-
-impl std::fmt::Display for TcpProxyProtocol {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::Any => write!(f, "Any"),
-      Self::Ssh => write!(f, "SSH"),
-      Self::Tls => write!(f, "TLS"),
-      Self::Http => write!(f, "HTTP"),
-      // TODO: and more...
-    }
+/// Poll the incoming TCP stream to detect the protocol
+async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<usize, ProxyError> {
+  let read_len = incoming_stream.read_buf(buf).await?;
+  if read_len == 0 {
+    error!("No data received");
+    return Err(ProxyError::no_data_received_tcp_stream());
   }
+  Ok(read_len)
 }
 
-impl TcpProxyProtocol {
-  /// Detect the protocol from the first few bytes of the incoming stream
-  pub async fn detect_protocol(incoming_stream: &TcpStream) -> Result<Self, ProxyError> {
-    let mut buf = vec![0u8; TCP_PROTOCOL_DETECTION_BUFFER_SIZE];
-    let Ok(res) = timeout(
-      Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
-      incoming_stream.peek(&mut buf),
-    )
-    .await
-    else {
-      error!("Failed to detect protocol: timeout");
-      return Err(ProxyError::TimeOutToReadTcpStream);
-    };
-    let read_len = res?;
-    if read_len == 0 {
-      error!("No data received");
-      return Err(ProxyError::NoDataReceivedTcpStream);
-    }
+/// Detect the protocol from the first few bytes of the incoming stream using the registry
+async fn detect_protocol(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<ProbeResult<TcpProtocol>, ProxyError> {
+  let mut registry = TcpProtocolRegistry::default();
 
-    // TODO: Add more protocol detection
-    if buf.starts_with(b"SSH-") {
-      debug!("SSH connection detected");
-      return Ok(Self::Ssh);
-    }
+  // Keep reading data until we get a definitive result
+  loop {
+    // Try detection with current buffer
+    match registry.detect_protocol(buf).await? {
+      ProbeResult::Success(protocol) => return Ok(ProbeResult::Success(protocol)),
+      ProbeResult::Failure => return Ok(ProbeResult::Success(TcpProtocol::Any)), // fallback to Any
+      ProbeResult::PollNext => {
+        // Need more data - read from stream
+        let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+        let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
+        buf.extend_from_slice(&next_buf[..]);
 
-    if is_tls_handshake(buf.as_slice()) {
-      debug!("TLS connection detected");
-      return Ok(Self::Tls);
+        // Prevent infinite loops - if buffer gets too large, give up
+        if buf.len() > TCP_PROTOCOL_DETECTION_BUFFER_SIZE * 4 {
+          debug!("Protocol detection buffer too large, defaulting to Any");
+          return Ok(ProbeResult::Success(TcpProtocol::Any));
+        }
+      }
     }
-
-    if buf.windows(4).any(|w| w.eq(b"HTTP")) {
-      debug!("HTTP connection detected");
-      return Ok(Self::Http);
-    }
-
-    debug!("Untyped TCP connection");
-    Ok(Self::Any)
   }
 }
 
@@ -179,20 +255,42 @@ impl TcpProxyProtocol {
 pub struct TcpProxy {
   /// Bound socket address to listen on, exposed to the client
   listen_on: SocketAddr,
+
   /// Multiplexed socket addresses, the actual destination routed for protocol types
   destination_mux: Arc<TcpDestinationMux>,
+
   #[builder(default = "super::constants::TCP_BACKLOG")]
   /// TCP backlog size
   backlog: u32,
+
   #[builder(default = "ConnectionCount::default()")]
   /// Connection counter, set shared counter if #connections of all TCP proxies are needed
+  /// TODO: これはconnection_manager内部のが良さそう
   connection_count: ConnectionCount,
+
   #[builder(default = "crate::constants::MAX_TCP_CONCURRENT_CONNECTIONS")]
   /// Maximum number of concurrent connections
   /// If `cnt` is shared with other spawned TCP proxies, this value is evaluated for the total number of connections
+  /// TODO: これはconnection_manager内部のが良さそう
   max_connections: usize,
+
+  /// TCP connection manager for handling connection lifecycle
+  #[builder(setter(skip), default = "self.build_connection_manager()?")]
+  connection_manager: TcpConnectionManager,
+
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
+}
+
+impl TcpProxyBuilder {
+  /// Build the connection manager from the current builder state
+  fn build_connection_manager(&self) -> Result<TcpConnectionManager, TcpProxyBuilderError> {
+    let connection_count = self.connection_count.clone().unwrap_or_default();
+    let max_connections = self
+      .max_connections
+      .unwrap_or(crate::constants::MAX_TCP_CONCURRENT_CONNECTIONS);
+    Ok(TcpConnectionManager::new(connection_count, max_connections))
+  }
 }
 
 impl TcpProxy {
@@ -204,56 +302,28 @@ impl TcpProxy {
 
     let listener_service = async {
       loop {
-        let (mut incoming_stream, src_addr) = match tcp_listener.accept().await {
+        let (incoming_stream, src_addr) = match tcp_listener.accept().await {
           Err(e) => {
             error!("Error in TCP listener: {e}");
             continue;
           }
           Ok(res) => res,
         };
-        // Connection limit
-        if self.connection_count.current() >= self.max_connections {
+        // Check connection limit using the connection manager
+        if !self.connection_manager.can_accept_connection() {
           warn!("TCP connection limit reached: {}", self.max_connections);
           continue;
         }
-        self.connection_count.increment();
+        self.connection_manager.increment_connections();
         debug!(
           "Accepted TCP connection from: {src_addr} (total: {})",
-          self.connection_count.current()
+          self.connection_manager.connection_count()
         );
 
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
-          let connection_count = self.connection_count.clone();
-          async move {
-            let protocol = match TcpProxyProtocol::detect_protocol(&incoming_stream).await {
-              Ok(p) => p,
-              Err(e) => {
-                error!("Failed to detect protocol: {e}");
-                connection_count.decrement();
-                return;
-              }
-            };
-            let dst = match dst_mux.get_destination(&protocol) {
-              Ok(addr) => addr,
-              Err(e) => {
-                error!("No route for {protocol}: {e}");
-                connection_count.decrement();
-                return;
-              }
-            };
-
-            let Ok(mut outgoing_stream) = TcpStream::connect(dst).await else {
-              error!("Failed to connect to the destination: {dst}");
-              connection_count.decrement();
-              return;
-            };
-            if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
-              warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
-            }
-            connection_count.decrement();
-            debug!("TCP proxy connection closed (total: {})", connection_count.current());
-          }
+          let connection_manager = self.connection_manager.clone();
+          handle_tcp_connection(dst_mux, connection_manager, incoming_stream, src_addr)
         });
       }
     };
@@ -269,31 +339,264 @@ impl TcpProxy {
   }
 }
 
+/* ---------------------------------------------------------- */
+/// Handle TCP connection using the connection manager
+async fn handle_tcp_connection(
+  dst_mux: Arc<TcpDestinationMux>,
+  connection_manager: TcpConnectionManager,
+  mut incoming_stream: TcpStream,
+  src_addr: SocketAddr,
+) {
+  let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+  let Ok(probe_result) = timeout(
+    Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
+    detect_protocol(&mut incoming_stream, &mut initial_buf),
+  )
+  .await
+  else {
+    error!("Timeout to probe the incoming TCP stream");
+    connection_manager.decrement_connections();
+    return;
+  };
+  let probed_protocol = match probe_result {
+    Ok(ProbeResult::Success(p)) => p,
+    Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
+    Err(e) => {
+      error!("Failed to detect protocol: {e}");
+      connection_manager.decrement_connections();
+      return;
+    }
+  };
+  // found_dst contains not only TcpDestinationInner address but also ECH config for TLS
+  let found_dst = match dst_mux.find_destination(&probed_protocol) {
+    Ok(addr) => addr,
+    Err(e) => {
+      error!("No route for {probed_protocol}: {e}");
+      connection_manager.decrement_connections();
+      return;
+    }
+  };
+
+  let Ok(mut dst_addr) = found_dst.get_destination(&src_addr).await else {
+    error!("Failed to get destination address for {src_addr}");
+    connection_manager.decrement_connections();
+    return;
+  };
+
+  let to_be_written = match (&found_dst, &probed_protocol) {
+    (FoundTcpDestination::Tls(tls_destination), TcpProtocol::Tls(client_hello_buf)) => {
+      // Handle tls, especially ECH
+      let Ok(client_hello_bytes) = handle_tls_client_hello(client_hello_buf, tls_destination, &mut dst_addr).await else {
+        // Error means that illegal parameter must be sent back when error
+        error!("Failed to handle TLS client hello, sending illegal_parameter alert back to the client");
+        let illegal_parameter_alert = TlsAlertBuffer::default();
+        if let Err(e) = send_back_tls_alert(&mut incoming_stream, &illegal_parameter_alert).await {
+          error!("Failed to send TLS alert: {e}");
+        }
+        connection_manager.decrement_connections();
+        return;
+      };
+      client_hello_bytes
+    }
+    _ => {
+      // handle non-tls
+      initial_buf.freeze()
+    }
+  };
+
+  // Connect to destination
+  let Ok(outgoing_stream) = TcpStream::connect(dst_addr).await else {
+    error!("Failed to connect to the destination: {dst_addr}");
+    connection_manager.decrement_connections();
+    return;
+  };
+
+  // Create TCP connection directly
+  let tcp_connection = TcpConnection::new(
+    incoming_stream,
+    outgoing_stream,
+    probed_protocol.clone(),
+    to_be_written,
+    src_addr,
+    dst_addr,
+  );
+
+  // Log access log start
+  tcp_access_log_start(&src_addr, &dst_addr, &probed_protocol);
+
+  // Handle the connection using the connection manager
+  if let Err(e) = connection_manager.handle_connection(tcp_connection).await {
+    warn!("TCP connection handling failed: {e}");
+  }
+
+  // finish log
+  tcp_access_log_finish(&src_addr, &dst_addr, &probed_protocol);
+  connection_manager.decrement_connections();
+  debug!(
+    "TCP proxy connection closed (total: {})",
+    connection_manager.connection_count()
+  );
+}
+
+/// handle tls, especially ECH
+/// This returns as is (Ok(...)) in Bytes when no matching config_id is found (case of GREASE), otherwise returns decrypted ClientHello record in Bytes
+/// If this returns Err(...), it means that it failed to be decrypted or that the decrypted result is illegal. Then we must send some error back to the client.
+async fn handle_tls_client_hello<T>(
+  orig_ch_buf: &TlsClientHelloBuffer,
+  tls_destination: &TlsDestinationItem<T>,
+  dst_addr: &mut SocketAddr,
+) -> Result<bytes::Bytes, ProxyError> {
+  if orig_ch_buf.is_ech_outer() && tls_destination.ech().is_some() {
+    trace!("Handling ECH ClientHello Outer");
+    let ech = tls_destination.ech().unwrap();
+    let Some(decrypted_ch) = orig_ch_buf.client_hello.decrypt_ech(&ech.private_keys, false)? else {
+      return Ok(orig_ch_buf.try_to_bytes()?);
+    };
+    // Decryption succeeded, so we need to replace the destination address with the one in the decrypted ClientHello Inner
+    trace!("Decrypted ClientHello Inner: {decrypted_ch:#?}");
+
+    let sni = decrypted_ch.sni();
+    let Some(private_server_name) = sni.first() else {
+      error!("No SNI in decrypted ClientHello");
+      return Err(ProxyError::Protocol(crate::error::ProtocolError::TlsError {
+        source: quic_tls::TlsClientHelloError::NoSniInDecryptedClientHello,
+      }));
+    };
+    let Some(private_target_addr) = ech.private_server_names.get(private_server_name) else {
+      error!("No matching private server name found in decrypted ClientHello");
+      return Err(ProxyError::ech_no_matching_private_server_name());
+    };
+    // Replace the destination address with the one in the decrypted ClientHello Inner
+    let dns_cache = tls_destination.dns_cache();
+    let resolved = private_target_addr.resolve_cached(dns_cache).await?;
+    if resolved.is_empty() {
+      error!("No destination address found for {private_server_name}");
+      return Err(ProxyError::no_destination_address());
+    }
+    *dst_addr = resolved[0];
+    debug!(
+      "Decryption succeeded, replacing destination address with private server address {private_server_name}: {dst_addr} (ECH)"
+    );
+
+    // New client hello (i.e., reconstructed inner) that will be sent to the destination
+    let new_ch_buf = TlsClientHelloBuffer {
+      client_hello: decrypted_ch,
+      record_header: orig_ch_buf.record_header.clone(),
+      handshake_message_header: orig_ch_buf.handshake_message_header.clone(),
+    };
+
+    return Ok(new_ch_buf.try_to_bytes()?);
+  };
+
+  Ok(orig_ch_buf.try_to_bytes()?)
+}
+
+/// Handle TLS alert, writing TLS alert to the incoming stream back to the client
+async fn send_back_tls_alert(incoming_stream: &mut TcpStream, alert_buf: &TlsAlertBuffer) -> Result<(), ProxyError> {
+  let alert_bytes = alert_buf.to_bytes();
+  match timeout(
+    Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
+    incoming_stream.write_all(&alert_bytes),
+  )
+  .await
+  {
+    Ok(Ok(_)) => {
+      debug!("TLS alert sent to the incoming stream");
+    }
+    _ => {
+      error!("Failed to write TLS alert to the incoming stream");
+      return Err(ProxyError::tls_alert_write_error());
+    }
+  }
+
+  Ok(())
+}
+/* ---------------------------------------------------------- */
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use quic_tls::extension::ServerNameIndication;
 
   #[tokio::test]
   async fn test_tcp_proxy() {
     let handle = tokio::runtime::Handle::current();
-    let dst_any = "127.0.0.1:50053".parse().unwrap();
-    let dst_ssh = "127.0.0.1:50022".parse().unwrap();
-    let dst_tls = "127.0.0.1:50443".parse().unwrap();
+    let dns_cache = Arc::new(DnsCache::default());
+    let dst_any = &["127.0.0.1:50053".parse().unwrap()];
+    let dst_ssh = &["127.0.0.1:50022".parse().unwrap()];
+    let dst_tls_1 = &["127.0.0.1:50443".parse().unwrap()];
+    let dst_tls_2 = &["127.0.0.1:50444".parse().unwrap()];
     let dst_mux = Arc::new(
       TcpDestinationMuxBuilder::default()
-        .dst_any(dst_any)
-        .dst_ssh(dst_ssh)
-        .dst_tls(dst_tls)
+        .set_base(TcpProtocolType::Any, dst_any, &dns_cache, None)
+        .set_base(TcpProtocolType::Ssh, dst_ssh, &dns_cache, None)
+        .set_base(TcpProtocolType::Tls, dst_tls_1, &dns_cache, None)
+        .set_tls(dst_tls_2, &dns_cache, None, Some(&["example.com"]), None, None)
         .build()
         .unwrap(),
+      // .dst_http(dst_http, None)
+      //     .dst_any(dst_any, None)
+      //     .dst_ssh(dst_ssh, None)
+      //     .dst_tls(dst_tls_1, None, None, None, None)
+      //     .dst_tls(dst_tls_2, None, Some(&["example.com"]), None, None)
+      //     .build()
+      //     .unwrap(),
     );
+    // check for example.com tls
+    let mut sni = ServerNameIndication::default();
+    sni.add_server_name("example.com");
+    let mut chb = TlsClientHelloBuffer::default();
+    chb.client_hello.add_replace_sni(&sni);
+
+    let found = dst_mux.find_destination(&TcpProtocol::Tls(chb)).unwrap();
+    let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
+    assert_eq!(destination, "127.0.0.1:50444".parse().unwrap());
+
+    // check for unspecified tls
+    let mut sni = ServerNameIndication::default();
+    sni.add_server_name("any.com");
+    let mut chb = TlsClientHelloBuffer::default();
+    chb.client_hello.add_replace_sni(&sni);
+
+    let found = dst_mux.find_destination(&TcpProtocol::Tls(chb)).unwrap();
+    let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
+    assert_eq!(destination, "127.0.0.1:50443".parse().unwrap());
+
     let listen_on: SocketAddr = "127.0.0.1:55555".parse().unwrap();
-    let tcp_proxy = TcpProxyBuilder::default()
+    let tcp_proxy = TcpProxyBuilder::create_empty()
       .listen_on(listen_on)
-      .destination_mux(dst_mux)
+      .destination_mux(dst_mux.clone())
       .runtime_handle(handle.clone())
       .build()
       .unwrap();
     assert_eq!(tcp_proxy.backlog, super::super::constants::TCP_BACKLOG);
   }
+
+  #[tokio::test]
+  async fn test_tcp_proxy_with_domain_name_one_one_one_one() {
+    let dns_cache = Arc::new(DnsCache::default());
+    let dst_any = &["one.one.one.one:53".parse().unwrap()];
+    let dst_mux = Arc::new(
+      TcpDestinationMuxBuilder::default()
+        .set_base(TcpProtocolType::Any, dst_any, &dns_cache, None)
+        .build()
+        .unwrap(),
+    );
+
+    let found = dst_mux.find_destination(&TcpProtocol::Any).unwrap();
+    let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
+    assert!(["1.1.1.1:53".parse().unwrap(), "1.0.0.1:53".parse().unwrap()].contains(&destination));
+  }
+}
+
+/* ---------------------------------------------------------- */
+/// Handle TCP access log, when establishing a connection
+fn tcp_access_log_start(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProtocol) {
+  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
+  access_log_start(&proto, src_addr, dst_addr);
+}
+/// Handle TCP access log, when closing a connection
+fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProtocol) {
+  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
+  crate::access_log::access_log_finish(&proto, src_addr, dst_addr);
 }

@@ -1,0 +1,23 @@
+name: ShiftLeft Scan
+
+on:
+  push:
+  pull_request:
+    types: [synchronize, opened]
+
+jobs:
+  Scan-Build:
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Perform ShiftLeft Scan
+        uses: ShiftLeftSecurity/scan-action@master
+        env:
+          WORKSPACE: ""
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          output: reports

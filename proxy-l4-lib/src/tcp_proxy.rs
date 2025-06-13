@@ -173,11 +173,11 @@ impl TcpDestinationMux {
       // Found TLS protocol
       Some(TcpDestination::Tls(tls_destinations)) => {
         let TcpProbedProtocol::Tls(client_hello_buf) = probed_protocol else {
-          return Err(ProxyError::NoDestinationAddressForProtocol);
+          return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
         };
         return tls_destinations
           .find(&client_hello_buf.client_hello)
-          .ok_or(ProxyError::NoDestinationAddressForProtocol)
+          .ok_or(ProxyError::NoDestinationAddressForProtocol(String::new()))
           .map(|found| {
             debug!("Setting up dest addr for {proto_type}");
             FoundTcpDestination::Tls(found.clone())
@@ -188,16 +188,16 @@ impl TcpDestinationMux {
 
     // if nothing is found, check for the default destination
     if proto_type == TcpProtocolType::Any {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
     }
     // Check for the default destination
     let destination_any = self
       .inner
       .get(&TcpProtocolType::Any)
       .cloned()
-      .ok_or(ProxyError::NoDestinationAddressForProtocol)?;
+      .ok_or(ProxyError::NoDestinationAddressForProtocol(String::new()))?;
     let TcpDestination::Tcp(dst) = destination_any else {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
     };
     debug!("Setting up dest addr for unspecified proto");
     Ok(FoundTcpDestination::Tcp(dst.clone()))
@@ -247,7 +247,7 @@ async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) ->
   let read_len = incoming_stream.read_buf(buf).await?;
   if read_len == 0 {
     error!("No data received");
-    return Err(ProxyError::NoDataReceivedTcpStream);
+    return Err(ProxyError::NoDataReceivedTcpStream(String::new()));
   }
   Ok(read_len)
 }
@@ -414,14 +414,16 @@ async fn handle_tcp_connection(
   )
   .await
   else {
-    error!("Timeout to probe the incoming TCP stream");
+    error!("Timeout ({TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC}ms) while probing TCP stream from {src_addr}");
+    connection_count.decrement();
     return;
   };
   let probed_protocol = match probe_result {
     Ok(ProbeResult::Success(p)) => p,
     Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
     Err(e) => {
-      error!("Failed to detect protocol: {e}");
+      let contextual_error = e.with_source_context(src_addr).with_protocol_context("TCP");
+      error!("Failed to detect protocol from {src_addr}: {contextual_error}");
       connection_count.decrement();
       return;
     }
@@ -430,14 +432,22 @@ async fn handle_tcp_connection(
   let found_dst = match dst_mux.find_destination(&probed_protocol) {
     Ok(addr) => addr,
     Err(e) => {
-      error!("No route for {probed_protocol}: {e}");
+      let contextual_error = e
+        .with_source_context(src_addr)
+        .with_protocol_context(&probed_protocol.to_string());
+      error!("No route for {probed_protocol} from {src_addr}: {contextual_error}");
       connection_count.decrement();
       return;
     }
   };
 
-  let Ok(mut dst_addr) = found_dst.get_destination(&src_addr).await else {
-    error!("Failed to get destination address for {src_addr}");
+  let Ok(mut dst_addr) = found_dst.get_destination(&src_addr).await.map_err(|e| {
+    let contextual_error = e
+      .with_connection_context(src_addr, "unknown:0".parse().unwrap())
+      .with_protocol_context(&probed_protocol.to_string());
+    error!("Failed to resolve destination address for {probed_protocol} from {src_addr}: {contextual_error}");
+    contextual_error
+  }) else {
     connection_count.decrement();
     return;
   };
@@ -463,14 +473,22 @@ async fn handle_tcp_connection(
     }
   };
 
-  let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await else {
-    error!("Failed to connect to the destination: {dst_addr}");
+  let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await.map_err(|e| {
+    let contextual_error = ProxyError::IoError(e)
+      .with_connection_context(src_addr, dst_addr)
+      .with_protocol_context(&probed_protocol.to_string());
+    error!("Failed to connect to destination {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
+    contextual_error
+  }) else {
     connection_count.decrement();
     return;
   };
 
   if let Err(e) = outgoing_stream.write_all(&to_be_written).await {
-    error!("Failed to write the initial buffer to the outgoing stream: {e}");
+    let contextual_error = ProxyError::IoError(e)
+      .with_connection_context(src_addr, dst_addr)
+      .with_protocol_context(&probed_protocol.to_string());
+    error!("Failed to write initial buffer to {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
     connection_count.decrement();
     return;
   }
@@ -478,7 +496,10 @@ async fn handle_tcp_connection(
   tcp_access_log_start(&src_addr, &dst_addr, &probed_protocol);
   // Then, copy bidirectional
   if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
-    warn!("Failed to copy bidirectional TCP stream (maybe the timing on disconnect): {e}");
+    let contextual_error = ProxyError::IoError(e)
+      .with_connection_context(src_addr, dst_addr)
+      .with_protocol_context(&probed_protocol.to_string());
+    warn!("Bidirectional TCP stream copy failed for {probed_protocol} {src_addr} <-> {dst_addr}: {contextual_error}");
   }
   // finish log
   tcp_access_log_finish(&src_addr, &dst_addr, &probed_protocol);
@@ -512,14 +533,14 @@ async fn handle_tls_client_hello<T>(
     };
     let Some(private_target_addr) = ech.private_server_names.get(private_server_name) else {
       error!("No matching private server name found in decrypted ClientHello");
-      return Err(ProxyError::EchNoMatchingPrivateServerName);
+      return Err(ProxyError::EchNoMatchingPrivateServerName(String::new()));
     };
     // Replace the destination address with the one in the decrypted ClientHello Inner
     let dns_cache = tls_destination.dns_cache();
     let resolved = private_target_addr.resolve_cached(&dns_cache).await?;
     if resolved.is_empty() {
       error!("No destination address found for {private_server_name}");
-      return Err(ProxyError::NoDestinationAddress);
+      return Err(ProxyError::NoDestinationAddress(String::new()));
     }
     *dst_addr = resolved[0];
     debug!(
@@ -553,7 +574,7 @@ async fn send_back_tls_alert(incoming_stream: &mut TcpStream, alert_buf: &TlsAle
     }
     _ => {
       error!("Failed to write TLS alert to the incoming stream");
-      return Err(ProxyError::TlsAlertWriteError);
+      return Err(ProxyError::TlsAlertWriteError(String::new()));
     }
   }
 

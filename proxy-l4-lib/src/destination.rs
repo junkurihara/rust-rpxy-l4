@@ -95,13 +95,16 @@ impl TargetDestination {
       LoadBalance::None => 0,
     };
 
-    let target = self.dst_addrs.get(target_index).ok_or(ProxyError::NoDestinationAddress)?;
+    let target = self
+      .dst_addrs
+      .get(target_index)
+      .ok_or(ProxyError::NoDestinationAddress(String::new()))?;
 
     // Resolve the target to get actual socket addresses
     let resolved_addrs = target.resolve_cached(&self.dns_cache).await?;
 
     if resolved_addrs.is_empty() {
-      return Err(ProxyError::NoDestinationAddress);
+      return Err(ProxyError::NoDestinationAddress(String::new()));
     }
 
     // If we have multiple resolved addresses, select one consistently

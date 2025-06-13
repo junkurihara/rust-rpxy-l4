@@ -373,16 +373,25 @@ async fn handle_tcp_connection(
   // Here we are establishing a bidirectional connection. Logging the connection.
   tcp_access_log_start(&src_addr, &dst_addr, &probed_protocol);
   // Then, copy bidirectional
-  if let Err(e) = copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
-    let contextual_error = ProxyError::IoError(e)
-      .with_connection_context(src_addr, dst_addr)
-      .with_protocol_context(&probed_protocol.to_string());
-    warn!("Bidirectional TCP stream copy failed for {probed_protocol} {src_addr} <-> {dst_addr}: {contextual_error}");
+  match copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
+    Ok((bytes_to_server, bytes_to_client)) => {
+      let total_bytes = bytes_to_server + bytes_to_client;
+      debug!(
+        "TCP proxy transferred {} bytes ({} to server, {} to client)",
+        total_bytes, bytes_to_server, bytes_to_client
+      );
+    }
+    Err(e) => {
+      let contextual_error = ProxyError::IoError(e)
+        .with_connection_context(src_addr, dst_addr)
+        .with_protocol_context(&probed_protocol.to_string());
+      warn!("Bidirectional TCP stream copy failed for {probed_protocol} {src_addr} <-> {dst_addr}: {contextual_error}");
+    }
   }
   // finish log
   tcp_access_log_finish(&src_addr, &dst_addr, &probed_protocol);
   connection_count.decrement();
-  debug!("TCP proxy connection closed (total: {})", connection_count.current());
+  debug!("TCP proxy connection closed (current: {})", connection_count.current());
 }
 
 /// handle tls, especially ECH

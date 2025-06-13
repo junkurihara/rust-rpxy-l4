@@ -1,6 +1,7 @@
 use crate::error::ProxyBuildError;
 
 /// L5--L7 Protocol specific types
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolType {
   /// TCP: cleartext HTTP
   Http,

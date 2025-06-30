@@ -1679,7 +1679,6 @@ dependencies = [
  "clap",
  "futures",
  "hot_reload",
- "libmimalloc-sys",
  "mimalloc",
  "rpxy-l4-lib",
  "serde",

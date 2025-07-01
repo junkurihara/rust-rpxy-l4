@@ -215,7 +215,7 @@ impl TlsClientHello {
   }
 
   /// Build aad from incoming TLS ClientHello for ECH decryption
-  /// As indicated in https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-5.2,
+  /// As indicated in https://www.ietf.org/archive/id/draft-ietf-tls-esni-25.html#section-5.2,
   /// the aad is serialized TLS ClientHello which matches the ClientHelloOuter except that the payload field of the "encrypted_client_hello" is replaced with a byte string of the same length but whose contents are zeros.
   fn build_aad(&self) -> Result<Bytes, TlsClientHelloError> {
     let mut cloned = self.clone();

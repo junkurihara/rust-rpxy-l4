@@ -671,4 +671,34 @@ mod tests {
     assert!(duration < std::time::Duration::from_millis((iterations * 10).into()), 
             "ECH brute force decryption took too long: {:?}", duration);
   }
+
+  #[test]
+  fn test_multiple_cipher_suites_performance() {
+    // Benchmark test: compare performance across supported cipher suites
+    use std::time::Instant;
+    
+    let (config_list, private_keys) = create_test_ech_config();
+    let client_hello = create_test_client_hello("test.example.com");
+    
+    // Verify we have multiple cipher suites
+    let config = config_list.iter().next().unwrap();
+    let cipher_suites = config.cipher_suites();
+    assert!(cipher_suites.len() >= 2, "Should have multiple cipher suites for performance comparison");
+    
+    // Measure performance with current config (which includes both cipher suites)
+    let start = Instant::now();
+    let iterations = 500;
+    
+    for _ in 0..iterations {
+      let _result = client_hello.decrypt_ech(&private_keys, false).unwrap();
+    }
+    
+    let duration = start.elapsed();
+    println!("ECH decryption with {} cipher suites: {} iterations in {:?} ({:?} per iteration)", 
+             cipher_suites.len(), iterations, duration, duration / iterations);
+    
+    // Performance should be reasonable even with multiple cipher suites
+    assert!(duration < std::time::Duration::from_millis(iterations.into()), 
+            "ECH multi-cipher-suite decryption took too long: {:?}", duration);
+  }
 }

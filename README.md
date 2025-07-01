@@ -25,7 +25,7 @@
 
 [^quic]: Not Google QUIC. Both QUIC v1 ([RFC9000](https://datatracker.ietf.org/doc/html/rfc9000), [RFC9001](https://datatracker.ietf.org/doc/html/rfc9001)) and QUIC v2 ([RFC9369](https://datatracker.ietf.org/doc/html/rfc9369)) are supported.
 
-[^ech_proxy]: Client facing server in the context of [ECH Split Mode](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-3)
+[^ech_proxy]: Client facing server in the context of [ECH Split Mode](https://www.ietf.org/archive/id/draft-ietf-tls-esni-25.html#section-3)
 
 ## Installation
 
@@ -260,16 +260,52 @@ As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from 
 
 ### Encrypted Client Hello (ECH) proxy
 
-#### Reduced functionality
+#### ECH Support Status
 
-*Currently we do not fully implement the function of client facing server described in the [IETF draft](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1).* It works as the following *simplified and reduced* manner, which is different from the draft:
+`rpxy-l4` implements ECH support based on [draft-ietf-tls-esni-25](https://www.ietf.org/archive/id/draft-ietf-tls-esni-25.html) with the following features:
 
-- If no matching configuration with the given ECH is found, it just forwards the client hello to the backend server as it is.
-- `rpxy-l4` does not support the retry mechanisms of client facing server, i.e., it currently has no state about ECH request, and doesn't handle, forward or emit the `HelloRetryRequest` message to the client.
+**✅ Supported Features:**
+- ECH decryption with multiple cipher suites:
+  - AES-GCM-128 + HKDF-SHA256 (legacy support)
+  - AES-GCM-256 + HKDF-SHA384 (recommended by draft-25)
+- Retry configuration generation for failed decryptions (draft-25 section 7.1)
+- GREASE configuration detection and proper handling
+- Public name consistency validation with case-insensitive comparison
+- Support for both X25519 and P256 key exchange mechanisms
+- Brute-force decryption when config_id matching fails
 
-#### No ECH over QUIC
+**⚠️ Current Limitations:**
+- ECH over QUIC is not yet supported (TLS only)
+- HelloRetryRequest handling is not implemented
+- No support for ECH configuration updates via DNS
 
-ECH proxy function is limited only to the TLS protocol, and ECH over QUIC is not supported yet.
+#### Cipher Suite Support
+
+The following HPKE cipher suites are supported as recommended by draft-ietf-tls-esni-25:
+
+| KDF | AEAD | Status |
+|-----|------|--------|
+| HKDF-SHA256 | AES-GCM-128 | ✅ Supported |
+| HKDF-SHA384 | AES-GCM-256 | ✅ Supported |
+
+#### GREASE Handling
+
+`rpxy-l4` properly detects and handles GREASE (Generate Random Extensions And Sustain Extensibility) configurations:
+- Unknown cipher suites are identified as potential GREASE
+- GREASE configurations are logged and forwarded without error
+- Legitimate decryption failures generate retry configurations
+
+#### Retry Configurations
+
+When ECH decryption fails due to mismatched configurations, `rpxy-l4` generates retry configurations containing all available ECH configurations. This allows clients to retry with updated parameters as specified in draft-25.
+
+#### Performance
+
+ECH operations are optimized for production use:
+- Config-ID matching minimizes unnecessary decryption attempts
+- Brute-force fallback is available when needed
+- Comprehensive benchmarks validate performance under load
+- Support for multiple concurrent ECH configurations
 
 ### Others
 

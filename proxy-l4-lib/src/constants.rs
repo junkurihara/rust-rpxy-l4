@@ -44,6 +44,13 @@ pub mod log_event_names {
   /// access log
   pub const ACCESS_LOG_START: &str = "rpxy-l4::conn::start";
   pub const ACCESS_LOG_FINISH: &str = "rpxy-l4::conn::finish";
+  
+  /// ECH-related log events
+  pub const ECH_DECRYPTION_SUCCESS: &str = "rpxy-l4::ech::decryption::success";
+  pub const ECH_DECRYPTION_FAILURE: &str = "rpxy-l4::ech::decryption::failure";
+  pub const ECH_GREASE_DETECTED: &str = "rpxy-l4::ech::grease::detected";
+  pub const ECH_RETRY_CONFIG_GENERATED: &str = "rpxy-l4::ech::retry_config::generated";
+  pub const ECH_PUBLIC_NAME_MISMATCH: &str = "rpxy-l4::ech::validation::public_name_mismatch";
 }
 
 /// DNS cache minimum TTL

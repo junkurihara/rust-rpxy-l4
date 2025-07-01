@@ -34,7 +34,10 @@ impl TlsClientHello {
     // Decrypt and obtain the ClientHelloInner
     let (decrypted_ch, config) = if ignore_config_id {
       let Some(res) = self._decrypt_ech_brute_force(&client_hello_outer, ech_private_key_list) else {
-        warn!("Attempted to decrypt ECH with all keys, but no success");
+        warn!(
+          attempted_keys = ech_private_key_list.len(),
+          "Attempted to decrypt ECH with all available keys, but no success"
+        );
         return Ok(None);
       };
       res
@@ -50,16 +53,29 @@ impl TlsClientHello {
         
         // Check if this appears to be a GREASE configuration
         if Self::is_grease_config(config_id, cipher_suite) {
-          info!("GREASE ECH configuration detected (config_id: {}, cipher_suite: {:?}), forwarding to backend", 
-                config_id, cipher_suite);
+          info!(
+            config_id = config_id,
+            aead_id = cipher_suite.aead_id,
+            kdf_id = cipher_suite.kdf_id,
+            "GREASE ECH configuration detected, forwarding to backend"
+          );
         } else {
-          warn!("No matching ECH private key found for config_id ({}) and cipher_suite ({:?})", 
-                config_id, cipher_suite);
+          warn!(
+            config_id = config_id,
+            aead_id = cipher_suite.aead_id,
+            kdf_id = cipher_suite.kdf_id,
+            available_keys = ech_private_key_list.len(),
+            "No matching ECH private key found for configuration"
+          );
           
           // Generate retry configurations as per draft-ietf-tls-esni-25
           if let Ok(retry_configs) = Self::generate_retry_configs(ech_private_key_list) {
             if !retry_configs.is_empty() {
-              info!("Generated {} retry configurations for ECH decryption failure", retry_configs.len());
+              info!(
+                retry_config_count = retry_configs.len(),
+                config_id = config_id,
+                "Generated retry configurations for ECH decryption failure"
+              );
               // Note: The retry configurations should be used by the server in EncryptedExtensions
               // This is handled by the calling code, not within this decryption function
             }
@@ -76,13 +92,23 @@ impl TlsClientHello {
     // Check the public name consistency
     let matched_config_public_name = String::from_utf8_lossy(&config.public_name()).to_ascii_lowercase();
     if !public_server_names.contains(&matched_config_public_name) {
-      warn!("Public name mismatch: {matched_config_public_name} not in {public_server_names:?}");
-      // https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1
+      warn!(
+        config_public_name = matched_config_public_name,
+        sni_names = ?public_server_names,
+        config_id = config.config_id(),
+        "Public name mismatch between ECH config and SNI"
+      );
+      // https://www.ietf.org/archive/id/draft-ietf-tls-esni-25.html#section-7.1
       // Dispatch illegal_parameter alert
       return Err(TlsClientHelloError::PublicNameMismatch);
     }
 
-    debug!("Decrypted and recomposed client hello inner: {decrypted_ch:#?}");
+    debug!(
+      config_id = config.config_id(),
+      public_name = matched_config_public_name,
+      sni_count = public_server_names.len(),
+      "ECH decryption successful, ClientHelloInner recomposed"
+    );
     Ok(Some(decrypted_ch))
   }
 
@@ -137,8 +163,10 @@ impl TlsClientHello {
           }
           _ => {
             error!(
-              "Unsupported cipher suite for HPKE: {:x?}, {:x?}",
-              cipher_suite.kdf_id, cipher_suite.aead_id
+              aead_id = cipher_suite.aead_id,
+              kdf_id = cipher_suite.kdf_id,
+              kem_type = "X25519",
+              "Unsupported cipher suite for HPKE"
             );
             return Err(TlsClientHelloError::UnsupportedHpkeKdfAead);
           }
@@ -162,8 +190,10 @@ impl TlsClientHello {
           }
           _ => {
             error!(
-              "Unsupported cipher suite for HPKE: {:x?}, {:x?}",
-              cipher_suite.kdf_id, cipher_suite.aead_id
+              aead_id = cipher_suite.aead_id,
+              kdf_id = cipher_suite.kdf_id,
+              kem_type = "P256",
+              "Unsupported cipher suite for HPKE"
             );
             return Err(TlsClientHelloError::UnsupportedHpkeKdfAead);
           }
@@ -250,7 +280,10 @@ impl TlsClientHello {
       .map(|key| key.ech_config().clone())
       .collect();
 
-    debug!("Generated {} retry configurations", retry_configs.len());
+    debug!(
+      retry_config_count = retry_configs.len(),
+      "Generated retry configurations for ECH decryption failure"
+    );
     Ok(retry_configs)
   }
 
@@ -269,8 +302,12 @@ impl TlsClientHello {
     };
 
     if !is_known_cipher_suite {
-      debug!("Potential GREASE configuration detected: config_id={}, aead_id={:x}, kdf_id={:x}", 
-             config_id, cipher_suite.aead_id, cipher_suite.kdf_id);
+      debug!(
+        config_id = config_id,
+        aead_id = cipher_suite.aead_id,
+        kdf_id = cipher_suite.kdf_id,
+        "Potential GREASE configuration detected"
+      );
       return true;
     }
 

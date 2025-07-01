@@ -267,7 +267,7 @@ As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from 
 **✅ Supported Features:**
 - ECH decryption with multiple cipher suites:
   - AES-GCM-128 + HKDF-SHA256 (legacy support)
-  - AES-GCM-256 + HKDF-SHA384 (recommended by draft-25)
+  - AES-GCM-256 + HKDF-SHA384 (additional support)
 - Retry configuration generation for failed decryptions (draft-25 section 7.1)
 - GREASE configuration detection and proper handling
 - Public name consistency validation with case-insensitive comparison
@@ -281,7 +281,7 @@ As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from 
 
 #### Cipher Suite Support
 
-The following HPKE cipher suites are supported as recommended by draft-ietf-tls-esni-25:
+The following HPKE cipher suites are supported for ECH functionality:
 
 | KDF | AEAD | Status |
 |-----|------|--------|

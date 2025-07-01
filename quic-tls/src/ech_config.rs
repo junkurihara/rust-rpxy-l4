@@ -10,8 +10,8 @@ use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use hpke::{
   Deserializable, Kem, Serializable,
-  aead::{Aead, AesGcm128},
-  kdf::{HkdfSha256, Kdf},
+  aead::{Aead, AesGcm128, AesGcm256},
+  kdf::{HkdfSha256, HkdfSha384, Kdf},
   kem::{DhP256HkdfSha256, X25519HkdfSha256},
 };
 use std::sync::LazyLock;
@@ -37,10 +37,16 @@ pub enum EchConfigError {
 
 /// default cipher suites for HPKE in ECH Config
 static HPKE_KEY_CONFIG_CIPHER_SUITES: LazyLock<Vec<HpkeSymmetricCipherSuite>> = LazyLock::new(|| {
-  vec![HpkeSymmetricCipherSuite {
-    kdf_id: HkdfSha256::KDF_ID,
-    aead_id: AesGcm128::AEAD_ID,
-  }]
+  vec![
+    HpkeSymmetricCipherSuite {
+      kdf_id: HkdfSha256::KDF_ID,
+      aead_id: AesGcm128::AEAD_ID,
+    },
+    HpkeSymmetricCipherSuite {
+      kdf_id: HkdfSha384::KDF_ID,
+      aead_id: AesGcm256::AEAD_ID,
+    },
+  ]
 });
 
 #[derive(Debug)]

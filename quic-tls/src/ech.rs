@@ -10,9 +10,8 @@ use crate::{
 use bytes::{Bytes, BytesMut};
 use hpke::{
   Deserializable, Kem, OpModeR,
-  aead::{Aead, AesGcm128},
-  kdf::HkdfSha256,
-  kdf::Kdf,
+  aead::{Aead, AesGcm128, AesGcm256},
+  kdf::{HkdfSha256, HkdfSha384, Kdf},
   kem::{DhP256HkdfSha256, X25519HkdfSha256},
 };
 
@@ -118,7 +117,12 @@ impl TlsClientHello {
                 .map_err(TlsClientHelloError::HpkeError)?;
             ctx.open(outer.payload(), &aad).map_err(TlsClientHelloError::HpkeError)?
           }
-          // TODO: Add more cipher suites
+          (AesGcm256::AEAD_ID, HkdfSha384::KDF_ID) => {
+            let mut ctx =
+              hpke::setup_receiver::<AesGcm256, HkdfSha384, X25519HkdfSha256>(&OpModeR::Base, sk, &encapped_key, &info)
+                .map_err(TlsClientHelloError::HpkeError)?;
+            ctx.open(outer.payload(), &aad).map_err(TlsClientHelloError::HpkeError)?
+          }
           _ => {
             error!(
               "Unsupported cipher suite for HPKE: {:x?}, {:x?}",
@@ -138,7 +142,12 @@ impl TlsClientHello {
                 .map_err(TlsClientHelloError::HpkeError)?;
             ctx.open(outer.payload(), &aad).map_err(TlsClientHelloError::HpkeError)?
           }
-          // TODO: Add more cipher suites
+          (AesGcm256::AEAD_ID, HkdfSha384::KDF_ID) => {
+            let mut ctx =
+              hpke::setup_receiver::<AesGcm256, HkdfSha384, DhP256HkdfSha256>(&OpModeR::Base, sk, &encapped_key, &info)
+                .map_err(TlsClientHelloError::HpkeError)?;
+            ctx.open(outer.payload(), &aad).map_err(TlsClientHelloError::HpkeError)?
+          }
           _ => {
             error!(
               "Unsupported cipher suite for HPKE: {:x?}, {:x?}",
@@ -280,6 +289,31 @@ mod tests {
       cs.kdf_id == HkdfSha256::KDF_ID && cs.aead_id == AesGcm128::AEAD_ID
     });
     assert!(supported_suite.is_some());
+  }
+
+  #[test]
+  fn test_aes_gcm_256_cipher_suite() {
+    // Test that the new AES-GCM-256 + HKDF-SHA384 cipher suite is supported
+    let (config_list, _) = create_test_ech_config();
+    let config = config_list.iter().next().unwrap();
+    
+    // Get the cipher suites from the config
+    let cipher_suites = config.cipher_suites();
+    assert!(!cipher_suites.is_empty());
+    
+    // Verify that we now support both cipher suites
+    let aes_gcm_128_suite = cipher_suites.iter().find(|cs| {
+      cs.kdf_id == HkdfSha256::KDF_ID && cs.aead_id == AesGcm128::AEAD_ID
+    });
+    assert!(aes_gcm_128_suite.is_some(), "AES-GCM-128 + HKDF-SHA256 should be supported");
+    
+    let aes_gcm_256_suite = cipher_suites.iter().find(|cs| {
+      cs.kdf_id == HkdfSha384::KDF_ID && cs.aead_id == AesGcm256::AEAD_ID
+    });
+    assert!(aes_gcm_256_suite.is_some(), "AES-GCM-256 + HKDF-SHA384 should be supported");
+    
+    // Verify we have exactly 2 cipher suites
+    assert_eq!(cipher_suites.len(), 2, "Should have exactly 2 cipher suites");
   }
 
   #[test]

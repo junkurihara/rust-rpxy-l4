@@ -69,14 +69,19 @@ impl TlsClientHello {
           );
           
           // Generate retry configurations as per draft-ietf-tls-esni-25
-          if let Ok(retry_configs) = Self::generate_retry_configs(ech_private_key_list) {
+          // Filter to only include configs matching the current server context
+          let target_server_name = public_server_names.first().map(|s| s.as_str());
+          if let Ok(retry_configs) = Self::generate_retry_configs(ech_private_key_list, target_server_name) {
             if !retry_configs.is_empty() {
               info!(
                 retry_config_count = retry_configs.len(),
                 config_id = config_id,
                 "Generated retry configurations for ECH decryption failure"
               );
-              // Note: The retry configurations should be used by the server in EncryptedExtensions
+              // TODO: HelloRetryRequest handling is not implemented. The retry configurations
+              // generated here are intended for use in EncryptedExtensions response, but
+              // full HelloRetryRequest support per draft-25 section 7.1 is not yet implemented.
+              // Consider whether retry config generation is appropriate without HelloRetryRequest support.
               // This is handled by the calling code, not within this decryption function
             }
           }
@@ -268,8 +273,11 @@ impl TlsClientHello {
   /// Generate retry configurations from available ECH private keys
   /// This is used when ECH decryption fails to provide updated configurations to the client
   /// As per draft-ietf-tls-esni-25 section 7.1
+  /// 
+  /// If server_name is provided, only configurations matching that public_name are included
   pub fn generate_retry_configs(
     ech_private_key_list: &[EchPrivateKey],
+    server_name: Option<&str>,
   ) -> Result<Vec<EchConfig>, TlsClientHelloError> {
     if ech_private_key_list.is_empty() {
       return Ok(vec![]);
@@ -277,11 +285,24 @@ impl TlsClientHello {
 
     let retry_configs: Vec<EchConfig> = ech_private_key_list
       .iter()
+      .filter(|key| {
+        if let Some(target_server_name) = server_name {
+          let public_name_bytes = key.public_name();
+          let public_name = String::from_utf8_lossy(&public_name_bytes).to_ascii_lowercase();
+          let target_name = target_server_name.to_ascii_lowercase();
+          public_name == target_name
+        } else {
+          // If no server_name filter provided, include all configs
+          true
+        }
+      })
       .map(|key| key.ech_config().clone())
       .collect();
 
     debug!(
       retry_config_count = retry_configs.len(),
+      total_available = ech_private_key_list.len(),
+      server_name = server_name,
       "Generated retry configurations for ECH decryption failure"
     );
     Ok(retry_configs)
@@ -289,28 +310,37 @@ impl TlsClientHello {
 
   /// Check if the ECH configuration appears to be a GREASE configuration
   /// GREASE configurations use reserved values to test extension tolerance
+  /// 
+  /// Note: Per draft-25 section 6.2.1, GREASE ECH should use supported cipher suites,
+  /// so we cannot rely on unknown cipher suites for detection. This function now uses
+  /// a more conservative approach since reliable GREASE detection is complex without
+  /// additional context from the client's behavior.
   fn is_grease_config(config_id: u8, cipher_suite: &HpkeSymmetricCipherSuite) -> bool {
-    // GREASE values for config_id typically use reserved ranges
-    // However, config_id is random in practice, so we mainly check cipher suites
-    
-    // Check for unknown/unsupported cipher suite combinations that might indicate GREASE
-    // This is a heuristic approach since GREASE detection can be complex
-    let is_known_cipher_suite = match (cipher_suite.aead_id, cipher_suite.kdf_id) {
+    // Verify the cipher suite is supported (per draft-25 section 6.2.1)
+    let _is_known_cipher_suite = match (cipher_suite.aead_id, cipher_suite.kdf_id) {
       (AesGcm128::AEAD_ID, HkdfSha256::KDF_ID) => true,
       (AesGcm256::AEAD_ID, HkdfSha384::KDF_ID) => true,
       _ => false,
     };
 
-    if !is_known_cipher_suite {
-      debug!(
-        config_id = config_id,
-        aead_id = cipher_suite.aead_id,
-        kdf_id = cipher_suite.kdf_id,
-        "Potential GREASE configuration detected"
-      );
-      return true;
-    }
-
+    // Per draft-25 section 6.2.1, GREASE ECH should use supported cipher suites,
+    // making detection by cipher suite unreliable. Since the draft doesn't provide
+    // clear guidance on distinguishing GREASE from legitimate failures, we use a
+    // conservative approach and treat all as potential legitimate failures.
+    //
+    // A more sophisticated implementation might consider:
+    // - Client connection patterns
+    // - Temporal analysis of similar failures
+    // - Additional heuristics based on enc field validation
+    
+    debug!(
+      config_id = config_id,
+      aead_id = cipher_suite.aead_id,
+      kdf_id = cipher_suite.kdf_id,
+      "ECH decryption failure - treating as legitimate rather than GREASE"
+    );
+    
+    // Return false to be conservative and treat as legitimate failure
     false
   }
 }
@@ -371,7 +401,7 @@ mod tests {
     let (_, private_keys) = create_test_ech_config();
     
     // Generate retry configs
-    let retry_configs = TlsClientHello::generate_retry_configs(&private_keys).unwrap();
+    let retry_configs = TlsClientHello::generate_retry_configs(&private_keys, None).unwrap();
     
     // Should have at least one retry config
     assert!(!retry_configs.is_empty());
@@ -389,10 +419,43 @@ mod tests {
     // Test retry configuration generation with empty key list
     let empty_keys: Vec<EchPrivateKey> = vec![];
     
-    let retry_configs = TlsClientHello::generate_retry_configs(&empty_keys).unwrap();
+    let retry_configs = TlsClientHello::generate_retry_configs(&empty_keys, None).unwrap();
     
     // Should return empty vector for empty input
     assert!(retry_configs.is_empty());
+  }
+
+  #[test]
+  fn test_retry_config_generation_with_server_name_filter() {
+    // Test retry configuration generation with server name filtering
+    let (_, keys1) = create_test_ech_config(); // "test.example.com"
+    let (_, keys2) = EchConfigList::generate("different.example.com").unwrap();
+    
+    // Combine all keys
+    let mut all_keys = keys1;
+    all_keys.extend(keys2);
+    
+    // Test filtering by first server name
+    let retry_configs = TlsClientHello::generate_retry_configs(&all_keys, Some("test.example.com")).unwrap();
+    assert_eq!(retry_configs.len(), 1);
+    let public_name_bytes = retry_configs[0].public_name();
+    let public_name = String::from_utf8_lossy(&public_name_bytes);
+    assert_eq!(public_name, "test.example.com");
+    
+    // Test filtering by second server name
+    let retry_configs = TlsClientHello::generate_retry_configs(&all_keys, Some("different.example.com")).unwrap();
+    assert_eq!(retry_configs.len(), 1);
+    let public_name_bytes = retry_configs[0].public_name();
+    let public_name = String::from_utf8_lossy(&public_name_bytes);
+    assert_eq!(public_name, "different.example.com");
+    
+    // Test with non-matching server name
+    let retry_configs = TlsClientHello::generate_retry_configs(&all_keys, Some("nonexistent.example.com")).unwrap();
+    assert!(retry_configs.is_empty());
+    
+    // Test without server name filter (should return all)
+    let retry_configs = TlsClientHello::generate_retry_configs(&all_keys, None).unwrap();
+    assert_eq!(retry_configs.len(), 2);
   }
 
   #[test]
@@ -400,19 +463,20 @@ mod tests {
     use crate::ech_config::HpkeSymmetricCipherSuite;
     use hpke::{aead::AesGcm128, kdf::HkdfSha256};
     
-    // Test known cipher suite (should not be GREASE)
+    // Test known cipher suite (conservative approach: should not be detected as GREASE)
     let known_suite = HpkeSymmetricCipherSuite {
       kdf_id: HkdfSha256::KDF_ID,
       aead_id: AesGcm128::AEAD_ID,
     };
     assert!(!TlsClientHello::is_grease_config(42, &known_suite));
     
-    // Test unknown cipher suite (should be detected as potential GREASE)
+    // Test unknown cipher suite (conservative approach: should not be detected as GREASE)
+    // Per draft-25 section 6.2.1, GREASE should use supported cipher suites
     let unknown_suite = HpkeSymmetricCipherSuite {
       kdf_id: 0x9999, // Unknown KDF
       aead_id: 0x8888, // Unknown AEAD
     };
-    assert!(TlsClientHello::is_grease_config(42, &unknown_suite));
+    assert!(!TlsClientHello::is_grease_config(42, &unknown_suite));
   }
 
   #[test]

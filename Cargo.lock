@@ -1781,7 +1781,7 @@ dependencies = [
 [[package]]
 name = "rustls"
 version = "0.23.27"
-source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend#dbd8aa4f9d860def448172c074fc58db96e7c3fc"
+source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend#5575bd9d3773e1e056bc33ab832e41ee3181d06d"
 dependencies = [
  "aws-lc-rs",
  "log",

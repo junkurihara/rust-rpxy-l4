@@ -1211,7 +1211,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.53.2",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -1725,7 +1725,7 @@ dependencies = [
  "hkdf",
  "hpke",
  "rand",
- "rustls 0.23.30",
+ "rustls 0.23.31",
  "sha2",
  "thiserror 2.0.12",
  "tracing",
@@ -1781,7 +1781,7 @@ dependencies = [
 [[package]]
 name = "rustls"
 version = "0.23.27"
-source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend#cfc3288272d8fbbb9816014cc6d78236faf8ba7e"
+source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend#5575bd9d3773e1e056bc33ab832e41ee3181d06d"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -1794,9 +1794,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.30"
+version = "0.23.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "069a8df149a16b1a12dcc31497c3396a173844be3cac4bd40c9e7671fef96671"
+checksum = "c0ebcbd2f03de0fc1122ad9bb24b127a5a6cd51d72604a3f3c50ac459762b6cc"
 dependencies = [
  "aws-lc-rs",
  "log",

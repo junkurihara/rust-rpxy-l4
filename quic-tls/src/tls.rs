@@ -85,7 +85,7 @@ impl TlsClientHelloBuffer {
 impl Serialize for TlsClientHelloBuffer {
   type Error = TlsClientHelloError;
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
-    let client_hello_bytes = self.client_hello.try_to_bytes()?;
+    let client_hello_bytes = compose(self.client_hello)?;
 
     // Make length fields consistent
     let client_hello_len = client_hello_bytes.len();
@@ -100,7 +100,7 @@ impl Serialize for TlsClientHelloBuffer {
     let record_layer_len_field = client_hello_len + handshake_message_header_bytes.len();
     let mut record_header = self.record_header.clone();
     record_header.length = record_layer_len_field as u16;
-    let record_header_bytes = compose(record_header).map_err(|e| TlsClientHelloError::SerDeserError(e))?;
+    let record_header_bytes = compose(record_header)?;
 
     buf.put_slice(&record_header_bytes);
     buf.put_slice(&handshake_message_header_bytes);
@@ -115,7 +115,7 @@ impl Deserialize for TlsClientHelloBuffer {
   where
     Self: Sized,
   {
-    let record_header = TlsRecordHeader::deserialize(buf).map_err(|e| TlsClientHelloError::SerDeserError(e))?;
+    let record_header = TlsRecordHeader::deserialize(buf)?;
     let handshake_message_header = TlsHandshakeMessageHeader::deserialize(buf)?;
     let client_hello = TlsClientHello::deserialize(buf)?;
 
@@ -263,7 +263,7 @@ impl TlsAlertBuffer {
 impl Serialize for TlsAlertBuffer {
   type Error = SerDeserError;
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
-    let record_header_bytes = compose(self.record_header).map_err(|_| SerDeserError::InvalidInputLength)?;
+    let record_header_bytes = compose(self.record_header)?;
     buf.put_slice(&record_header_bytes);
     buf.put_u8(self.alert_level as u8);
     buf.put_u8(self.alert_description as u8);
@@ -299,6 +299,7 @@ impl Deserialize for TlsAlertBuffer {
   }
 }
 
+/* ---------------------------------------------------------- */
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -311,7 +312,7 @@ mod tests {
       version: SUPPORTED_TLS_VERSIONS[0],
       length: 1234,
     };
-    
+
     let serialized = compose(header.clone()).unwrap();
     let deserialized: TlsRecordHeader = parse(&mut serialized.clone()).unwrap();
     assert_eq!(header, deserialized);
@@ -320,7 +321,7 @@ mod tests {
   #[test]
   fn test_tls_alert_buffer_serdeser() {
     let alert = TlsAlertBuffer::new(TlsAlertLevel::Fatal, TlsAlertDescription::IllegalParameter);
-    
+
     let serialized = compose(alert.clone()).unwrap();
     let deserialized: TlsAlertBuffer = parse(&mut serialized.clone()).unwrap();
     assert_eq!(alert, deserialized);

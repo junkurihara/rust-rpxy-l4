@@ -5,7 +5,7 @@ use crate::{
   serialize::{Deserialize, SerDeserError, Serialize, compose, read_lengthed},
   trace::*,
 };
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes};
 
 /* ---------------------------------------------------------- */
 const TLS_HANDSHAKE_MESSAGE_HEADER_LEN: usize = 4;
@@ -41,13 +41,28 @@ impl Default for TlsHandshakeMessageHeader {
     }
   }
 }
-impl TlsHandshakeMessageHeader {
-  /// to Bytes
-  pub fn to_bytes(&self) -> Bytes {
-    let mut buf = BytesMut::with_capacity(TLS_HANDSHAKE_MESSAGE_HEADER_LEN);
+impl Serialize for TlsHandshakeMessageHeader {
+  type Error = TlsClientHelloError;
+  fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
     buf.put_u8(self.msg_type);
     buf.put_slice(&self.length);
-    buf.freeze()
+    Ok(())
+  }
+}
+
+impl Deserialize for TlsHandshakeMessageHeader {
+  type Error = TlsClientHelloError;
+  fn deserialize<B: Buf>(buf: &mut B) -> Result<Self, Self::Error>
+  where
+    Self: Sized,
+  {
+    if buf.remaining() < TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
+      return Err(SerDeserError::ShortInput.into());
+    }
+    let msg_type = buf.get_u8();
+    let mut length = [0u8; 3];
+    buf.copy_to_slice(&mut length);
+    Ok(TlsHandshakeMessageHeader { msg_type, length })
   }
 }
 
@@ -141,10 +156,6 @@ impl Default for TlsClientHello {
 }
 
 impl TlsClientHello {
-  /// to Bytes
-  pub fn try_to_bytes(&self) -> Result<Bytes, TlsClientHelloError> {
-    compose(self.clone()).map(|b| b.freeze())
-  }
   // Get SNIs
   pub fn sni(&self) -> Vec<String> {
     self
@@ -823,5 +834,17 @@ mod tests {
     let ser_tls_client_hello = compose(tls_client_hello.clone()).unwrap();
     let deser_tls_client_hello: TlsClientHello = parse(&mut ser_tls_client_hello.clone()).unwrap();
     assert_eq!(tls_client_hello, deser_tls_client_hello);
+  }
+
+  #[test]
+  fn test_tls_handshake_message_header_serdeser() {
+    let header = TlsHandshakeMessageHeader {
+      msg_type: TLS_HANDSHAKE_TYPE_CLIENT_HELLO,
+      length: [0x00, 0x01, 0x23], // Example length
+    };
+
+    let serialized = compose(header.clone()).unwrap();
+    let deserialized: TlsHandshakeMessageHeader = parse(&mut serialized.clone()).unwrap();
+    assert_eq!(header, deserialized);
   }
 }

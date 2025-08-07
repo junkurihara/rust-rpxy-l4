@@ -156,10 +156,6 @@ impl Default for TlsClientHello {
 }
 
 impl TlsClientHello {
-  /// to Bytes
-  pub fn try_to_bytes(&self) -> Result<Bytes, TlsClientHelloError> {
-    compose(self.clone()).map(|b| b.freeze())
-  }
   // Get SNIs
   pub fn sni(&self) -> Vec<String> {
     self
@@ -846,7 +842,7 @@ mod tests {
       msg_type: TLS_HANDSHAKE_TYPE_CLIENT_HELLO,
       length: [0x00, 0x01, 0x23], // Example length
     };
-    
+
     let serialized = compose(header.clone()).unwrap();
     let deserialized: TlsHandshakeMessageHeader = parse(&mut serialized.clone()).unwrap();
     assert_eq!(header, deserialized);

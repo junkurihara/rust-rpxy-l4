@@ -284,12 +284,12 @@ impl Deserialize for TlsAlertBuffer {
     let alert_level = match buf.get_u8() {
       1 => TlsAlertLevel::Warning,
       2 => TlsAlertLevel::Fatal,
-      _ => return Err(SerDeserError::InvalidInputLength),
+      _ => return Err(SerDeserError::InvalidInput),
     };
     let alert_description = match buf.get_u8() {
       21 => TlsAlertDescription::DecryptError,
       47 => TlsAlertDescription::IllegalParameter,
-      _ => return Err(SerDeserError::InvalidInputLength),
+      _ => return Err(SerDeserError::InvalidInput),
     };
     Ok(TlsAlertBuffer {
       record_header,
@@ -313,8 +313,8 @@ mod tests {
       length: 1234,
     };
 
-    let serialized = compose(header.clone()).unwrap();
-    let deserialized: TlsRecordHeader = parse(&mut serialized.clone()).unwrap();
+    let mut serialized = compose(header.clone()).unwrap();
+    let deserialized: TlsRecordHeader = parse(&mut serialized).unwrap();
     assert_eq!(header, deserialized);
   }
 
@@ -322,8 +322,8 @@ mod tests {
   fn test_tls_alert_buffer_serdeser() {
     let alert = TlsAlertBuffer::new(TlsAlertLevel::Fatal, TlsAlertDescription::IllegalParameter);
 
-    let serialized = compose(alert.clone()).unwrap();
-    let deserialized: TlsAlertBuffer = parse(&mut serialized.clone()).unwrap();
+    let mut serialized = compose(alert.clone()).unwrap();
+    let deserialized: TlsAlertBuffer = parse(&mut serialized).unwrap();
     assert_eq!(alert, deserialized);
   }
 }

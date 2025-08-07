@@ -843,8 +843,8 @@ mod tests {
       length: [0x00, 0x01, 0x23], // Example length
     };
 
-    let serialized = compose(header.clone()).unwrap();
-    let deserialized: TlsHandshakeMessageHeader = parse(&mut serialized.clone()).unwrap();
+    let mut serialized = compose(header.clone()).unwrap();
+    let deserialized: TlsHandshakeMessageHeader = parse(&mut serialized).unwrap();
     assert_eq!(header, deserialized);
   }
 }

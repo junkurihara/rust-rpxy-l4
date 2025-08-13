@@ -14,8 +14,8 @@ publish.workspace = true
 tracing = { version = "0.1.41" }
 
 # error handling
-anyhow = { version = "1.0.98" }
-thiserror = { version = "2.0.12" }
+anyhow = { version = "1.0.99" }
+thiserror = { version = "2.0.14" }
 
 # quic parser
 hkdf = { version = "0.12.4" }

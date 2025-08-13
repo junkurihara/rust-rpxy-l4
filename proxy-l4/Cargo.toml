@@ -13,14 +13,14 @@ publish.workspace = true
 rpxy-l4-lib = { path = "../proxy-l4-lib" }
 
 # error handling
-anyhow = { version = "1.0.98" }
+anyhow = { version = "1.0.99" }
 
 # logging
 tracing = { version = "0.1.41" }
 tracing-subscriber = { version = "0.3.19" }
 
 # config
-clap = { version = "4.5.43", features = ["std", "cargo", "wrap_help"] }
+clap = { version = "4.5.45", features = ["std", "cargo", "wrap_help"] }
 toml = { version = "0.9.5", default-features = false, features = [
   "parse",
   "serde",

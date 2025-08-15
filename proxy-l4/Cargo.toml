@@ -31,7 +31,7 @@ serde = { version = "1.0.219", default-features = false, features = [
   "std",
 ] }
 serde_ignored = { version = "0.1.12" }
-async-trait = { version = "0.1.88" }
+async-trait = { version = "0.1.89" }
 
 # memory allocator
 mimalloc = { version = "0.1.47", default-features = false }

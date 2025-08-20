@@ -15,7 +15,7 @@ tracing = { version = "0.1.41" }
 
 # error handling
 anyhow = { version = "1.0.99" }
-thiserror = { version = "2.0.15" }
+thiserror = { version = "2.0.16" }
 
 # quic parser
 hkdf = { version = "0.12.4" }

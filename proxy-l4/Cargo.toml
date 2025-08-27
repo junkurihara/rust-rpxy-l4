@@ -34,7 +34,7 @@ serde_ignored = { version = "0.1.12" }
 async-trait = { version = "0.1.89" }
 
 # memory allocator
-mimalloc = { version = "0.1.47", default-features = false }
+mimalloc = { version = "0.1.48", default-features = false }
 
 # async runtime
 tokio = { version = "1.47.1", default-features = false, features = [

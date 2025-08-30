@@ -45,5 +45,5 @@ hickory-resolver = { version = "0.25.2" }
 quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }
 
 [dev-dependencies]
-tracing-subscriber = { version = "0.3.19" }
+tracing-subscriber = { version = "0.3.20" }
 # quic and tls

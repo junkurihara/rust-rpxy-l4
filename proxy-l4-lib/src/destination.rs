@@ -3,6 +3,7 @@ use crate::{
   error::{ProxyBuildError, ProxyError},
   target::{DnsCache, TargetAddr},
 };
+use ahash::HashSet;
 use rand::Rng;
 use std::{net::SocketAddr, sync::Arc};
 
@@ -155,10 +156,10 @@ impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, Arc<DnsCache>)> for TargetDes
 pub(crate) struct TlsMatchingRule {
   /// Matched SNIs for the destination
   /// If empty, any SNI is allowed
-  sni: Vec<String>,
+  sni: HashSet<String>,
   /// Matched ALPNs for the destination
   /// If empty, any ALPN is allowed
-  alpn: Vec<String>,
+  alpn: HashSet<String>,
 }
 impl From<(&[&str], &[&str])> for TlsMatchingRule {
   fn from((server_names, alpn): (&[&str], &[&str])) -> Self {
@@ -166,6 +167,17 @@ impl From<(&[&str], &[&str])> for TlsMatchingRule {
       sni: server_names.iter().map(|s| s.to_lowercase()).collect(),
       alpn: alpn.iter().map(|s| s.to_lowercase()).collect(),
     }
+  }
+}
+
+impl TlsMatchingRule {
+  /// Check if the given server names match the rule, assuming server_names have been lowercased
+  fn is_sni_match(&self, server_names: &[String]) -> bool {
+    self.sni.is_empty() || server_names.iter().any(|sni| self.sni.contains(sni))
+  }
+  /// Check if the given ALPNs match the rule, assuming alpn have been lowercased
+  fn is_alpn_match(&self, alpn: &[String]) -> bool {
+    self.alpn.is_empty() || alpn.iter().any(|alpn| self.alpn.contains(alpn))
   }
 }
 
@@ -226,17 +238,13 @@ impl<T> TlsDestinations<T> {
   pub fn find(&self, received_client_hello: &quic_tls::TlsClientHello) -> Option<&TlsDestinationItem<T>> {
     let sni = received_client_hello.sni();
     let alpn = received_client_hello.alpn();
-    let received_sni = sni.iter().map(|v| v.to_lowercase());
-    let received_alpn = alpn.iter().map(|v| v.to_lowercase());
+    let received_sni = sni.iter().map(|v| v.to_lowercase()).collect::<Vec<_>>();
+    let received_alpn = alpn.iter().map(|v| v.to_lowercase()).collect::<Vec<_>>();
 
     let filtered = {
       let filtered = self.inner.iter().filter(|(rule, _)| {
-        let is_sni_match = rule
-          .sni
-          .iter()
-          .any(|server_name| received_sni.clone().any(|r| r.eq(server_name)))
-          || rule.sni.is_empty();
-        let is_alpn_match = rule.alpn.iter().any(|alpn| received_alpn.clone().any(|r| r.eq(alpn))) || rule.alpn.is_empty();
+        let is_sni_match = rule.is_sni_match(&received_sni);
+        let is_alpn_match = rule.is_alpn_match(&received_alpn);
         is_sni_match && is_alpn_match
       });
       // Extract the most specific match

@@ -1,0 +1,12 @@
+Package: rpxy-l4
+Version: @BUILD_VERSION@-1
+Maintainer: Jun Kurihara <kurihara@ieee.org>
+Homepage: https://github.com/junkurihara/rust-rpxy-l4
+Architecture: amd64
+Depends: systemd
+Recommends: rpxy-webui
+Priority: optional
+Section: base
+Description: A reverse proxy for layer-4 (TCP+UDP) with protocol multiplexer, written in Rust
+ rpxy-l4 is a Layer 4 reverse proxy supporting TCP and UDP protocols
+ with protocol multiplexing for high-performance traffic forwarding.

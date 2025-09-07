@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "purge" ]; then
+    # Remove the rpxy-l4 user
+    if getent passwd rpxy-l4 >/dev/null; then
+        deluser --quiet --system rpxy-l4 >/dev/null || true
+    fi
+
+    # Remove config directory
+    rm -rf /etc/rpxy-l4
+
+    # Note: Log directory is intentionally NOT removed to preserve logs
+    # Administrators can manually remove /var/log/rpxy-l4 if desired
+
+    # Remove systemd service state
+    deb-systemd-helper purge rpxy-l4.service >/dev/null || true
+    deb-systemd-helper unmask rpxy-l4.service >/dev/null || true
+fi
+
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+
+exit 0

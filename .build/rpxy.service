@@ -1,0 +1,25 @@
+[Unit]
+Description=rpxy-l4 system service
+Documentation=https://github.com/junkurihara/rust-rpxy-l4
+After=network.target
+Wants=network-online.target
+ 
+[Service]
+Type=simple
+ExecStart=/usr/bin/rpxy-l4-start.sh
+Restart=on-failure
+RestartSec=5
+User=rpxy-l4
+Group=rpxy-l4
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+RuntimeDirectory=rpxy-l4
+RuntimeDirectoryMode=0750
+LogsDirectory=rpxy-l4
+LogsDirectoryMode=0750
+ 
+[Install]
+WantedBy=multi-user.target

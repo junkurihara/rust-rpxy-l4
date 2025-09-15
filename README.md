@@ -107,7 +107,7 @@ The above configuration works as the following manner.
 > udp_idle_lifetime = 30
 > ```
 
-### 2. Load balancing
+### 2.Second step: Load balancing
 
 `rpxy-l4` allows you to distribute incoming TCP/UDP packets to multiple backend servers based on the several simple load balancing algorithms. For the multiple TCP/UDP targets, you can set the load balancing algorithm as follows.
 
@@ -137,7 +137,7 @@ Currently, `rpxy-l4` supports the following load balancing algorithms:
 - `random`: random selection
 - `none`: always use the first target [default]
 
-### 3. Second step: Protocol multiplexing
+### 3. Third step: Protocol multiplexing
 
 Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocol.<service_name>]` filed in the configuration file as follows.
 
@@ -237,7 +237,7 @@ idle_lifetime = 30
 
 This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
 
-### 4. Experimental features
+### 4. Advanced: Experimental features
 
 #### 4.1. TLS Encrypted Client Hello (ECH) proxy
 

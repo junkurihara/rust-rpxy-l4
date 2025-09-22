@@ -13,7 +13,7 @@ publish.workspace = true
 rpxy-l4-lib = { path = "../proxy-l4-lib" }
 
 # error handling
-anyhow = { version = "1.0.99" }
+anyhow = { version = "1.0.100" }
 
 # logging
 tracing = { version = "0.1.41" }

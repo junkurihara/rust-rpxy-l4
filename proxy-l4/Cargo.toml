@@ -26,7 +26,7 @@ toml = { version = "0.9.7", default-features = false, features = [
   "serde",
 ] }
 hot_reload = { version = "0.2.0" }
-serde = { version = "1.0.227", default-features = false, features = [
+serde = { version = "1.0.228", default-features = false, features = [
   "derive",
   "std",
 ] }

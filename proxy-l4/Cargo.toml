@@ -20,7 +20,7 @@ tracing = { version = "0.1.41" }
 tracing-subscriber = { version = "0.3.20" }
 
 # config
-clap = { version = "4.5.48", features = ["std", "cargo", "wrap_help"] }
+clap = { version = "4.5.49", features = ["std", "cargo", "wrap_help"] }
 toml = { version = "0.9.8", default-features = false, features = [
   "parse",
   "serde",

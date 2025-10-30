@@ -890,9 +890,9 @@ dependencies = [
 
 [[package]]
 name = "hot_reload"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a3acd5eaed44a130a20e9239e6f870f11f3ed6097c94485e10c49f25319a956"
+checksum = "10fe37f4feea4948df3d9abb35087cc7322af1c43439f73c41ae757ba55e37c3"
 dependencies = [
  "anyhow",
  "async-trait",

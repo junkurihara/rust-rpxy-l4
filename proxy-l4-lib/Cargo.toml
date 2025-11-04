@@ -35,7 +35,7 @@ tokio = { version = "1.48.0", default-features = false, features = [
   "macros",
   "io-util",
 ] }
-tokio-util = { version = "0.7.16", default-features = false }
+tokio-util = { version = "0.7.17", default-features = false }
 
 # network
 socket2 = { version = "0.6.1", features = ["all"] }

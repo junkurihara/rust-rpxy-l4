@@ -29,6 +29,7 @@
 
 ## Installation
 
+### Building from Source
 You can build an executable binary yourself by checking out this Git repository.
 
 ```bash
@@ -41,6 +42,12 @@ You can build an executable binary yourself by checking out this Git repository.
 ```
 
 Then you have an executive binary `rust-rpxy/target/release/rpxy-l4`.
+
+### Package Installation for Linux (RPM/DEB)
+
+You can find the Jenkins CI/CD build scripts for `rpxy-l4` in the [./.build](./.build) directory.
+
+Prebuilt packages for Linux RPM and DEB are available at [https://rpxy.gamerboy59.dev](https://rpxy.gamerboy59.dev), provided by [@Gamerboy59](https://github.com/Gamerboy59).
 
 ## Usage
 

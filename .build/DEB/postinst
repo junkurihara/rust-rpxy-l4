@@ -1,0 +1,40 @@
+#!/bin/sh
+set -e
+
+# Source debconf library
+. /usr/share/debconf/confmodule
+
+# Create rpxy-l4 user if it doesn't exist
+if ! getent passwd rpxy-l4 > /dev/null; then
+    adduser --system --group --no-create-home --shell /usr/sbin/nologin rpxy-l4
+fi
+
+# Set correct ownership for config directory
+if [ -d /etc/rpxy-l4 ]; then
+    chown -R rpxy-l4:rpxy-l4 /etc/rpxy-l4
+fi
+
+# Create log directory with correct ownership
+mkdir -p /var/log/rpxy-l4
+chown rpxy-l4:rpxy-l4 /var/log/rpxy-l4
+chmod 750 /var/log/rpxy-l4
+
+# Reload systemd, enable and start the service
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+    deb-systemd-helper unmask rpxy-l4.service >/dev/null || true
+    if deb-systemd-helper --quiet was-enabled rpxy-l4.service; then
+        deb-systemd-helper enable rpxy-l4.service >/dev/null || true
+    else
+        deb-systemd-helper update-state rpxy-l4.service >/dev/null || true
+    fi
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+        if [ -n "$2" ]; then
+            deb-systemd-invoke try-restart rpxy-l4.service >/dev/null || true
+        else
+            deb-systemd-invoke start rpxy-l4.service >/dev/null || true
+        fi
+    fi
+fi
+
+exit 0

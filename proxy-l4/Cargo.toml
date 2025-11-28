@@ -16,7 +16,7 @@ rpxy-l4-lib = { path = "../proxy-l4-lib" }
 anyhow = { version = "1.0.100" }
 
 # logging
-tracing = { version = "0.1.41" }
+tracing = { version = "0.1.43" }
 tracing-subscriber = { version = "0.3.20" }
 
 # config

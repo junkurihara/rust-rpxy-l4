@@ -20,7 +20,7 @@ clap = { version = "4", features = ["derive"] }
 #   "webpki-roots",
 #   "https-aws-lc-rs",
 # ] }
-log = { version = "0.4.28" }
+log = { version = "0.4.29" }
 env_logger = { version = "0.11" }
 webpki-roots = { version = "1.0" }
 base64 = { version = "0.22.1" }

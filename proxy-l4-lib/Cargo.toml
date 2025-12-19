@@ -24,7 +24,7 @@ ahash = { version = "0.8.12" }
 thiserror = { version = "2.0.17" }
 
 # traces and logs
-tracing = { version = "0.1.43" }
+tracing = { version = "0.1.44" }
 
 # async runtime
 tokio = { version = "1.48.0", default-features = false, features = [

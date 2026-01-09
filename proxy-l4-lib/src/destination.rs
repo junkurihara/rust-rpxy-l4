@@ -445,7 +445,7 @@ mod tests {
     alpn.add_protocol_name("h2");
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
-    println!("{:#?}", received);
+    // println!("{:#?}", received);
     assert_eq!(dest.map(|v| v.dest), Some("8.8.8.8"));
   }
 }

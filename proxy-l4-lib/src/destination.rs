@@ -173,11 +173,19 @@ impl From<(&[&str], &[&str])> for TlsMatchingRule {
 impl TlsMatchingRule {
   /// Check if the given server names match the rule, assuming server_names have been lowercased
   fn is_sni_match(&self, server_names: &[String]) -> bool {
-    self.sni.is_empty() || server_names.iter().any(|sni| self.sni.contains(sni))
+    self.match_any_sni() || server_names.iter().any(|sni| self.sni.contains(sni))
   }
   /// Check if the given ALPNs match the rule, assuming alpn have been lowercased
   fn is_alpn_match(&self, alpn: &[String]) -> bool {
-    self.alpn.is_empty() || alpn.iter().any(|alpn| self.alpn.contains(alpn))
+    self.match_any_alpn() || alpn.iter().any(|alpn| self.alpn.contains(alpn))
+  }
+  /// Check if sni is empty, i.e., matches any SNI
+  fn match_any_sni(&self) -> bool {
+    self.sni.is_empty()
+  }
+  /// Check if alpn is empty, i.e., matches any ALPN
+  fn match_any_alpn(&self) -> bool {
+    self.alpn.is_empty()
   }
 }
 
@@ -412,5 +420,32 @@ mod tests {
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest.map(|v| v.dest), Some("1.1.1.1"));
+
+    // Match without ALPN & SNI
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.gov");
+    received.add_replace_sni(&sni);
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest.map(|v| v.dest), Some("1.1.1.1"));
+
+    // Match with ALPN but without any configured SNI
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.gov");
+    received.add_replace_sni(&sni);
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h2");
+    received.add_replace_alpn(&alpn);
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest.map(|v| v.dest), Some("8.8.8.8"));
+
+    // Match with ALPN and no SNI configured
+    let sni = quic_tls::extension::ServerNameIndication::default();
+    received.add_replace_sni(&sni);
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h2");
+    received.add_replace_alpn(&alpn);
+    let dest = tls_destinations.find(&received);
+    println!("{:#?}", received);
+    assert_eq!(dest.map(|v| v.dest), Some("8.8.8.8"));
   }
 }

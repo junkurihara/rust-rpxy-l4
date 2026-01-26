@@ -66,7 +66,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
   for (_key, spec) in config.protocols.iter() {
     let target: &[_] = spec.target.as_ref();
     // No need to check if target is empty - already validated in validate_config()
-    
+
     match spec.protocol {
       ProtocolType::Http => {
         tcp_mux_builder.set_base(proto::TcpProtocolType::Http, target, &dns_cache, spec.load_balance.as_ref());
@@ -74,6 +74,10 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
       /* ---------------------------------------- */
       ProtocolType::Ssh => {
         tcp_mux_builder.set_base(proto::TcpProtocolType::Ssh, target, &dns_cache, spec.load_balance.as_ref());
+      }
+      /* ---------------------------------------- */
+      ProtocolType::Socks5 => {
+        tcp_mux_builder.set_base(proto::TcpProtocolType::Socks5, target, &dns_cache, spec.load_balance.as_ref());
       }
       /* ---------------------------------------- */
       ProtocolType::Wireguard => {

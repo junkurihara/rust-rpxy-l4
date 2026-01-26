@@ -29,6 +29,8 @@ pub(crate) enum TcpProbedProtocol {
   Any,
   /// SSH
   Ssh,
+  /// Socks5
+  Socks5,
   /// Plaintext HTTP
   Http,
   /// TLS
@@ -42,6 +44,7 @@ impl TcpProbedProtocol {
     match self {
       Self::Any => crate::proto::TcpProtocolType::Any,
       Self::Ssh => crate::proto::TcpProtocolType::Ssh,
+      Self::Socks5 => crate::proto::TcpProtocolType::Socks5,
       Self::Http => crate::proto::TcpProtocolType::Http,
       Self::Tls(_) => crate::proto::TcpProtocolType::Tls,
     }
@@ -53,6 +56,7 @@ impl std::fmt::Display for TcpProbedProtocol {
     match self {
       Self::Any => write!(f, "Any"),
       Self::Ssh => write!(f, "SSH"),
+      Self::Socks5 => write!(f, "Socks5"),
       Self::Http => write!(f, "HTTP"),
       Self::Tls(_) => write!(f, "TLS"),
       // TODO: and more...
@@ -96,6 +100,36 @@ pub(crate) fn detect_http(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
   }
 }
 
+/// Detect Socks5 protocol
+/// https://github.com/yrutschle/sslh/blob/86188cdd284932e79bfc8929fc595023bcb01d4d/probe.c#L338-L369
+pub(crate) fn detect_socks5(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
+  if buf.len() < 2 {
+    return ProbeResult::PollNext;
+  }
+  // Socks5 handshake starts with version 0x05
+  if buf[0] != 0x05 {
+    return ProbeResult::Failure;
+  }
+  // Second byte should be number of supported authentication methods, assuming maximum of 10,
+  // as defined in https://www.iana.org/assignments/socks-methods/socks-methods.xhtml
+  if buf[1] == 0 || buf[1] > 10 {
+    return ProbeResult::Failure;
+  }
+  let expected_len = 2 + buf[1] as usize;
+  if expected_len > buf.len() {
+    return ProbeResult::PollNext;
+  }
+  // Each authentication method number should be in range 0..9
+  // (https://www.iana.org/assignments/socks-methods/socks-methods.xhtml)
+  for method in &buf[2..expected_len] {
+    if *method > 9 {
+      return ProbeResult::Failure;
+    }
+  }
+  debug!("Socks5 connection detected");
+  ProbeResult::Success(TcpProbedProtocol::Socks5)
+}
+
 /// Detect TLS handshake
 pub(crate) fn detect_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
   let mut buf = BytesMut::from(buf);
@@ -112,7 +146,7 @@ impl TcpProbedProtocol {
     incoming_stream: &mut TcpStream,
     buf: &mut BytesMut,
   ) -> Result<ProbeResult<Self>, ProxyError> {
-    let mut probe_functions = vec![detect_ssh, detect_http, detect_tls_handshake];
+    let mut probe_functions = vec![detect_ssh, detect_http, detect_socks5, detect_tls_handshake];
 
     while !probe_functions.is_empty() {
       // Read the first several bytes to probe. at the first loop, the buffer is empty.
@@ -295,6 +329,25 @@ mod tests {
     // Test insufficient data
     let short_data = b"SS";
     assert_eq!(detect_ssh(short_data), ProbeResult::PollNext);
+  }
+
+  #[test]
+  fn test_socks5_detection() {
+    // Test valid Socks5 handshake
+    let socks5_data = b"\x05\x02\x00\x02"; // Version 5, 2 methods: No Auth (0x00), Username/Password (0x02)
+    assert_eq!(detect_socks5(socks5_data), ProbeResult::Success(TcpProbedProtocol::Socks5));
+
+    // Test invalid version
+    let invalid_version = b"\x04\x01\x00";
+    assert_eq!(detect_socks5(invalid_version), ProbeResult::Failure);
+
+    // Test invalid number of methods
+    let invalid_methods = b"\x05\x0B\x00"; // 11 methods, which is invalid
+    assert_eq!(detect_socks5(invalid_methods), ProbeResult::Failure);
+
+    // Test insufficient data
+    let short_data = b"\x05";
+    assert_eq!(detect_socks5(short_data), ProbeResult::PollNext);
   }
 
   #[test]

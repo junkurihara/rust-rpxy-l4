@@ -16,7 +16,7 @@
 
 - **Basic L4 reverse proxy feature**: `rpxy-l4` can forward TCP and UDP packets to the backend server.
 - **Protocol multiplexing**: `rpxy-l4` can multiplex multiple protocols over TCP/UDP on the same port, which means `rpxy-l4` routes specific protocols to their corresponding backend servers. Currently, it supports the following protocols:
-  - TCP: HTTP (cleartext), TLS, SSH
+  - TCP: HTTP (cleartext), TLS, SSH, Socks5
   - UDP: QUIC (IETF QUIC[^quic]), WireGuard
 - **Load balancing**: `rpxy-l4` can distribute incoming connections to multiple backend servers based on the several simple load balancing algorithms.
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
@@ -30,6 +30,7 @@
 ## Installation
 
 ### Building from Source
+
 You can build an executable binary yourself by checking out this Git repository.
 
 ```bash
@@ -159,7 +160,7 @@ listen_port = 8448
 
 Currently, `rpxy-l4` supports the following protocols for multiplexing:
 
-- TCP: HTTP (cleartext), TLS, SSH
+- TCP: HTTP (cleartext), TLS, SSH, Socks5
 - UDP: QUIC (IETF [RFC9000](https://datatracker.ietf.org/doc/html/rfc9000)), WireGuard
 
 #### 3.1. Example of TLS/QUIC multiplexer with SNI/ALPN
@@ -173,7 +174,7 @@ udp_target = ["192.168.0.3:4000"]
 
 # TLS
 [protocol."tls_service"]
-# Name of protocol tls|ssh|http|wireguard|quic
+# Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "tls"
 
 # Target for connections detected as TLS.
@@ -185,7 +186,7 @@ load_balance = "source_ip"
 #####################
 # IETF QUIC
 [protocol."quic_service"]
-# Name of protocol tls|ssh|http|wireguard|quic
+# Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "quic"
 
 # Target for connections detected as QUIC.

@@ -71,7 +71,7 @@ pub fn validate_protocol_config(key: &str, config: &ProtocolConfig) -> Result<()
         )));
       }
     }
-    ProtocolType::Http | ProtocolType::Ssh => {
+    ProtocolType::Http | ProtocolType::Ssh | ProtocolType::Socks5 => {
       // Validate TCP non-TLS protocols
       if config.ech.is_some() {
         return Err(ProxyBuildError::BuildMultiplexersError(format!(

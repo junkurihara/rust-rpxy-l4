@@ -11,23 +11,23 @@ publish.workspace = true
 
 [dependencies]
 derive_builder = { version = "0.20.2" }
-bytes = { version = "1.10.1" }
+bytes = { version = "1.11.0" }
 
 # backend selector
-rand = { version = "0.9.1" }
+rand = { version = "0.9.2" }
 
 # Connection pool
 dashmap = { version = "6.1.0" }
 ahash = { version = "0.8.12" }
 
 # error handling
-thiserror = { version = "2.0.12" }
+thiserror = { version = "2.0.18" }
 
 # traces and logs
-tracing = { version = "0.1.41" }
+tracing = { version = "0.1.44" }
 
 # async runtime
-tokio = { version = "1.45.0", default-features = false, features = [
+tokio = { version = "1.49.0", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",
@@ -35,15 +35,15 @@ tokio = { version = "1.45.0", default-features = false, features = [
   "macros",
   "io-util",
 ] }
-tokio-util = { version = "0.7.15", default-features = false }
+tokio-util = { version = "0.7.18", default-features = false }
 
 # network
-socket2 = { version = "0.5.9" }
+socket2 = { version = "0.6.2", features = ["all"] }
 hickory-resolver = { version = "0.25.2" }
 
 # quic and tls
 quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }
 
 [dev-dependencies]
-tracing-subscriber = { version = "0.3.19" }
+tracing-subscriber = { version = "0.3.22" }
 # quic and tls

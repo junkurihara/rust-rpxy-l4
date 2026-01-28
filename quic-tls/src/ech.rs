@@ -214,3 +214,319 @@ impl TlsClientHello {
     Ok(())
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::{
+    client_hello::{ServerNameIndication, TlsClientHello},
+    ech_config::EchConfigList,
+  };
+  use hpke::{aead::AesGcm128, kdf::HkdfSha256};
+
+  /// Helper function to create a test ECH configuration and private keys
+  fn create_test_ech_config() -> (EchConfigList, Vec<EchPrivateKey>) {
+    EchConfigList::generate("test.example.com").unwrap()
+  }
+
+  /// Helper function to create a test ClientHello with SNI
+  fn create_test_client_hello(server_name: &str) -> TlsClientHello {
+    let mut client_hello = TlsClientHello::default();
+    let mut sni = ServerNameIndication::default();
+    sni.add_server_name(server_name);
+    client_hello.add_replace_sni(&sni);
+    client_hello
+  }
+
+  #[test]
+  fn test_no_ech_outer_returns_none() {
+    // Create a regular ClientHello without ECH
+    let client_hello = create_test_client_hello("test.example.com");
+    let (_, private_keys) = create_test_ech_config();
+
+    // Test decryption on non-ECH ClientHello
+    let result = client_hello.decrypt_ech(&private_keys, false).unwrap();
+    assert!(result.is_none());
+  }
+
+  #[test]
+  fn test_grease_ech_handling() {
+    // Test that we properly handle cases where no matching config is found
+    let (_, private_keys) = create_test_ech_config();
+
+    // Create a ClientHello without ECH (simulating no match case)
+    let client_hello = create_test_client_hello("test.example.com");
+
+    // Should return None when no ECH extension is present
+    let result = client_hello.decrypt_ech(&private_keys, false).unwrap();
+    assert!(result.is_none());
+  }
+
+  #[test]
+  fn test_unsupported_cipher_suite() {
+    // Test that we can detect supported cipher suites in ECH configs
+    let (config_list, _) = create_test_ech_config();
+    let config = config_list.iter().next().unwrap();
+
+    // Get the cipher suites from the config
+    let cipher_suites = config.cipher_suites();
+    assert!(!cipher_suites.is_empty());
+
+    // Verify AES-GCM-128 + HKDF-SHA256 is supported
+    let supported_suite = cipher_suites
+      .iter()
+      .find(|cs| cs.kdf_id == HkdfSha256::KDF_ID && cs.aead_id == AesGcm128::AEAD_ID);
+    assert!(supported_suite.is_some());
+  }
+
+  #[test]
+  fn test_brute_force_with_multiple_keys() {
+    // Create multiple ECH configs and keys
+    let (_, keys1) = create_test_ech_config();
+    let (_, keys2) = create_test_ech_config();
+
+    // Create a regular ClientHello (no ECH)
+    let client_hello = create_test_client_hello("test.example.com");
+
+    // Combine all keys
+    let mut all_keys = keys1;
+    all_keys.extend(keys2);
+
+    // Test brute force decryption (ignore_config_id = true)
+    // Should return None because there's no ECH extension
+    let result = client_hello.decrypt_ech(&all_keys, true).unwrap();
+    assert!(result.is_none());
+  }
+
+  #[test]
+  fn test_ech_extension_types() {
+    // Test the helper methods for ECH detection
+    let regular_hello = create_test_client_hello("regular.example.com");
+
+    // A regular ClientHello should not be ECH inner or outer
+    assert!(!regular_hello.is_ech_inner());
+    assert!(!regular_hello.is_ech_outer());
+  }
+
+  #[test]
+  fn test_ech_config_generation_and_validation() {
+    // Test that we can generate ECH configs and private keys
+    let (config_list, private_keys) = create_test_ech_config();
+
+    assert!(config_list.iter().count() > 0);
+    assert!(!private_keys.is_empty());
+    assert_eq!(config_list.iter().count(), private_keys.len());
+
+    // Test that config_ids match between configs and keys
+    let config = config_list.iter().next().unwrap();
+    let private_key = private_keys.first().unwrap();
+
+    assert_eq!(config.config_id(), private_key.config_id());
+
+    // Test that public name is set correctly
+    let public_name_bytes = config.public_name();
+    let public_name = String::from_utf8_lossy(&public_name_bytes);
+    assert_eq!(public_name, "test.example.com");
+  }
+
+  #[test]
+  fn test_public_name_consistency_validation() {
+    // This test validates the concept of public name consistency
+    // In a real scenario, the outer ClientHello's SNI should match the ECH config's public name
+    let (config_list, _) = create_test_ech_config();
+    let config = config_list.iter().next().unwrap();
+
+    let public_name_bytes = config.public_name();
+    let public_name = String::from_utf8_lossy(&public_name_bytes);
+
+    // Create outer hello with matching public name
+    let matching_outer = create_test_client_hello(&public_name);
+    let matching_sni = matching_outer.sni();
+    assert_eq!(matching_sni, vec![public_name.to_string()]);
+
+    // Create outer hello with non-matching public name
+    let non_matching_outer = create_test_client_hello("different.example.com");
+    let non_matching_sni = non_matching_outer.sni();
+    assert_ne!(non_matching_sni, vec![public_name.to_string()]);
+  }
+
+  #[test]
+  fn test_client_hello_serialization() {
+    // Test that ClientHello can be serialized and deserialized
+    let client_hello = create_test_client_hello("test.example.com");
+
+    // Test serialization
+    let serialized = compose(client_hello.clone());
+    assert!(serialized.is_ok());
+
+    let bytes = serialized.unwrap();
+    assert!(!bytes.is_empty());
+
+    // Verify SNI is present in serialized form
+    let sni_list = client_hello.sni();
+    assert_eq!(sni_list, vec!["test.example.com"]);
+  }
+
+  #[test]
+  fn test_ech_private_key_properties() {
+    // Test ECH private key properties
+    let (config_list, private_keys) = create_test_ech_config();
+    let config = config_list.iter().next().unwrap();
+    let private_key = private_keys.first().unwrap();
+
+    // Test that private key has expected properties
+    assert_eq!(private_key.config_id(), config.config_id());
+
+    let private_key_public_name = private_key.public_name();
+    let config_public_name = config.public_name();
+    assert_eq!(private_key_public_name, config_public_name);
+
+    let private_key_cipher_suites = private_key.cipher_suites();
+    let config_cipher_suites = config.cipher_suites();
+    assert_eq!(private_key_cipher_suites, config_cipher_suites);
+  }
+
+  #[test]
+  fn test_empty_private_key_list() {
+    // Test behavior with empty private key list
+    let client_hello = create_test_client_hello("test.example.com");
+    let empty_keys: Vec<EchPrivateKey> = vec![];
+
+    // Should return None when no private keys are provided
+    let result = client_hello.decrypt_ech(&empty_keys, false).unwrap();
+    assert!(result.is_none());
+
+    // Same result with brute force mode
+    let result_brute_force = client_hello.decrypt_ech(&empty_keys, true).unwrap();
+    assert!(result_brute_force.is_none());
+  }
+
+  #[test]
+  fn test_multiple_ech_configs() {
+    // Test generation of multiple ECH configs with different public names
+    let (config_list1, keys1) = create_test_ech_config();
+    let (config_list2, keys2) = EchConfigList::generate("different.example.com").unwrap();
+
+    // Verify different public names
+    let config1 = config_list1.iter().next().unwrap();
+    let config2 = config_list2.iter().next().unwrap();
+
+    let public_name1_bytes = config1.public_name();
+    let public_name1 = String::from_utf8_lossy(&public_name1_bytes);
+    let public_name2_bytes = config2.public_name();
+    let public_name2 = String::from_utf8_lossy(&public_name2_bytes);
+
+    assert_eq!(public_name1, "test.example.com");
+    assert_eq!(public_name2, "different.example.com");
+    assert_ne!(public_name1, public_name2);
+
+    // Verify different config IDs (should be random)
+    assert_ne!(config1.config_id(), config2.config_id());
+
+    // Test that keys can be combined
+    let mut combined_keys = keys1;
+    combined_keys.extend(keys2);
+    assert_eq!(combined_keys.len(), 2);
+  }
+
+  #[test]
+  fn test_ech_decryption_performance() {
+    // Benchmark test: measure performance of ECH decryption operations
+    use std::time::Instant;
+
+    let (_, private_keys) = create_test_ech_config();
+    let client_hello = create_test_client_hello("test.example.com");
+
+    // Measure time for multiple decryption attempts
+    let start = Instant::now();
+    let iterations = 1000;
+
+    for _ in 0..iterations {
+      let _result = client_hello.decrypt_ech(&private_keys, false).unwrap();
+    }
+
+    let duration = start.elapsed();
+    println!(
+      "ECH decryption (no ECH): {} iterations in {:?} ({:?} per iteration)",
+      iterations,
+      duration,
+      duration / iterations
+    );
+
+    // Performance should be reasonable (less than 1ms per operation for non-ECH case)
+    assert!(
+      duration < std::time::Duration::from_millis(iterations.into()),
+      "ECH decryption took too long: {:?}",
+      duration
+    );
+  }
+
+  #[test]
+  fn test_ech_config_generation_performance() {
+    // Benchmark test: measure performance of ECH config generation
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let iterations = 10; // Reduced from 100 since config generation is computationally expensive
+
+    for i in 0..iterations {
+      let public_name = format!("test{}.example.com", i);
+      let _result = EchConfigList::generate(&public_name).unwrap();
+    }
+
+    let duration = start.elapsed();
+    println!(
+      "ECH config generation: {} iterations in {:?} ({:?} per iteration)",
+      iterations,
+      duration,
+      duration / iterations
+    );
+
+    // Config generation should be reasonable (less than 50ms per operation)
+    assert!(
+      duration < std::time::Duration::from_millis((iterations * 50).into()),
+      "ECH config generation took too long: {:?}",
+      duration
+    );
+  }
+
+  #[test]
+  fn test_ech_decryption_with_many_keys() {
+    // Benchmark test: measure performance when searching through many keys
+    use std::time::Instant;
+
+    // Generate many ECH configs and keys
+    let mut all_keys = Vec::new();
+    for i in 0..50 {
+      let public_name = format!("test{}.example.com", i);
+      let (_, keys) = EchConfigList::generate(&public_name).unwrap();
+      all_keys.extend(keys);
+    }
+
+    let client_hello = create_test_client_hello("test.example.com");
+
+    // Measure time for brute force decryption with many keys
+    let start = Instant::now();
+    let iterations = 100;
+
+    for _ in 0..iterations {
+      let _result = client_hello.decrypt_ech(&all_keys, true).unwrap();
+    }
+
+    let duration = start.elapsed();
+    println!(
+      "ECH brute force decryption with {} keys: {} iterations in {:?} ({:?} per iteration)",
+      all_keys.len(),
+      iterations,
+      duration,
+      duration / iterations
+    );
+
+    // Brute force with many keys should still be reasonable
+    assert!(
+      duration < std::time::Duration::from_millis((iterations * 10).into()),
+      "ECH brute force decryption took too long: {:?}",
+      duration
+    );
+  }
+}

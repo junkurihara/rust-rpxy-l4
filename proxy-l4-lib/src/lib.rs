@@ -31,6 +31,9 @@ pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpPr
 /* ---------------------------------------- */
 /// Build TCP and UDP multiplexers from the configuration
 pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDestinationMux), ProxyBuildError> {
+  // Validate configuration first using centralized validation
+  config::validate_config(config)?;
+
   let mut tcp_mux_builder = TcpDestinationMuxBuilder::default();
   let mut udp_mux_builder = UdpDestinationMuxBuilder::default();
 
@@ -60,13 +63,10 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
   }
 
   // Implement protocol specific routers
-  for (key, spec) in config.protocols.iter() {
+  for (_key, spec) in config.protocols.iter() {
     let target: &[_] = spec.target.as_ref();
-    if target.is_empty() {
-      return Err(ProxyBuildError::BuildMultiplexersError(format!(
-        "target is empty for key: {key}"
-      )));
-    }
+    // No need to check if target is empty - already validated in validate_config()
+
     match spec.protocol {
       ProtocolType::Http => {
         tcp_mux_builder.set_base(proto::TcpProtocolType::Http, target, &dns_cache, spec.load_balance.as_ref());
@@ -74,6 +74,10 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
       /* ---------------------------------------- */
       ProtocolType::Ssh => {
         tcp_mux_builder.set_base(proto::TcpProtocolType::Ssh, target, &dns_cache, spec.load_balance.as_ref());
+      }
+      /* ---------------------------------------- */
+      ProtocolType::Socks5 => {
+        tcp_mux_builder.set_base(proto::TcpProtocolType::Socks5, target, &dns_cache, spec.load_balance.as_ref());
       }
       /* ---------------------------------------- */
       ProtocolType::Wireguard => {
@@ -114,10 +118,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
           .server_names
           .as_ref()
           .map(|v| v.iter().map(|x| x.as_str()).collect::<Vec<&str>>());
-        // TODO: currently QUIC ECH is not supported
-        if spec.ech.is_some() {
-          trace::warn!("QUIC ECH is not supported yet");
-        }
+        // Note: QUIC ECH validation already handled in validate_config()
         udp_mux_builder.set_quic(
           target,
           &dns_cache,

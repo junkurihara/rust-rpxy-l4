@@ -11,24 +11,24 @@ publish.workspace = true
 
 [dependencies]
 # traces and logs
-tracing = { version = "0.1.41" }
+tracing = { version = "0.1.44" }
 
 # error handling
-anyhow = { version = "1.0.98" }
-thiserror = { version = "2.0.12" }
+anyhow = { version = "1.0.100" }
+thiserror = { version = "2.0.18" }
 
 # quic parser
 hkdf = { version = "0.12.4" }
 sha2 = { version = "0.10.9" }
 aes = { version = "0.8.4" }
 aes-gcm = { version = "0.10.3" }
-hex-literal = { version = "1.0.0" }
+hex-literal = { version = "1.1.0" }
 
 # ech
-bytes = { version = "1.10.1" }
-rand = { version = "0.9.1" }
+bytes = { version = "1.11.0" }
+rand = { version = "0.9.2" }
 hpke = { version = "0.13.0" }
 base64 = { version = "0.22.1" }
 
 [dev-dependencies]
-rustls = { version = "0.23.27" }
+rustls = { version = "0.23.36" }

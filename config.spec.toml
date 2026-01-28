@@ -65,7 +65,7 @@ dns_cache_max_ttl = "1h"
 #########################
 ### Example for TLS
 [protocols."tls_1"]
-# Name of protocol tls|ssh|http|wireguard|quic
+# Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "tls"
 
 # Target for connections detected as the `protocol`.
@@ -141,7 +141,7 @@ private_server_names = [
 #########################
 ### Example for QUIC
 [protocols."quic"]
-# Name of protocol tls|ssh|http|wireguard|quic
+# Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "quic"
 
 # Target for connections detected as QUIC.
@@ -159,7 +159,7 @@ idle_lifetime = 30
 #########################
 ### Example for SSH
 [protocols."ssh"]
-# Name of protocol tls|ssh|http|wireguard|quic
+# Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "ssh"
 
 # Target for connections detected as SSH.
@@ -168,6 +168,17 @@ target = ["192.168.122.4:22"]
 # Load balancing method for SSH connections [default: none]
 load_balance = "source_ip"
 
+#########################
+### Example for Socks5
+[protocols."socks5"]
+# Name of protocol tls|ssh|socks5|http|wireguard|quic
+protocol = "socks5"
+
+# Target for connections detected as Socks5.
+target = ["192.168.122.4:1080"]
+
+# Load balancing method for Socks5 connections [default: none]
+load_balance = "source_ip"
 
 # #################################
 # #      Experimental setting     #

@@ -16,7 +16,7 @@
 
 - **Basic L4 reverse proxy feature**: `rpxy-l4` can forward TCP and UDP packets to the backend server.
 - **Protocol multiplexing**: `rpxy-l4` can multiplex multiple protocols over TCP/UDP on the same port, which means `rpxy-l4` routes specific protocols to their corresponding backend servers. Currently, it supports the following protocols:
-  - TCP: HTTP (cleartext), TLS, SSH
+  - TCP: HTTP (cleartext), TLS, SSH, Socks5
   - UDP: QUIC (IETF QUIC[^quic]), WireGuard
 - **Load balancing**: `rpxy-l4` can distribute incoming connections to multiple backend servers based on the several simple load balancing algorithms.
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
@@ -28,6 +28,8 @@
 [^ech_proxy]: Client facing server in the context of [ECH Split Mode](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-3)
 
 ## Installation
+
+### Building from Source
 
 You can build an executable binary yourself by checking out this Git repository.
 
@@ -41,6 +43,12 @@ You can build an executable binary yourself by checking out this Git repository.
 ```
 
 Then you have an executive binary `rust-rpxy/target/release/rpxy-l4`.
+
+### Package Installation for Linux (RPM/DEB)
+
+You can find the Jenkins CI/CD build scripts for `rpxy-l4` in the [./.build](./.build) directory.
+
+Prebuilt packages for Linux RPM and DEB are available at [https://rpxy.gamerboy59.dev](https://rpxy.gamerboy59.dev), provided by [@Gamerboy59](https://github.com/Gamerboy59).
 
 ## Usage
 
@@ -107,7 +115,7 @@ The above configuration works as the following manner.
 > udp_idle_lifetime = 30
 > ```
 
-### 2. Load balancing
+### 2.Second step: Load balancing
 
 `rpxy-l4` allows you to distribute incoming TCP/UDP packets to multiple backend servers based on the several simple load balancing algorithms. For the multiple TCP/UDP targets, you can set the load balancing algorithm as follows.
 
@@ -137,7 +145,7 @@ Currently, `rpxy-l4` supports the following load balancing algorithms:
 - `random`: random selection
 - `none`: always use the first target [default]
 
-### 3. Second step: Protocol multiplexing
+### 3. Third step: Protocol multiplexing
 
 Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocol.<service_name>]` filed in the configuration file as follows.
 
@@ -152,7 +160,7 @@ listen_port = 8448
 
 Currently, `rpxy-l4` supports the following protocols for multiplexing:
 
-- TCP: HTTP (cleartext), TLS, SSH
+- TCP: HTTP (cleartext), TLS, SSH, Socks5
 - UDP: QUIC (IETF [RFC9000](https://datatracker.ietf.org/doc/html/rfc9000)), WireGuard
 
 #### 3.1. Example of TLS/QUIC multiplexer with SNI/ALPN
@@ -166,7 +174,7 @@ udp_target = ["192.168.0.3:4000"]
 
 # TLS
 [protocol."tls_service"]
-# Name of protocol tls|ssh|http|wireguard|quic
+# Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "tls"
 
 # Target for connections detected as TLS.
@@ -178,7 +186,7 @@ load_balance = "source_ip"
 #####################
 # IETF QUIC
 [protocol."quic_service"]
-# Name of protocol tls|ssh|http|wireguard|quic
+# Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "quic"
 
 # Target for connections detected as QUIC.
@@ -237,7 +245,7 @@ idle_lifetime = 30
 
 This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
 
-### 4. Experimental features
+### 4. Advanced: Experimental features
 
 #### 4.1. TLS Encrypted Client Hello (ECH) proxy
 

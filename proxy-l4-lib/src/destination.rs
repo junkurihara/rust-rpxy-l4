@@ -3,6 +3,7 @@ use crate::{
   error::{ProxyBuildError, ProxyError},
   target::{DnsCache, TargetAddr},
 };
+use ahash::HashSet;
 use rand::Rng;
 use std::{net::SocketAddr, sync::Arc};
 
@@ -95,13 +96,16 @@ impl TargetDestination {
       LoadBalance::None => 0,
     };
 
-    let target = self.dst_addrs.get(target_index).ok_or(ProxyError::NoDestinationAddress)?;
+    let target = self
+      .dst_addrs
+      .get(target_index)
+      .ok_or(ProxyError::NoDestinationAddress(String::new()))?;
 
     // Resolve the target to get actual socket addresses
     let resolved_addrs = target.resolve_cached(&self.dns_cache).await?;
 
     if resolved_addrs.is_empty() {
-      return Err(ProxyError::NoDestinationAddress);
+      return Err(ProxyError::NoDestinationAddress(String::new()));
     }
 
     // If we have multiple resolved addresses, select one consistently
@@ -152,10 +156,10 @@ impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, Arc<DnsCache>)> for TargetDes
 pub(crate) struct TlsMatchingRule {
   /// Matched SNIs for the destination
   /// If empty, any SNI is allowed
-  sni: Vec<String>,
+  sni: HashSet<String>,
   /// Matched ALPNs for the destination
   /// If empty, any ALPN is allowed
-  alpn: Vec<String>,
+  alpn: HashSet<String>,
 }
 impl From<(&[&str], &[&str])> for TlsMatchingRule {
   fn from((server_names, alpn): (&[&str], &[&str])) -> Self {
@@ -163,6 +167,25 @@ impl From<(&[&str], &[&str])> for TlsMatchingRule {
       sni: server_names.iter().map(|s| s.to_lowercase()).collect(),
       alpn: alpn.iter().map(|s| s.to_lowercase()).collect(),
     }
+  }
+}
+
+impl TlsMatchingRule {
+  /// Check if the given server names match the rule, assuming server_names have been lowercased
+  fn is_sni_match(&self, server_names: &[String]) -> bool {
+    self.match_any_sni() || server_names.iter().any(|sni| self.sni.contains(sni))
+  }
+  /// Check if the given ALPNs match the rule, assuming alpn have been lowercased
+  fn is_alpn_match(&self, alpn: &[String]) -> bool {
+    self.match_any_alpn() || alpn.iter().any(|alpn| self.alpn.contains(alpn))
+  }
+  /// Check if sni is empty, i.e., matches any SNI
+  fn match_any_sni(&self) -> bool {
+    self.sni.is_empty()
+  }
+  /// Check if alpn is empty, i.e., matches any ALPN
+  fn match_any_alpn(&self) -> bool {
+    self.alpn.is_empty()
   }
 }
 
@@ -223,17 +246,13 @@ impl<T> TlsDestinations<T> {
   pub fn find(&self, received_client_hello: &quic_tls::TlsClientHello) -> Option<&TlsDestinationItem<T>> {
     let sni = received_client_hello.sni();
     let alpn = received_client_hello.alpn();
-    let received_sni = sni.iter().map(|v| v.to_lowercase());
-    let received_alpn = alpn.iter().map(|v| v.to_lowercase());
+    let received_sni = sni.iter().map(|v| v.to_lowercase()).collect::<Vec<_>>();
+    let received_alpn = alpn.iter().map(|v| v.to_lowercase()).collect::<Vec<_>>();
 
     let filtered = {
       let filtered = self.inner.iter().filter(|(rule, _)| {
-        let is_sni_match = rule
-          .sni
-          .iter()
-          .any(|server_name| received_sni.clone().any(|r| r.eq(server_name)))
-          || rule.sni.is_empty();
-        let is_alpn_match = rule.alpn.iter().any(|alpn| received_alpn.clone().any(|r| r.eq(alpn))) || rule.alpn.is_empty();
+        let is_sni_match = rule.is_sni_match(&received_sni);
+        let is_alpn_match = rule.is_alpn_match(&received_alpn);
         is_sni_match && is_alpn_match
       });
       // Extract the most specific match
@@ -401,5 +420,179 @@ mod tests {
     received.add_replace_alpn(&alpn);
     let dest = tls_destinations.find(&received);
     assert_eq!(dest.map(|v| v.dest), Some("1.1.1.1"));
+
+    // Match without ALPN & SNI
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.gov");
+    received.add_replace_sni(&sni);
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest.map(|v| v.dest), Some("1.1.1.1"));
+
+    // Match with ALPN but without any configured SNI
+    let mut sni = quic_tls::extension::ServerNameIndication::default();
+    sni.add_server_name("example.gov");
+    received.add_replace_sni(&sni);
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h2");
+    received.add_replace_alpn(&alpn);
+    let dest = tls_destinations.find(&received);
+    assert_eq!(dest.map(|v| v.dest), Some("8.8.8.8"));
+
+    // Match with ALPN and no SNI configured
+    let sni = quic_tls::extension::ServerNameIndication::default();
+    received.add_replace_sni(&sni);
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("h2");
+    received.add_replace_alpn(&alpn);
+    let dest = tls_destinations.find(&received);
+    // println!("{:#?}", received);
+    assert_eq!(dest.map(|v| v.dest), Some("8.8.8.8"));
+  }
+
+  #[tokio::test]
+  async fn test_tcp_proxy_hostname_routing_with_alpn() {
+    use crate::{TcpDestinationMuxBuilder, probe::TcpProbedProtocol, proto::TcpProtocolType};
+    use quic_tls::TlsClientHelloBuffer;
+
+    let dns_cache = Arc::new(DnsCache::default());
+
+    // Test considering https://github.com/junkurihara/rust-rpxy-l4/issues/125
+    // - localhost:2443 HTTP (ALPN: http/1.1)
+    // - localhost:3443 Yggdrasil (no ALPN)
+    let dst_https: &[TargetAddr] = &["localhost:2443".parse().unwrap()];
+    let dst_yggdrasil: &[TargetAddr] = &["localhost:3443".parse().unwrap()];
+
+    // Perform DNS resolution in advance and cache the results
+    // This resolves localhost to 127.0.0.1 and [::1]
+    let _ = dns_cache.get_or_resolve("localhost").await;
+
+    let dst_mux = Arc::new(
+      TcpDestinationMuxBuilder::default()
+        // TLS without ALPN -> localhost:3443 (catch-all)
+        .set_base(TcpProtocolType::Tls, dst_yggdrasil, &dns_cache, None)
+        // TLS w/ ALPN http/1.1 -> localhost:2443
+        .set_tls(dst_https, &dns_cache, None, None, Some(&["http/1.1"]), None)
+        .build()
+        .unwrap(),
+    );
+
+    // Scenario 1: HTTP connection first
+    println!("=== Scenario 1: HTTP connection first ===");
+
+    // 1. HTTP connection (ALPN: http/1.1)
+    let mut http_hello = TlsClientHelloBuffer::default();
+    let mut alpn = quic_tls::extension::ApplicationLayerProtocolNegotiation::default();
+    alpn.add_protocol_name("http/1.1");
+    http_hello.client_hello.add_replace_alpn(&alpn);
+
+    let found_http = dst_mux
+      .find_destination(&TcpProbedProtocol::Tls(http_hello.clone()))
+      .expect("Should find HTTP destination");
+    let dst_http = found_http
+      .get_destination(&"127.0.0.1:60000".parse().unwrap())
+      .await
+      .expect("Should resolve HTTP destination");
+    println!("HTTP routed to: {}", dst_http);
+    assert_eq!(dst_http.port(), 2443, "HTTP should route to port 2443");
+
+    // 2. Yggdrasil connection (no ALPN)
+    let ygg_hello = TlsClientHelloBuffer::default();
+    let found_ygg = dst_mux
+      .find_destination(&TcpProbedProtocol::Tls(ygg_hello.clone()))
+      .expect("Should find Yggdrasil destination");
+    let dst_ygg = found_ygg
+      .get_destination(&"127.0.0.1:60000".parse().unwrap())
+      .await
+      .expect("Should resolve Yggdrasil destination");
+    println!("Yggdrasil routed to: {}", dst_ygg);
+    assert_eq!(dst_ygg.port(), 3443, "Yggdrasil should route to port 3443");
+
+    // 3. HTTP connection again to verify consistent routing
+    let found_http2 = dst_mux
+      .find_destination(&TcpProbedProtocol::Tls(http_hello.clone()))
+      .expect("Should find HTTP destination again");
+    let dst_http2 = found_http2
+      .get_destination(&"127.0.0.1:60001".parse().unwrap())
+      .await
+      .expect("Should resolve HTTP destination again");
+    println!("Second HTTP routed to: {}", dst_http2);
+    assert_eq!(dst_http2.port(), 2443, "Second HTTP should still route to port 2443");
+
+    // Scenario 2: Yggdrasil connection first
+    println!("\n=== Scenario 2: Yggdrasil connection first ===");
+
+    // New DNS cache to ensure no cached results affect the test
+    let dns_cache2 = Arc::new(DnsCache::default());
+    let _ = dns_cache2.get_or_resolve("localhost").await;
+
+    let dst_mux2 = Arc::new(
+      TcpDestinationMuxBuilder::default()
+        .set_tls(dst_https, &dns_cache2, None, None, Some(&["http/1.1"]), None)
+        .set_base(TcpProtocolType::Tls, dst_yggdrasil, &dns_cache2, None)
+        .build()
+        .unwrap(),
+    );
+
+    let found_ygg2 = dst_mux2
+      .find_destination(&TcpProbedProtocol::Tls(ygg_hello.clone()))
+      .expect("Should find Yggdrasil destination");
+    let dst_ygg2 = found_ygg2
+      .get_destination(&"[::1]:60000".parse().unwrap())
+      .await
+      .expect("Should resolve Yggdrasil destination");
+    println!("Yggdrasil routed to: {}", dst_ygg2);
+    assert_eq!(dst_ygg2.port(), 3443, "Yggdrasil should route to port 3443");
+
+    let found_http3 = dst_mux2
+      .find_destination(&TcpProbedProtocol::Tls(http_hello.clone()))
+      .expect("Should find HTTP destination");
+    let dst_http3 = found_http3
+      .get_destination(&"[::1]:60000".parse().unwrap())
+      .await
+      .expect("Should resolve HTTP destination");
+    println!("HTTP routed to: {}", dst_http3);
+    assert_eq!(dst_http3.port(), 2443, "HTTP should route to port 2443");
+
+    // Scenario 3: Alternating connections
+    println!("\n=== Scenario 3: Alternating connections (10 iterations) ===");
+    for i in 0..10 {
+      let src_addr: SocketAddr = format!("192.168.1.{}:12345", 100 + i).parse().unwrap();
+
+      let found_http = dst_mux
+        .find_destination(&TcpProbedProtocol::Tls(http_hello.clone()))
+        .expect("Should find HTTP destination");
+      let dst_http = found_http
+        .get_destination(&src_addr)
+        .await
+        .expect("Should resolve HTTP destination");
+
+      let found_ygg = dst_mux
+        .find_destination(&TcpProbedProtocol::Tls(ygg_hello.clone()))
+        .expect("Should find Yggdrasil destination");
+      let dst_ygg = found_ygg
+        .get_destination(&src_addr)
+        .await
+        .expect("Should resolve Yggdrasil destination");
+
+      assert_eq!(
+        dst_http.port(),
+        2443,
+        "Iteration {}: HTTP routing inconsistent - got port {}",
+        i,
+        dst_http.port()
+      );
+      assert_eq!(
+        dst_ygg.port(),
+        3443,
+        "Iteration {}: Yggdrasil routing inconsistent - got port {}",
+        i,
+        dst_ygg.port()
+      );
+
+      // Ensure that the two routes are different
+      assert_ne!(dst_http.port(), dst_ygg.port(), "Iteration {}: Routes should be different", i);
+    }
+
+    println!("\nAll tests passed - routing is consistent");
   }
 }

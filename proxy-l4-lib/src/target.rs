@@ -24,7 +24,7 @@ pub enum TargetAddr {
 /// DNS cache entry containing resolved addresses with TTL information
 #[derive(Debug, Clone)]
 struct CacheEntry {
-  /// Resolved socket addresses
+  /// Resolved ip addresses
   addresses: Vec<IpAddr>,
   /// When this entry expires
   expires_at: Instant,
@@ -128,7 +128,7 @@ impl DnsCache {
 
     trace!("Response IPs: {:?}", response);
 
-    // Convert IPs to socket addresses with port
+    // Collect resolved IP addresses
     let addresses: Vec<IpAddr> = response.iter().collect();
 
     trace!("Addresses: {:?}", addresses);

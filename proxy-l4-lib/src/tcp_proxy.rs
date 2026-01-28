@@ -36,14 +36,14 @@ enum TcpDestination {
 
 #[derive(Debug, Clone)]
 /// Tcp destination struct
-struct TcpDestinationInner {
+pub(crate) struct TcpDestinationInner {
   /// Destination inner
   inner: TargetDestination,
 }
 
 #[derive(Debug, Clone)]
 /// Destination struct found in the multiplexer from TcpProbedProtocol
-enum FoundTcpDestination {
+pub(crate) enum FoundTcpDestination {
   /// Tcp destination
   Tcp(TcpDestinationInner),
   /// Tls destination
@@ -69,7 +69,7 @@ impl TcpDestinationInner {
 
 impl FoundTcpDestination {
   /// Get the destination socket address
-  async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
+  pub(crate) async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
     match self {
       Self::Tcp(tcp_destination) => tcp_destination.get_destination(src_addr).await,
       Self::Tls(tls_destination) => tls_destination.destination().get_destination(src_addr).await,
@@ -162,7 +162,7 @@ impl TcpDestinationMux {
     self.inner.is_empty()
   }
   /// Get the destination socket address for the given protocol
-  fn find_destination(&self, probed_protocol: &TcpProbedProtocol) -> Result<FoundTcpDestination, ProxyError> {
+  pub(crate) fn find_destination(&self, probed_protocol: &TcpProbedProtocol) -> Result<FoundTcpDestination, ProxyError> {
     let proto_type = probed_protocol.proto_type();
     match self.inner.get(&proto_type) {
       // Found non-TLS protocol

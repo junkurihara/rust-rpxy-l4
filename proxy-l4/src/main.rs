@@ -38,10 +38,9 @@ fn main() {
 
     // config service watches the service config file.
     // if the base service config file is updated, the  entrypoint will be restarted.
-    let (config_service, config_rx) = ReloaderService::<ConfigTomlReloader, ConfigToml, String>::new(
+    let (config_service, config_rx) = ReloaderService::<ConfigTomlReloader, ConfigToml, String>::with_delay(
       &parsed_opts.config_file_path,
       CONFIG_WATCH_DELAY_SECS,
-      false,
     )
     .await
     .unwrap();
@@ -72,8 +71,7 @@ async fn entrypoint(
   // Initial loading
   config_rx.changed().await?;
   let config_toml = config_rx
-    .borrow()
-    .clone()
+    .get()
     .ok_or(anyhow::anyhow!("Something wrong in config reloader receiver"))?;
 
   let mut proxy_service = ProxyService::try_new(&config_toml, runtime_handle.clone())?;
@@ -93,7 +91,7 @@ async fn entrypoint(
         return res.map_err(|e| anyhow::anyhow!(e));
       }
       _ = config_rx.changed() => {
-        let Some(new_config_toml) = config_rx.borrow().clone() else {
+        let Some(new_config_toml) = config_rx.get() else {
           error!("Something wrong in config reloader receiver");
           return Err(anyhow::anyhow!("Something wrong in config reloader receiver"));
         };

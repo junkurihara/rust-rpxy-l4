@@ -7,6 +7,8 @@ pub enum SerDeserError {
   ShortInput,
   #[error("Invalid input length")]
   InvalidInputLength,
+  #[error("Invalid input")]
+  InvalidInput,
 }
 
 /* ------------------------------------------- */

@@ -4,7 +4,7 @@ use crate::{
   count::ConnectionCountSum,
   destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
-  probe::ProbeResult,
+  probe::{ProbeResult, UdpInitialDatagrams, UdpProbedProtocol},
   proto::UdpProtocolType,
   socket::bind_udp_socket,
   target::{DnsCache, TargetAddr},
@@ -12,7 +12,6 @@ use crate::{
   trace::*,
   udp_conn::UdpConnectionPool,
 };
-use quic_tls::{TlsClientHello, TlsProbeFailure, probe_quic_initial_packets};
 use std::{
   net::SocketAddr,
   sync::{Arc, atomic::AtomicU64},
@@ -196,11 +195,11 @@ impl UdpDestinationMux {
       // Found Quic protocol
       Some(UdpDestination::Quic(quic_destinations)) => {
         let UdpProbedProtocol::Quic(client_hello) = probed_protocol else {
-          return Err(ProxyError::NoDestinationAddressForProtocol);
+          return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
         };
         return quic_destinations
           .find(client_hello)
-          .ok_or(ProxyError::NoDestinationAddressForProtocol)
+          .ok_or(ProxyError::NoDestinationAddressForProtocol(String::new()))
           .map(|found| {
             debug!("Setting up dest addr for {proto_type}");
             FoundUdpDestination::Quic(found.clone())
@@ -211,128 +210,19 @@ impl UdpDestinationMux {
 
     // if nothing is found, check for the default destination
     if proto_type == UdpProtocolType::Any {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
     }
     // Check for the default destination
     let destination_any = self
       .inner
       .get(&UdpProtocolType::Any)
       .cloned()
-      .ok_or(ProxyError::NoDestinationAddressForProtocol)?;
+      .ok_or(ProxyError::NoDestinationAddressForProtocol(String::new()))?;
     let UdpDestination::Udp(dst) = destination_any else {
-      return Err(ProxyError::NoDestinationAddressForProtocol);
+      return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
     };
     debug!("Setting up dest addr for unspecified proto");
     Ok(FoundUdpDestination::Udp(dst.clone()))
-  }
-}
-
-/* ---------------------------------------------------------- */
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// UDP probed protocol, specific protocols like SSH, and default is "any".
-pub(crate) enum UdpProbedProtocol {
-  /// any, default
-  Any,
-  /// wireguard
-  Wireguard,
-  /// quic
-  Quic(TlsClientHello),
-  // TODO: and more ...
-}
-
-impl UdpProbedProtocol {
-  fn proto_type(&self) -> UdpProtocolType {
-    match self {
-      Self::Any => UdpProtocolType::Any,
-      Self::Wireguard => UdpProtocolType::Wireguard,
-      Self::Quic(_) => UdpProtocolType::Quic,
-    }
-  }
-}
-
-impl std::fmt::Display for UdpProbedProtocol {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::Any => write!(f, "Any"),
-      Self::Wireguard => write!(f, "Wireguard"),
-      Self::Quic(_) => write!(f, "QUIC"),
-      // TODO: and more...
-    }
-  }
-}
-
-/* ------ */
-/// Is Wireguard protocol?
-fn is_wireguard(initial_datagrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProbedProtocol> {
-  // Wireguard protocol 'initiation' detection [only Handshake]
-  // Thus this may not be a reliable way to detect Wireguard protocol
-  // since UDP connection will be lost if the handshake interval is set to be longer than the connection timeout.
-  // https://www.wireguard.com/protocol/
-  let Some(first) = initial_datagrams.first() else {
-    return ProbeResult::Failure; // unreachable. just in case.
-  };
-
-  if first.len() == 148 && first[0] == 0x01 && first[1] == 0x00 && first[2] == 0x00 && first[3] == 0x00 {
-    debug!("Wireguard protocol (initiator to responder first message) detected");
-    ProbeResult::Success(UdpProbedProtocol::Wireguard)
-  } else {
-    ProbeResult::Failure
-  }
-}
-
-/// Is QUIC protocol?
-fn is_quic_initial(initial_dagatgrams: &mut UdpInitialDatagrams) -> ProbeResult<UdpProbedProtocol> {
-  let initial_datagrams_inner = initial_dagatgrams.inner.as_slice();
-
-  match probe_quic_initial_packets(initial_datagrams_inner) {
-    Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
-    Err(TlsProbeFailure::PollNext) => {
-      initial_dagatgrams
-        .probed_as_pollnext
-        .insert(UdpProbedProtocol::Quic(Default::default()));
-      ProbeResult::PollNext
-    }
-    Ok(client_hello_info) => ProbeResult::Success(UdpProbedProtocol::Quic(client_hello_info)),
-  }
-}
-
-impl UdpProbedProtocol {
-  /// Detect the protocol from the first few bytes of the incoming datagram
-  async fn detect_protocol(initial_datagrams: &mut UdpInitialDatagrams) -> Result<ProbeResult<Self>, ProxyError> {
-    // TODO: Add more protocol detection patterns
-
-    // Probe functions
-    let probe_functions = if initial_datagrams.probed_as_pollnext.is_empty() {
-      // No candidate probed as PollNext, i.e., Round 1
-      vec![is_wireguard, is_quic_initial]
-    } else {
-      // Round 2 or later
-      initial_datagrams
-        .probed_as_pollnext
-        .iter()
-        .map(|p| match p {
-          UdpProbedProtocol::Wireguard => is_wireguard,
-          UdpProbedProtocol::Quic(_) => is_quic_initial,
-          _ => unreachable!(),
-        })
-        .collect()
-    };
-
-    let probe_res = probe_functions.into_iter().map(|f| f(initial_datagrams)).collect::<Vec<_>>();
-
-    // In case any of the probe results is a success, return it
-    if let Some(probe_success) = probe_res.iter().find(|r| matches!(r, ProbeResult::Success(_))) {
-      return Ok(probe_success.clone());
-    };
-
-    // In case any of the probe results is PollNext, return it
-    if let Some(probe_pollnext) = probe_res.iter().find(|r| matches!(r, ProbeResult::PollNext)) {
-      return Ok(probe_pollnext.to_owned());
-    };
-
-    // All detection finished as failure
-    debug!("Untyped UDP connection detected");
-    Ok(ProbeResult::Success(Self::Any))
   }
 }
 
@@ -399,7 +289,10 @@ impl UdpProxy {
       loop {
         let (buf_size, src_addr) = match udp_socket_rx.recv_from(&mut udp_buf).await {
           Err(e) => {
-            error!("Error in UDP listener for downstream: {e}");
+            let contextual_error = ProxyError::IoError(e)
+              .with_source_context(self.listen_on)
+              .with_protocol_context("UDP");
+            error!("Error in UDP listener on {}: {contextual_error}", self.listen_on);
             break;
           }
           Ok(res) => res,
@@ -422,7 +315,7 @@ impl UdpProxy {
 
         // Buffer the initial datagram
         if let Err(e) = udp_initial_datagrams_tx.send((src_addr, udp_buf[..buf_size].to_vec())).await {
-          error!("Failed to buffer the initial UDP datagram: {e}");
+          error!("Failed to buffer initial UDP datagram from {src_addr}: {e}");
           continue;
         }
       }
@@ -477,24 +370,6 @@ async fn connection_pruner_service(
 /// DashMap type alias, uses ahash::RandomState as hashbuilder
 type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 
-#[derive(Clone)]
-struct UdpInitialDatagrams {
-  /// inner buffer of multiple UDP datagram payloads
-  inner: Vec<Vec<u8>>,
-  /// created at
-  created_at: Arc<AtomicU64>,
-  /// Protocols that were detected as 'poll_next'
-  probed_as_pollnext: std::collections::HashSet<UdpProbedProtocol>,
-}
-
-impl UdpInitialDatagrams {
-  /// Get the first datagram
-  fn first(&self) -> Option<&[u8]> {
-    self.inner.first().map(|v| v.as_slice())
-  }
-}
-
-/* ---------------------------------------------------------- */
 #[derive(Clone)]
 /// Temporary buffer pool of initial UDP datagrams dispatched from each clients.
 /// This is used to buffer the initial datagrams of each client, probe the destination, and then establish a UDP connection.
@@ -569,7 +444,11 @@ impl UdpInitialDatagramsBufferPool {
           None => {
             // Check the connection limit
             if self_clone.max_connections > 0 && self_clone.connection_count.current() >= self_clone.max_connections {
-              warn!("UDP connection limit reached: {}", self_clone.max_connections);
+              let limit_error = ProxyError::TooManyUdpConnections(String::new()).with_source_context(src_addr);
+              warn!(
+                "UDP connection limit ({}) reached, rejecting connection from {src_addr}: {limit_error}",
+                self_clone.max_connections
+              );
               continue;
             }
             debug!("No existing initial datagram buffer for {}", src_addr);
@@ -582,8 +461,11 @@ impl UdpInitialDatagramsBufferPool {
         };
 
         // Handle with probe result
-        let Ok(probe_result) = UdpProbedProtocol::detect_protocol(&mut initial_datagrams).await else {
-          error!("Failed to probe protocol from the incoming datagram");
+        let Ok(probe_result) = UdpProbedProtocol::detect_protocol(&mut initial_datagrams).await.map_err(|e| {
+          let contextual_error = e.with_source_context(src_addr).with_protocol_context("UDP");
+          error!("Failed to detect UDP protocol from {src_addr}: {contextual_error}");
+          contextual_error
+        }) else {
           continue;
         };
         let probed_protocol = match probe_result {
@@ -600,8 +482,13 @@ impl UdpInitialDatagramsBufferPool {
         debug!("Release the datagram buffer for {}", src_addr);
         self_clone.inner.remove(&src_addr);
 
-        let Ok(found_dst) = self_clone.destination_mux.find_destination(&probed_protocol) else {
-          error!("No destination address found for protocol: {}", probed_protocol);
+        let Ok(found_dst) = self_clone.destination_mux.find_destination(&probed_protocol).map_err(|e| {
+          let contextual_error = e
+            .with_source_context(src_addr)
+            .with_protocol_context(&probed_protocol.to_string());
+          error!("No destination found for {probed_protocol} from {src_addr}: {contextual_error}");
+          contextual_error
+        }) else {
           continue;
         };
         let udp_dst_inner = match &found_dst {

@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use hickory_resolver::{TokioResolver, config::ResolverOpts};
 use std::{
   fmt,
-  net::SocketAddr,
+  net::{IpAddr, SocketAddr},
   str::FromStr,
   time::{Duration, Instant},
 };
@@ -24,15 +24,15 @@ pub enum TargetAddr {
 /// DNS cache entry containing resolved addresses with TTL information
 #[derive(Debug, Clone)]
 struct CacheEntry {
-  /// Resolved socket addresses
-  addresses: Vec<SocketAddr>,
+  /// Resolved ip addresses
+  addresses: Vec<IpAddr>,
   /// When this entry expires
   expires_at: Instant,
 }
 
 impl CacheEntry {
   /// Create a new cache entry
-  fn new(addresses: Vec<SocketAddr>, expires_at: Instant) -> Self {
+  fn new(addresses: Vec<IpAddr>, expires_at: Instant) -> Self {
     Self { addresses, expires_at }
   }
 
@@ -70,11 +70,11 @@ impl DnsCache {
   }
 
   /// Get or resolve a domain name with caching
-  pub async fn get_or_resolve(&self, domain: &str, port: u16) -> Result<Vec<SocketAddr>, ProxyError> {
+  pub async fn get_or_resolve(&self, domain: &str) -> Result<Vec<IpAddr>, ProxyError> {
     // Check cache first
     let Some(entry) = self.entries.get(domain) else {
       // No cache entry exists - resolve for the first time
-      return self.resolve_and_cache(domain, port).await;
+      return self.resolve_and_cache(domain).await;
     };
     let entry_clone = entry.value().clone();
     drop(entry);
@@ -85,7 +85,7 @@ impl DnsCache {
     }
 
     // Entry is expired - try to resolve, but keep old IPs as fallback
-    match self.resolve_and_cache(domain, port).await {
+    match self.resolve_and_cache(domain).await {
       Ok(addresses) => Ok(addresses),
       Err(e) => {
         warn!("Failed to refresh expired DNS entry for {}: {}", domain, e);
@@ -96,7 +96,7 @@ impl DnsCache {
   }
 
   /// Resolve domain and update cache
-  async fn resolve_and_cache(&self, domain: &str, port: u16) -> Result<Vec<SocketAddr>, ProxyError> {
+  async fn resolve_and_cache(&self, domain: &str) -> Result<Vec<IpAddr>, ProxyError> {
     debug!("Resolving DNS for: {}", domain);
 
     // Create resolver with default system config
@@ -128,8 +128,8 @@ impl DnsCache {
 
     trace!("Response IPs: {:?}", response);
 
-    // Convert IPs to socket addresses with port
-    let addresses: Vec<SocketAddr> = response.iter().map(|ip| SocketAddr::new(ip, port)).collect();
+    // Collect resolved IP addresses
+    let addresses: Vec<IpAddr> = response.iter().collect();
 
     trace!("Addresses: {:?}", addresses);
 
@@ -197,7 +197,11 @@ impl TargetAddr {
   pub async fn resolve_cached(&self, cache: &DnsCache) -> Result<Vec<SocketAddr>, ProxyError> {
     match self {
       TargetAddr::Socket(addr) => Ok(vec![*addr]),
-      TargetAddr::Domain(domain, port) => cache.get_or_resolve(domain, *port).await,
+      TargetAddr::Domain(domain, port) => {
+        let ip_addr = cache.get_or_resolve(domain).await?;
+        let socket_addrs: Vec<SocketAddr> = ip_addr.into_iter().map(|ip| SocketAddr::new(ip, *port)).collect();
+        Ok(socket_addrs)
+      }
     }
   }
 
@@ -304,11 +308,11 @@ mod tests {
     let cache = DnsCache::default();
 
     // Test initial resolution
-    let resolved1 = cache.get_or_resolve("localhost", 8080).await.unwrap();
+    let resolved1 = cache.get_or_resolve("localhost").await.unwrap();
     assert!(!resolved1.is_empty());
 
     // Test cache hit
-    let resolved2 = cache.get_or_resolve("localhost", 8080).await.unwrap();
+    let resolved2 = cache.get_or_resolve("localhost").await.unwrap();
     assert_eq!(resolved1, resolved2);
   }
 
@@ -324,11 +328,11 @@ mod tests {
 
     // Initial resolution - use Cloudflare DNS which should be reliable
     let test_domain = "one.one.one.one";
-    let resolved1 = cache.get_or_resolve(test_domain, 53).await.unwrap();
+    let resolved1 = cache.get_or_resolve(test_domain).await.unwrap();
     assert!(!resolved1.is_empty());
 
     // Check the resolved IPs contain at least one Cloudflare DNS IP
-    let resolved_ips: Vec<String> = resolved1.iter().map(|addr| addr.ip().to_string()).collect();
+    let resolved_ips: Vec<String> = resolved1.iter().map(|addr| addr.to_string()).collect();
     let expected_ips = ["1.1.1.1", "1.0.0.1"];
     assert!(
       expected_ips.iter().any(|ip| resolved_ips.contains(&ip.to_string())),
@@ -338,14 +342,14 @@ mod tests {
     );
 
     // Test cache hit (should be immediate, no DNS query)
-    let resolved2 = cache.get_or_resolve(test_domain, 53).await.unwrap();
+    let resolved2 = cache.get_or_resolve(test_domain).await.unwrap();
     assert_eq!(resolved1, resolved2);
 
     // Wait for min TTL to expire
     sleep(Duration::from_secs(3)).await;
 
     // Should refetch DNS entry since TTL expired
-    let resolved3 = cache.get_or_resolve(test_domain, 53).await.unwrap();
+    let resolved3 = cache.get_or_resolve(test_domain).await.unwrap();
     assert!(!resolved3.is_empty());
   }
 
@@ -366,14 +370,14 @@ mod tests {
     let cache = DnsCache::default();
 
     // First successful resolution
-    let resolved1 = cache.get_or_resolve("localhost", 8080).await.unwrap();
+    let resolved1 = cache.get_or_resolve("localhost").await.unwrap();
 
     // Try with invalid domain, should fail with no fallback since no cache exists
-    let err = cache.get_or_resolve("invalid.domain", 8080).await.unwrap_err();
+    let err = cache.get_or_resolve("invalid.domain").await.unwrap_err();
     assert!(matches!(err, ProxyError::DnsResolutionError(_)));
 
     // Try localhost again, should still work
-    let resolved2 = cache.get_or_resolve("localhost", 8080).await.unwrap();
+    let resolved2 = cache.get_or_resolve("localhost").await.unwrap();
     assert_eq!(resolved1, resolved2);
   }
 }

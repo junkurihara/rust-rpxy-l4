@@ -115,7 +115,7 @@ The above configuration works as the following manner.
 > udp_idle_lifetime = 30
 > ```
 
-### 2.Second step: Load balancing
+### 2. Second step: Load balancing
 
 `rpxy-l4` allows you to distribute incoming TCP/UDP packets to multiple backend servers based on the several simple load balancing algorithms. For the multiple TCP/UDP targets, you can set the load balancing algorithm as follows.
 

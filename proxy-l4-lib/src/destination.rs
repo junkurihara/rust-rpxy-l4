@@ -4,7 +4,7 @@ use crate::{
   target::{DnsCache, TargetAddr},
 };
 use ahash::HashSet;
-use rand::Rng;
+use rand::RngExt;
 use std::{net::SocketAddr, sync::Arc};
 
 /* ---------------------------------------------------------- */

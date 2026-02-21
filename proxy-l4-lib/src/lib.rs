@@ -6,6 +6,7 @@ mod destination;
 mod error;
 mod probe;
 mod proto;
+mod proxy_protocol;
 mod socket;
 mod target;
 mod tcp_proxy;
@@ -24,6 +25,7 @@ pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as Udp
 pub use destination::LoadBalance;
 pub use error::{ProxyBuildError, ProxyError};
 pub use proto::ProtocolType;
+pub use proxy_protocol::ProxyProtocolVersion;
 pub use target::TargetAddr;
 pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProxy, TcpProxyBuilder};
 pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpProxyBuilder};

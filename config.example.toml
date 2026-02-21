@@ -11,6 +11,16 @@ udp_max_connections = 2048
 dns_cache_min_ttl = "30s" # Minimum DNS cache TTL
 dns_cache_max_ttl = "1h"  # Maximum DNS cache TTL
 
+# Proxy Protocol configuration
+# Accept PROXY protocol header from upstream proxy (e.g., HAProxy, AWS NLB)
+# When enabled, the real client IP is extracted from the PROXY protocol header
+accept_proxy_protocol = false
+
+# Send PROXY protocol header to backend servers
+# Options: "v1" (text format) or "v2" (binary format)
+# When set, rpxy-l4 will prepend a PROXY protocol header to connections to backends
+# send_proxy_protocol = "v2"
+
 # Default TCP target using domain names and IPs
 tcp_target = [
   "one.one.one.one:53", # Cloudflare DNS (resolved via DNS)

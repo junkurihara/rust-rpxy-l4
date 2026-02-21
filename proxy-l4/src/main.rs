@@ -125,6 +125,8 @@ struct ProxyService {
   udp_max_connections: Option<u32>,
   tcp_proxy_mux: Arc<TcpDestinationMux>,
   udp_proxy_mux: Arc<UdpDestinationMux>,
+  accept_proxy_protocol: bool,
+  send_proxy_protocol: Option<ProxyProtocolVersion>,
 }
 
 impl ProxyService {
@@ -142,6 +144,8 @@ impl ProxyService {
       udp_max_connections: config.udp_max_connections,
       tcp_proxy_mux: Arc::new(tcp_proxy_mux),
       udp_proxy_mux: Arc::new(udp_proxy_mux),
+      accept_proxy_protocol: config.accept_proxy_protocol,
+      send_proxy_protocol: config.send_proxy_protocol,
     };
     debug!("Service configuration: {:#?}", res);
     Ok(res)
@@ -243,7 +247,9 @@ impl ProxyService {
     let mut tcp_proxy_builder = TcpProxyBuilder::default();
     tcp_proxy_builder
       .destination_mux(self.tcp_proxy_mux.clone())
-      .runtime_handle(self.runtime_handle.clone());
+      .runtime_handle(self.runtime_handle.clone())
+      .accept_proxy_protocol(self.accept_proxy_protocol)
+      .send_proxy_protocol(self.send_proxy_protocol);
     if let Some(tcp_backlog) = self.tcp_backlog {
       tcp_proxy_builder.backlog(tcp_backlog);
     }

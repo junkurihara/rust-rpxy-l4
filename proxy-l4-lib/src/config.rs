@@ -1,4 +1,4 @@
-use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolType, target::TargetAddr};
+use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolType, proxy_protocol::ProxyProtocolVersion, target::TargetAddr};
 use quic_tls::{EchConfigList, EchPrivateKey};
 use std::{str::FromStr, time::Duration};
 
@@ -205,6 +205,8 @@ pub fn create_test_tcp_config(port: u16, target: &str) -> Config {
     dns_cache_min_ttl: None,
     dns_cache_max_ttl: None,
     protocols: std::collections::HashMap::new(),
+    accept_proxy_protocol: false,
+    send_proxy_protocol: None,
   }
 }
 
@@ -225,6 +227,8 @@ pub fn create_test_udp_config(port: u16, target: &str) -> Config {
     dns_cache_min_ttl: None,
     dns_cache_max_ttl: None,
     protocols: std::collections::HashMap::new(),
+    accept_proxy_protocol: false,
+    send_proxy_protocol: None,
   }
 }
 
@@ -259,6 +263,10 @@ pub struct Config {
   pub dns_cache_max_ttl: Option<Duration>,
   /// Protocol specific configurations
   pub protocols: std::collections::HashMap<String, ProtocolConfig>,
+  /// Accept PROXY protocol header from upstream proxy [default: false]
+  pub accept_proxy_protocol: bool,
+  /// Send PROXY protocol header to backend servers [default: None]
+  pub send_proxy_protocol: Option<ProxyProtocolVersion>,
 }
 
 /// Protocol specific configuration
@@ -510,6 +518,8 @@ mod tests {
       dns_cache_min_ttl: None,
       dns_cache_max_ttl: None,
       protocols: HashMap::new(),
+      accept_proxy_protocol: false,
+      send_proxy_protocol: None,
     };
     assert!(validate_config(&empty_config).is_err());
 

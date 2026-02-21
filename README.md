@@ -21,6 +21,7 @@
 - **Load balancing**: `rpxy-l4` can distribute incoming connections to multiple backend servers based on the several simple load balancing algorithms.
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
 - **TLS/QUIC forwarder**: `rpxy-l4` can forward TLS/IETF QUIC streams to appropriate backend servers based on the ServerName Indication (SNI) and Application Layer Protocol Negotiation (ALPN) values.
+- **Proxy Protocol support**: `rpxy-l4` supports PROXY protocol v1 and v2 for preserving the original client IP address when deployed behind load balancers (e.g., HAProxy, AWS NLB). It can both accept PROXY protocol headers from upstream proxies and send them to backend servers.
 - **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with IETF-Draft Encrypted Client Hello. In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
 
 [^quic]: Not Google QUIC. Both QUIC v1 ([RFC9000](https://datatracker.ietf.org/doc/html/rfc9000), [RFC9001](https://datatracker.ietf.org/doc/html/rfc9001)) and QUIC v2 ([RFC9369](https://datatracker.ietf.org/doc/html/rfc9369)) are supported.
@@ -145,7 +146,54 @@ Currently, `rpxy-l4` supports the following load balancing algorithms:
 - `random`: random selection
 - `none`: always use the first target [default]
 
-### 3. Third step: Protocol multiplexing
+### 3. Proxy Protocol support
+
+`rpxy-l4` supports PROXY protocol v1 and v2 for preserving the original client IP address when deployed behind load balancers or other proxies. This is useful for logging, auditing, geolocation, security, and rate limiting.
+
+#### 3.1. Accepting PROXY protocol headers
+
+When `rpxy-l4` is deployed behind a proxy that sends PROXY protocol headers (e.g., HAProxy, AWS NLB, Cloudflare), enable `accept_proxy_protocol` to extract the real client IP:
+
+```toml
+# Accept PROXY protocol header from upstream proxy
+accept_proxy_protocol = true
+```
+
+When enabled, `rpxy-l4` will:
+1. Parse the PROXY protocol header (v1 or v2) from the incoming connection
+2. Extract the real client IP address from the header
+3. Use the real client IP for logging and load balancing decisions
+
+#### 3.2. Sending PROXY protocol headers
+
+When you want backend servers to see the original client IP, enable `send_proxy_protocol`:
+
+```toml
+# Send PROXY protocol header to backend servers
+# Options: "v1" (text format) or "v2" (binary format)
+send_proxy_protocol = "v2"
+```
+
+When enabled, `rpxy-l4` will:
+1. Generate a PROXY protocol header with the client's real IP address
+2. Prepend the header to the connection data sent to the backend
+
+#### 3.3. Combined usage
+
+You can combine both options when `rpxy-l4` is in the middle of a proxy chain:
+
+```bash
+Client -> HAProxy (sends PROXY) -> rpxy-l4 (accepts & sends PROXY) -> Backend
+```
+
+```toml
+accept_proxy_protocol = true
+send_proxy_protocol = "v2"
+```
+
+This allows the backend to see the original client IP through multiple proxy layers.
+
+### 4. Protocol multiplexing
 
 Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocol.<service_name>]` filed in the configuration file as follows.
 
@@ -163,7 +211,7 @@ Currently, `rpxy-l4` supports the following protocols for multiplexing:
 - TCP: HTTP (cleartext), TLS, SSH, Socks5
 - UDP: QUIC (IETF [RFC9000](https://datatracker.ietf.org/doc/html/rfc9000)), WireGuard
 
-#### 3.1. Example of TLS/QUIC multiplexer with SNI/ALPN
+#### 4.1. Example of TLS/QUIC multiplexer with SNI/ALPN
 
 `rpxy-l4` can detect and multiplex TLS/QUIC streams by probing the TLS ClientHello message and IETF QUIC Initial packet (containing ClientHello). The following example demonstrates the scenario that any TLS/QUIC is forwarded to the appropriate backend that are different from the default targets.
 
@@ -225,7 +273,7 @@ alpns = ["h2", "http/1.1"]
 > [!NOTE]
 > If both `server_names` and `alpns` are specified, the proxy forwards connections that match simultaneously both of them.
 
-#### 3.2. Example of WireGuard multiplexer
+#### 4.2. Example of WireGuard multiplexer
 
 `rpxy-l4` can detect and multiplex WireGuard packets by probing the initial handshake packet. The following example demonstrates the scenario that any WireGuard packets are forwarded to the appropriate backend that are different from the default targets as well.
 
@@ -241,13 +289,13 @@ idle_lifetime = 30
 > [!NOTE]
 > As well as QUIC, WireGuard is a UDP-based protocol. The `idle_lifetime` field is available for `protocol="wireguard"`. You should adjust the value according to your WireGuard configuration, especially the keep-alive interval.
 
-#### 3.3. Passing through only the expected protocols (protocol sanitization)
+#### 4.3. Passing through only the expected protocols (protocol sanitization)
 
 This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
 
-### 4. Advanced: Experimental features
+### 5. Advanced: Experimental features
 
-#### 4.1. TLS Encrypted Client Hello (ECH) proxy
+#### 5.1. TLS Encrypted Client Hello (ECH) proxy
 
 See [./examples/README.md](./examples/README.md) for the ECH proxy configuration and client and backend server examples.
 

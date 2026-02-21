@@ -7,6 +7,7 @@ use crate::{
   error::{ProxyBuildError, ProxyError},
   probe::{ProbeResult, TcpProbedProtocol},
   proto::TcpProtocolType,
+  proxy_protocol::{ProxyProtocolVersion, generate_proxy_protocol_header, parse_proxy_protocol_header},
   socket::bind_tcp_socket,
   target::{DnsCache, TargetAddr},
   trace::*,
@@ -229,6 +230,14 @@ pub struct TcpProxy {
 
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
+
+  /// Accept PROXY protocol header from upstream proxy
+  #[builder(default = "false")]
+  accept_proxy_protocol: bool,
+
+  /// Send PROXY protocol header to backend servers
+  #[builder(default = "None")]
+  send_proxy_protocol: Option<ProxyProtocolVersion>,
 }
 
 impl TcpProxy {
@@ -261,7 +270,18 @@ impl TcpProxy {
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
           let connection_count = self.connection_count.clone();
-          handle_tcp_connection(dst_mux, connection_count, incoming_stream, src_addr)
+          let accept_proxy_protocol = self.accept_proxy_protocol;
+          let send_proxy_protocol = self.send_proxy_protocol;
+          let listen_on = self.listen_on;
+          handle_tcp_connection(
+            dst_mux,
+            connection_count,
+            incoming_stream,
+            src_addr,
+            accept_proxy_protocol,
+            send_proxy_protocol,
+            listen_on,
+          )
         });
       }
     };
@@ -284,15 +304,48 @@ async fn handle_tcp_connection(
   connection_count: ConnectionCount,
   mut incoming_stream: TcpStream,
   src_addr: SocketAddr,
+  accept_proxy_protocol: bool,
+  send_proxy_protocol: Option<ProxyProtocolVersion>,
+  listen_on: SocketAddr,
 ) {
+  // Track the real source address (may be updated by PROXY protocol)
+  let mut real_src_addr = src_addr;
   let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+
+  // If accepting PROXY protocol, parse the header first
+  if accept_proxy_protocol {
+    match parse_proxy_protocol_header(&mut incoming_stream).await {
+      Ok(Some((header, remaining))) => {
+        debug!(
+          "PROXY protocol {} header parsed: real source {} -> {}",
+          header.version, header.source, header.destination
+        );
+        real_src_addr = header.source;
+        // Put any remaining data back into initial_buf for protocol detection
+        if !remaining.is_empty() {
+          initial_buf = remaining;
+        }
+      }
+      Ok(None) => {
+        // No PROXY protocol header found, use original source address
+        debug!("No PROXY protocol header found, using original source address: {src_addr}");
+      }
+      Err(e) => {
+        let contextual_error = e.with_source_context(src_addr);
+        error!("Failed to parse PROXY protocol header from {src_addr}: {contextual_error}");
+        connection_count.decrement();
+        return;
+      }
+    }
+  }
+
   let Ok(probe_result) = timeout(
     Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
     TcpProbedProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
   )
   .await
   else {
-    error!("Timeout ({TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC}ms) while probing TCP stream from {src_addr}");
+    error!("Timeout ({TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC}ms) while probing TCP stream from {real_src_addr}");
     connection_count.decrement();
     return;
   };
@@ -300,8 +353,8 @@ async fn handle_tcp_connection(
     Ok(ProbeResult::Success(p)) => p,
     Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
     Err(e) => {
-      let contextual_error = e.with_source_context(src_addr).with_protocol_context("TCP");
-      error!("Failed to detect protocol from {src_addr}: {contextual_error}");
+      let contextual_error = e.with_source_context(real_src_addr).with_protocol_context("TCP");
+      error!("Failed to detect protocol from {real_src_addr}: {contextual_error}");
       connection_count.decrement();
       return;
     }
@@ -311,19 +364,19 @@ async fn handle_tcp_connection(
     Ok(addr) => addr,
     Err(e) => {
       let contextual_error = e
-        .with_source_context(src_addr)
+        .with_source_context(real_src_addr)
         .with_protocol_context(&probed_protocol.to_string());
-      error!("No route for {probed_protocol} from {src_addr}: {contextual_error}");
+      error!("No route for {probed_protocol} from {real_src_addr}: {contextual_error}");
       connection_count.decrement();
       return;
     }
   };
 
-  let Ok(mut dst_addr) = found_dst.get_destination(&src_addr).await.map_err(|e| {
+  let Ok(mut dst_addr) = found_dst.get_destination(&real_src_addr).await.map_err(|e| {
     let contextual_error = e
-      .with_connection_context(src_addr, "unknown:0".parse().unwrap())
+      .with_connection_context(real_src_addr, "unknown:0".parse().unwrap())
       .with_protocol_context(&probed_protocol.to_string());
-    error!("Failed to resolve destination address for {probed_protocol} from {src_addr}: {contextual_error}");
+    error!("Failed to resolve destination address for {probed_protocol} from {real_src_addr}: {contextual_error}");
     contextual_error
   }) else {
     connection_count.decrement();
@@ -353,25 +406,47 @@ async fn handle_tcp_connection(
 
   let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await.map_err(|e| {
     let contextual_error = ProxyError::IoError(e)
-      .with_connection_context(src_addr, dst_addr)
+      .with_connection_context(real_src_addr, dst_addr)
       .with_protocol_context(&probed_protocol.to_string());
-    error!("Failed to connect to destination {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
+    error!("Failed to connect to destination {dst_addr} for {probed_protocol} from {real_src_addr}: {contextual_error}");
     contextual_error
   }) else {
     connection_count.decrement();
     return;
   };
 
-  if let Err(e) = outgoing_stream.write_all(&to_be_written).await {
+  // Prepend PROXY protocol header if configured
+  let data_to_send = if let Some(version) = send_proxy_protocol {
+    match generate_proxy_protocol_header(version, real_src_addr, listen_on) {
+      Ok(header) => {
+        debug!(
+          "Sending PROXY protocol {} header to backend: {} -> {}",
+          version, real_src_addr, listen_on
+        );
+        let mut data = header;
+        data.extend_from_slice(&to_be_written);
+        data
+      }
+      Err(e) => {
+        error!("Failed to generate PROXY protocol header: {e}");
+        connection_count.decrement();
+        return;
+      }
+    }
+  } else {
+    to_be_written.to_vec()
+  };
+
+  if let Err(e) = outgoing_stream.write_all(&data_to_send).await {
     let contextual_error = ProxyError::IoError(e)
-      .with_connection_context(src_addr, dst_addr)
+      .with_connection_context(real_src_addr, dst_addr)
       .with_protocol_context(&probed_protocol.to_string());
-    error!("Failed to write initial buffer to {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
+    error!("Failed to write initial buffer to {dst_addr} for {probed_protocol} from {real_src_addr}: {contextual_error}");
     connection_count.decrement();
     return;
   }
   // Here we are establishing a bidirectional connection. Logging the connection.
-  tcp_access_log_start(&src_addr, &dst_addr, &probed_protocol);
+  tcp_access_log_start(&real_src_addr, &dst_addr, &probed_protocol);
   // Then, copy bidirectional
   match copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
     Ok((bytes_to_server, bytes_to_client)) => {
@@ -383,13 +458,13 @@ async fn handle_tcp_connection(
     }
     Err(e) => {
       let contextual_error = ProxyError::IoError(e)
-        .with_connection_context(src_addr, dst_addr)
+        .with_connection_context(real_src_addr, dst_addr)
         .with_protocol_context(&probed_protocol.to_string());
-      warn!("Bidirectional TCP stream copy failed for {probed_protocol} {src_addr} <-> {dst_addr}: {contextual_error}");
+      warn!("Bidirectional TCP stream copy failed for {probed_protocol} {real_src_addr} <-> {dst_addr}: {contextual_error}");
     }
   }
   // finish log
-  tcp_access_log_finish(&src_addr, &dst_addr, &probed_protocol);
+  tcp_access_log_finish(&real_src_addr, &dst_addr, &probed_protocol);
   connection_count.decrement();
   debug!("TCP proxy connection closed (current: {})", connection_count.current());
 }

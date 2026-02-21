@@ -46,6 +46,16 @@ pub enum ProxyError {
 
   #[error("Invalid address: {0}")]
   InvalidAddress(String),
+
+  /* --------------------------------------- */
+  #[error("Invalid proxy protocol version: {0}")]
+  InvalidProxyProtocolVersion(String),
+
+  #[error("Proxy protocol parse error: {0}")]
+  ProxyProtocolParseError(String),
+
+  #[error("Proxy protocol generate error: {0}")]
+  ProxyProtocolGenerateError(String),
 }
 
 impl ProxyError {

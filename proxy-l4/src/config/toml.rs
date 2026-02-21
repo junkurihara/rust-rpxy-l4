@@ -1,6 +1,6 @@
 use crate::log::warn;
 use anyhow::anyhow;
-use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
+use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, ProxyProtocolVersion, TargetAddr};
 use serde::Deserialize;
 use std::{
   collections::{HashMap, HashSet},
@@ -27,6 +27,9 @@ pub struct ConfigToml {
   pub dns_cache_max_ttl: Option<String>,
   // protocols
   pub protocols: Option<ProtocolsToml>,
+  // proxy protocol configuration
+  pub accept_proxy_protocol: Option<bool>,
+  pub send_proxy_protocol: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq, Eq, Clone)]
@@ -175,6 +178,14 @@ impl TryFrom<ConfigToml> for Config {
       .map(|x| parse_duration(x))
       .transpose()?;
 
+    // Parse proxy protocol configuration
+    let accept_proxy_protocol = config_toml.accept_proxy_protocol.unwrap_or(false);
+    let send_proxy_protocol = config_toml
+      .send_proxy_protocol
+      .as_ref()
+      .map(|x| x.as_str().try_into())
+      .transpose()?;
+
     Ok(Self {
       listen_port,
       listen_ipv6: config_toml.listen_ipv6.unwrap_or(false),
@@ -189,6 +200,8 @@ impl TryFrom<ConfigToml> for Config {
       dns_cache_min_ttl,
       dns_cache_max_ttl,
       protocols,
+      accept_proxy_protocol,
+      send_proxy_protocol,
     })
   }
 }

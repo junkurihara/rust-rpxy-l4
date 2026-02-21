@@ -100,7 +100,7 @@ pub async fn parse_proxy_protocol_header<R: AsyncRead + Unpin>(
     // Try to parse v2 first (binary format with signature)
     if buf.len() >= 16 {
       // v2 header minimum: 12-byte signature + 4-byte header
-      if let Ok(header) = try_parse_v2_header(&buf) {
+      if let Ok(header) = try_parse_v2_header(&mut buf) {
         return Ok(Some(header));
       }
     }
@@ -110,7 +110,7 @@ pub async fn parse_proxy_protocol_header<R: AsyncRead + Unpin>(
       // Look for CRLF terminator
       if let Some(crlf_pos) = buf.iter().position(|&b| b == b'\n') {
         if crlf_pos > 0 && buf[crlf_pos - 1] == b'\r' {
-          if let Ok(header) = try_parse_v1_header(&buf) {
+          if let Ok(header) = try_parse_v1_header(&mut buf) {
             return Ok(Some(header));
           }
         }
@@ -130,7 +130,7 @@ pub async fn parse_proxy_protocol_header<R: AsyncRead + Unpin>(
 }
 
 /// Try to parse a v2 PROXY protocol header from the buffer
-fn try_parse_v2_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut), ProxyError> {
+fn try_parse_v2_header(buf: &mut BytesMut) -> Result<(ProxyProtocolHeader, BytesMut), ProxyError> {
   let data = buf.as_ref();
 
   // Parse v2 header using ppp crate
@@ -193,7 +193,7 @@ fn try_parse_v2_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
 }
 
 /// Try to parse a v1 PROXY protocol header from the buffer
-fn try_parse_v1_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut), ProxyError> {
+fn try_parse_v1_header(buf: &mut BytesMut) -> Result<(ProxyProtocolHeader, BytesMut), ProxyError> {
   let data = std::str::from_utf8(buf.as_ref())
     .map_err(|e| ProxyError::ProxyProtocolParseError(format!("Invalid UTF-8 in v1 header: {}", e)))?;
 
@@ -210,7 +210,7 @@ fn try_parse_v1_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
 
   // Extract source and destination addresses
   let (source, destination) = match header.addresses {
-    v1::Addresses::IPv4(ipv4) => {
+    v1::Addresses::Tcp4(ipv4) => {
       let source = SocketAddr::new(
         std::net::IpAddr::V4(ipv4.source_address),
         ipv4.source_port,
@@ -221,7 +221,7 @@ fn try_parse_v1_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
       );
       (source, destination)
     }
-    v1::Addresses::IPv6(ipv6) => {
+    v1::Addresses::Tcp6(ipv6) => {
       let source = SocketAddr::new(
         std::net::IpAddr::V6(ipv6.source_address),
         ipv6.source_port,

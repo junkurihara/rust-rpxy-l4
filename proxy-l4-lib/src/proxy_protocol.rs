@@ -41,6 +41,14 @@ impl std::str::FromStr for ProxyProtocolVersion {
   }
 }
 
+impl TryFrom<&str> for ProxyProtocolVersion {
+  type Error = ProxyError;
+
+  fn try_from(s: &str) -> Result<Self, Self::Error> {
+    s.parse()
+  }
+}
+
 /// Parsed PROXY protocol header information
 #[derive(Debug, Clone)]
 pub struct ProxyProtocolHeader {
@@ -326,6 +334,7 @@ fn extract_ip_port(addr: SocketAddr) -> (String, u16) {
 mod tests {
   use super::*;
   use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+  use std::str::FromStr;
 
   #[test]
   fn test_proxy_protocol_version_parse() {

@@ -1,6 +1,6 @@
 use crate::log::warn;
 use anyhow::anyhow;
-use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, ProxyProtocolVersion, TargetAddr};
+use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
 use serde::Deserialize;
 use std::{
   collections::{HashMap, HashSet},

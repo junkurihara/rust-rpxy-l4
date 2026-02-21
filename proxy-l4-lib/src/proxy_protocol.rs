@@ -141,7 +141,7 @@ fn try_parse_v2_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
   let data = buf.as_ref();
 
   // Parse v2 header using ppp crate
-  let (header, consumed) = match v2::Header::try_from(data) {
+  let header = match v2::Header::try_from(data) {
     Ok(result) => result,
     Err(e) => {
       // Not a valid v2 header
@@ -152,9 +152,12 @@ fn try_parse_v2_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
     }
   };
 
+  // Calculate consumed bytes (header length)
+  let consumed = header.header.len();
+
   // Extract source and destination addresses
-  let (source, destination) = match header.address {
-    v2::Address::IPv4(ipv4) => {
+  let (source, destination) = match header.addresses {
+    v2::Addresses::IPv4(ipv4) => {
       let source = SocketAddr::new(
         std::net::IpAddr::V4(ipv4.source_ip),
         ipv4.source_port,
@@ -165,7 +168,7 @@ fn try_parse_v2_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
       );
       (source, destination)
     }
-    v2::Address::IPv6(ipv6) => {
+    v2::Addresses::IPv6(ipv6) => {
       let source = SocketAddr::new(
         std::net::IpAddr::V6(ipv6.source_ip),
         ipv6.source_port,
@@ -176,14 +179,14 @@ fn try_parse_v2_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
       );
       (source, destination)
     }
-    v2::Address::Unix(_) => {
+    v2::Addresses::Unix(_) => {
       // Unix sockets not supported for proxying
       return Err(ProxyError::ProxyProtocolParseError(
         "Unix socket addresses not supported".to_string(),
       ));
     }
-    _ => {
-      // UNSPEC or AF_UNSPEC - use proxy's address
+    v2::Addresses::Unspecified => {
+      // UNSPEC - use proxy's address
       return Err(ProxyError::ProxyProtocolParseError(
         "Unspecified address family in PROXY protocol header".to_string(),
       ));
@@ -202,7 +205,7 @@ fn try_parse_v1_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
     .map_err(|e| ProxyError::ProxyProtocolParseError(format!("Invalid UTF-8 in v1 header: {}", e)))?;
 
   // Parse v1 header using ppp crate
-  let (header, consumed) = match v1::Header::try_from(data) {
+  let header = match v1::Header::try_from(data) {
     Ok(result) => result,
     Err(e) => {
       return Err(ProxyError::ProxyProtocolParseError(format!(
@@ -222,7 +225,9 @@ fn try_parse_v1_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
     .parse::<SocketAddr>()
     .map_err(|e| ProxyError::ProxyProtocolParseError(format!("Invalid destination address: {}", e)))?;
 
-  let consumed_bytes = consumed.len();
+  // Calculate consumed bytes from the header string representation
+  let header_str = header.to_string();
+  let consumed_bytes = header_str.len();
   let remaining = buf.split_off(consumed_bytes);
   let header = ProxyProtocolHeader::new(source, destination, ProxyProtocolVersion::V1);
 
@@ -253,28 +258,25 @@ pub fn generate_v1_header(source: SocketAddr, destination: SocketAddr) -> Result
 ///
 /// Returns the header as a byte vector ready to be sent to the backend.
 pub fn generate_v2_header(source: SocketAddr, destination: SocketAddr) -> Result<Vec<u8>, ProxyError> {
-  use ppp::v2::{Header, Builder};
+  use ppp::v2::{Builder, Version, Command, Protocol};
 
-  let builder = Builder::new()
-    .with_version(ppp::Version::Two)
-    .with_command(ppp::v2::Command::Proxy);
+  // Build version_command byte: Version::Two (0x02) | Command::Proxy (0x01)
+  let version_command = (Version::Two as u8) << 4 | (Command::Proxy as u8);
 
   let header = match (source, destination) {
     (SocketAddr::V4(src), SocketAddr::V4(dst)) => {
-      builder
-        .with_address_family(ppp::v2::AddressFamily::IPv4)
-        .with_transport_protocol(ppp::v2::TransportProtocol::Stream)
-        .with_addresses(&src.ip().into(), &dst.ip().into(), src.port(), dst.port())
-        .map_err(|e| ProxyError::ProxyProtocolGenerateError(format!("Failed to build v2 header: {:?}", e)))?
+      let addresses = v2::IPv4::new(src.ip(), src.port(), dst.ip(), dst.port());
+      // Build protocol byte: AddressFamily::IPv4 (0x01) | Protocol::Stream (0x01)
+      let protocol = Protocol::Stream;
+      Builder::with_addresses(version_command, protocol, v2::Addresses::IPv4(addresses))
         .build()
         .map_err(|e| ProxyError::ProxyProtocolGenerateError(format!("Failed to build v2 header: {:?}", e)))?
     }
     (SocketAddr::V6(src), SocketAddr::V6(dst)) => {
-      builder
-        .with_address_family(ppp::v2::AddressFamily::IPv6)
-        .with_transport_protocol(ppp::v2::TransportProtocol::Stream)
-        .with_addresses(&src.ip().into(), &dst.ip().into(), src.port(), dst.port())
-        .map_err(|e| ProxyError::ProxyProtocolGenerateError(format!("Failed to build v2 header: {:?}", e)))?
+      let addresses = v2::IPv6::new(src.ip(), src.port(), dst.ip(), dst.port());
+      // Build protocol byte: AddressFamily::IPv6 (0x02) | Protocol::Stream (0x01)
+      let protocol = Protocol::Stream;
+      Builder::with_addresses(version_command, protocol, v2::Addresses::IPv6(addresses))
         .build()
         .map_err(|e| ProxyError::ProxyProtocolGenerateError(format!("Failed to build v2 header: {:?}", e)))?
     }
@@ -285,7 +287,7 @@ pub fn generate_v2_header(source: SocketAddr, destination: SocketAddr) -> Result
     }
   };
 
-  Ok(header.to_bytes())
+  Ok(header.to_vec())
 }
 
 /// Generate a PROXY protocol header for the specified version

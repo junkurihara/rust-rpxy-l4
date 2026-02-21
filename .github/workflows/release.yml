@@ -1,108 +1,101 @@
 name: Release
+
 on:
-  workflow_run:
-    workflows:
-      - "Build and Push Docker Image"
-    types:
-      - "completed"
-    branches:
-      - main
-      - develop
-  repository_dispatch:
-    types:
-      - release-event
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: rpxy-l4
 
 jobs:
-  on-success:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
 
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }} || ${{ github.event_name == 'repositry_dispatch' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: "musl"
-            platform: linux/amd64
+          - target: x86_64-unknown-linux-musl
+            archive_name: rpxy-l4-x86_64-unknown-linux-musl
 
-          - target: "musl"
-            platform: linux/arm64
+          - target: aarch64-unknown-linux-musl
+            archive_name: rpxy-l4-aarch64-unknown-linux-musl
 
     steps:
-      - run: "echo 'The release triggering workflows passed'"
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: "set env"
-        id: "set-env"
-        run: |
-          if [ ${{ matrix.platform }} == 'linux/amd64' ]; then PLATFORM_MAP="x86_64"; else PLATFORM_MAP="aarch64"; fi
-          if [ ${{ github.ref_name }} == 'main' ]; then BUILD_IMG="latest"; else BUILD_IMG="nightly"; fi
-          echo "build_img=${BUILD_IMG}" >> $GITHUB_OUTPUT
-          echo "target_name=rpxy-l4-${PLATFORM_MAP}-unknown-linux-${{ matrix.target }}" >> $GITHUB_OUTPUT
-
-      - name: "docker pull and extract binary from docker image"
-        id: "extract-binary"
-        run: |
-          CONTAINER_ID=`docker create --platform=${{ matrix.platform }} ghcr.io/junkurihara/rust-rpxy-l4:${{ steps.set-env.outputs.build_img }}`
-          docker cp ${CONTAINER_ID}:/rpxy-l4/bin/rpxy-l4 /tmp/${{ steps.set-env.outputs.target_name }}
-
-      - name: "upload artifacts"
-        uses: actions/upload-artifact@v6
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          name: ${{ steps.set-env.outputs.target_name }}
-          path: "/tmp/${{ steps.set-env.outputs.target_name }}"
+          targets: ${{ matrix.target }}
 
-  on-failure:
-    permissions:
-      contents: read
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' }}
-    steps:
-      - run: echo 'The release triggering workflows failed'
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cross build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }}
+
+      - name: Package binary
+        run: |
+          mkdir -p /tmp/assets
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} /tmp/${{ env.BINARY_NAME }}
+          tar -czf /tmp/assets/${{ matrix.archive_name }}.tar.gz \
+            -C /tmp ${{ env.BINARY_NAME }}
+          echo "Archive contents:"
+          tar -tzf /tmp/assets/${{ matrix.archive_name }}.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive_name }}
+          path: /tmp/assets/${{ matrix.archive_name }}.tar.gz
+          retention-days: 1
 
   release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
     permissions:
       contents: write
 
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'repository_dispatch' }}
-    needs: on-success
     steps:
-      - name: check pull_request title
-        uses: kaisugi/action-regex-match@v1.0.2
-        id: regex-match
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          text: ${{ github.event.client_payload.pull_request.title }}
-          regex: "^(\\d+\\.\\d+\\.\\d+)$"
+          path: /tmp/assets
+          merge-multiple: true
 
-      - name: checkout
-        if: ${{ steps.regex-match.outputs.match != '' }}
-        uses: actions/checkout@v6
+      - name: List assets
+        run: ls -lha /tmp/assets/
 
-      - name: download artifacts
-        if: ${{ steps.regex-match.outputs.match != ''}}
-        uses: actions/download-artifact@v7
-        with:
-          path: /tmp/rpxy-l4
-
-      - name: make tar.gz of assets
-        if: ${{ steps.regex-match.outputs.match != ''}}
-        run: |
-          mkdir /tmp/assets
-          cd /tmp/rpxy-l4
-          for i in ./*; do sh -c "cd $i && tar zcvf $i.tar.gz $i && mv $i.tar.gz /tmp/assets/"; done
-          ls -lha /tmp/assets
-
-      - name: release
-        if: ${{ steps.regex-match.outputs.match != ''}}
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: /tmp/assets/*.tar.gz
-          name: ${{ github.event.client_payload.pull_request.title }}
-          tag_name: ${{ github.event.client_payload.pull_request.title }}
-          body: ${{ github.event.client_payload.pull_request.body }}
-          draft: true
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
           prerelease: false
           generate_release_notes: true

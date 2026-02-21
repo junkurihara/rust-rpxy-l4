@@ -82,7 +82,6 @@ pub async fn parse_proxy_protocol_header<R: AsyncRead + Unpin>(
 
   // Read data until we have enough to determine the header type
   // v2 signature is 12 bytes, v1 signature starts with "PROXY"
-  let mut found = false;
 
   while buf.len() < MAX_PROXY_PROTOCOL_HEADER_SIZE {
     let mut temp_buf = [0u8; 64];
@@ -102,7 +101,6 @@ pub async fn parse_proxy_protocol_header<R: AsyncRead + Unpin>(
     if buf.len() >= 16 {
       // v2 header minimum: 12-byte signature + 4-byte header
       if let Ok(header) = try_parse_v2_header(&buf) {
-        found = true;
         return Ok(Some(header));
       }
     }
@@ -113,7 +111,6 @@ pub async fn parse_proxy_protocol_header<R: AsyncRead + Unpin>(
       if let Some(crlf_pos) = buf.iter().position(|&b| b == b'\n') {
         if crlf_pos > 0 && buf[crlf_pos - 1] == b'\r' {
           if let Ok(header) = try_parse_v1_header(&buf) {
-            found = true;
             return Ok(Some(header));
           }
         }
@@ -129,11 +126,7 @@ pub async fn parse_proxy_protocol_header<R: AsyncRead + Unpin>(
   // No valid PROXY protocol header found
   // Return None to indicate the stream doesn't have a proxy protocol header
   // The caller should handle the buffered data appropriately
-  if !found {
-    return Ok(None);
-  }
-
-  unreachable!()
+  Ok(None)
 }
 
 /// Try to parse a v2 PROXY protocol header from the buffer
@@ -159,22 +152,22 @@ fn try_parse_v2_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
   let (source, destination) = match header.addresses {
     v2::Addresses::IPv4(ipv4) => {
       let source = SocketAddr::new(
-        std::net::IpAddr::V4(ipv4.source_ip),
+        std::net::IpAddr::V4(ipv4.source_address),
         ipv4.source_port,
       );
       let destination = SocketAddr::new(
-        std::net::IpAddr::V4(ipv4.destination_ip),
+        std::net::IpAddr::V4(ipv4.destination_address),
         ipv4.destination_port,
       );
       (source, destination)
     }
     v2::Addresses::IPv6(ipv6) => {
       let source = SocketAddr::new(
-        std::net::IpAddr::V6(ipv6.source_ip),
+        std::net::IpAddr::V6(ipv6.source_address),
         ipv6.source_port,
       );
       let destination = SocketAddr::new(
-        std::net::IpAddr::V6(ipv6.destination_ip),
+        std::net::IpAddr::V6(ipv6.destination_address),
         ipv6.destination_port,
       );
       (source, destination)
@@ -216,14 +209,35 @@ fn try_parse_v1_header(buf: &BytesMut) -> Result<(ProxyProtocolHeader, BytesMut)
   };
 
   // Extract source and destination addresses
-  let source = header
-    .source
-    .parse::<SocketAddr>()
-    .map_err(|e| ProxyError::ProxyProtocolParseError(format!("Invalid source address: {}", e)))?;
-  let destination = header
-    .destination
-    .parse::<SocketAddr>()
-    .map_err(|e| ProxyError::ProxyProtocolParseError(format!("Invalid destination address: {}", e)))?;
+  let (source, destination) = match header.addresses {
+    v1::Addresses::IPv4(ipv4) => {
+      let source = SocketAddr::new(
+        std::net::IpAddr::V4(ipv4.source_address),
+        ipv4.source_port,
+      );
+      let destination = SocketAddr::new(
+        std::net::IpAddr::V4(ipv4.destination_address),
+        ipv4.destination_port,
+      );
+      (source, destination)
+    }
+    v1::Addresses::IPv6(ipv6) => {
+      let source = SocketAddr::new(
+        std::net::IpAddr::V6(ipv6.source_address),
+        ipv6.source_port,
+      );
+      let destination = SocketAddr::new(
+        std::net::IpAddr::V6(ipv6.destination_address),
+        ipv6.destination_port,
+      );
+      (source, destination)
+    }
+    v1::Addresses::Unknown => {
+      return Err(ProxyError::ProxyProtocolParseError(
+        "Unknown address family in PROXY protocol v1 header".to_string(),
+      ));
+    }
+  };
 
   // Calculate consumed bytes from the header string representation
   let header_str = header.to_string();
@@ -265,16 +279,14 @@ pub fn generate_v2_header(source: SocketAddr, destination: SocketAddr) -> Result
 
   let header = match (source, destination) {
     (SocketAddr::V4(src), SocketAddr::V4(dst)) => {
-      let addresses = v2::IPv4::new(src.ip(), src.port(), dst.ip(), dst.port());
-      // Build protocol byte: AddressFamily::IPv4 (0x01) | Protocol::Stream (0x01)
+      let addresses = v2::IPv4::new(*src.ip(), *dst.ip(), src.port(), dst.port());
       let protocol = Protocol::Stream;
       Builder::with_addresses(version_command, protocol, v2::Addresses::IPv4(addresses))
         .build()
         .map_err(|e| ProxyError::ProxyProtocolGenerateError(format!("Failed to build v2 header: {:?}", e)))?
     }
     (SocketAddr::V6(src), SocketAddr::V6(dst)) => {
-      let addresses = v2::IPv6::new(src.ip(), src.port(), dst.ip(), dst.port());
-      // Build protocol byte: AddressFamily::IPv6 (0x02) | Protocol::Stream (0x01)
+      let addresses = v2::IPv6::new(*src.ip(), *dst.ip(), src.port(), dst.port());
       let protocol = Protocol::Stream;
       Builder::with_addresses(version_command, protocol, v2::Addresses::IPv6(addresses))
         .build()

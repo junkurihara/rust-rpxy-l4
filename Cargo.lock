@@ -1023,12 +1023,14 @@ dependencies = [
 
 [[package]]
 name = "hpke"
-version = "0.14.0-pre.1"
-source = "git+https://github.com/junkurihara/rust-hpke.git?rev=59cfaa6cabcdbb357ef67d1d6364ad4c72c91fa9#59cfaa6cabcdbb357ef67d1d6364ad4c72c91fa9"
+version = "0.14.0-pre.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bda8b5f136b2ce90b27a69b49b6a06c3bd0bda59e076e78eff45336cd499d2c"
 dependencies = [
  "aead 0.6.0-rc.10",
  "aes-gcm 0.11.0-rc.3",
  "chacha20poly1305",
+ "getrandom 0.4.1",
  "hkdf 0.13.0-rc.5",
  "hybrid-array",
  "p256",

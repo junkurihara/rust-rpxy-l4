@@ -27,9 +27,7 @@ hex-literal = { version = "1.1.0" }
 # ech
 bytes = { version = "1.11.1" }
 rand = { version = "0.10.0" }
-# hpke = { version = "0.13.0" }
-# Use a specific commit of hpke until for rand-0.10 compatibility
-hpke = { git = "https://github.com/junkurihara/rust-hpke.git", rev = "59cfaa6cabcdbb357ef67d1d6364ad4c72c91fa9" }
+hpke = { version = "0.14.0-pre.2" }
 base64 = { version = "0.22.1" }
 
 [dev-dependencies]

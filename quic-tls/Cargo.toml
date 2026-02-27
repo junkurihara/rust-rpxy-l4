@@ -33,4 +33,4 @@ hpke = { git = "https://github.com/junkurihara/rust-hpke.git", rev = "59cfaa6cab
 base64 = { version = "0.22.1" }
 
 [dev-dependencies]
-rustls = { version = "0.23.36" }
+rustls = { version = "0.23.37" }

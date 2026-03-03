@@ -22,7 +22,7 @@ RUN if [ $TARGETARCH = "amd64" ]; then \
   exit 1; \
   fi
 
-WORKDIR /tmp
+WORKDIR /build
 
 RUN --mount=type=bind,target=. \
   --mount=type=cache,target=/root/.cargo/registry,sharing=locked \
@@ -30,6 +30,7 @@ RUN --mount=type=bind,target=. \
   --mount=type=cache,target=${CARGO_TARGET_CACHE},sharing=locked \
   echo "Building rpxy-l4 from source" && \
   cargo build --release --package rpxy-l4 --target $(cat /arch)-unknown-linux-musl --target-dir ${CARGO_TARGET_CACHE} && \
+  mkdir -p ${BUILD_ARTIFACTS}/release && \
   cp ${CARGO_TARGET_CACHE}/$(cat /arch)-unknown-linux-musl/release/rpxy-l4 ${BUILD_ARTIFACTS}/release/rpxy-l4 && \
   musl-strip --strip-all ${BUILD_ARTIFACTS}/release/rpxy-l4
 

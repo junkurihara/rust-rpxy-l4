@@ -1,4 +1,5 @@
 target/
+.git/
 .vscode/
 .private/
 .github/

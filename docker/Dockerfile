@@ -35,7 +35,7 @@ RUN --mount=type=bind,target=. \
   musl-strip --strip-all ${BUILD_ARTIFACTS}/release/rpxy-l4
 
 ########################################
-FROM alpine:latest AS runner
+FROM alpine:3 AS runner
 
 LABEL maintainer="Jun Kurihara"
 

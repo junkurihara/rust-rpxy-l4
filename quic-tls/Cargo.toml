@@ -27,8 +27,11 @@ hex-literal = { version = "1.1.0" }
 # ech
 bytes = { version = "1.11.1" }
 rand = { version = "0.10.0" }
-hpke = { version = "0.14.0-pre.2" }
 base64 = { version = "0.22.1" }
+# Use my own fork of HPKE until the upstream crate is update to support the braking change at RustCrypto crypto-common 0.2.1
+# hpke = { version = "0.14.0-pre.2" }
+hpke = { git = "https://github.com/junkurihara/rust-hpke", rev = "b7fa9e8325761e852905f97e1b1b44fbfa8eef3d"}
+
 
 [dev-dependencies]
 rustls = { version = "0.23.37" }

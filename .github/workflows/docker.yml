@@ -70,14 +70,7 @@ jobs:
         with:
           builder: ${{ steps.buildx.outputs.name }}
           cache-dir: ${{ runner.temp }}/buildkit-cache/${{ matrix.target }}
-          cache-map: |
-            {
-              "var-cache-apt": "/var/cache/apt",
-              "var-lib-apt": "/var/lib/apt",
-              "cargo-registry": "/root/.cargo/registry",
-              "cargo-git": "/root/.cargo/git",
-              "cargo-target": "/tmp/cargo-target-cache"
-            }
+          dockerfile: docker/Dockerfile
           skip-extraction: ${{ steps.buildkit-cache.outputs.cache-hit }}
 
       - name: Login to Docker Hub

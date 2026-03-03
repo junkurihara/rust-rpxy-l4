@@ -111,7 +111,7 @@ jobs:
           regex: "^(\\d+\\.\\d+\\.\\d+)$"
 
       - name: Release build and push from main branch
-        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'develop' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.merged == true }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'develop' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.merged == true && steps.regex-match.outputs.match != '' }}
         uses: docker/build-push-action@v6
         with:
           context: .

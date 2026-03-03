@@ -4,8 +4,6 @@ ARG BUILD_ARTIFACTS=/tmp/target
 ########################################
 FROM --platform=$BUILDPLATFORM messense/rust-musl-cross:${TARGETARCH}-musl AS builder
 
-LABEL maintainer="Jun Kurihara"
-
 ARG TARGETARCH
 ARG BUILD_ARTIFACTS
 ARG CARGO_TARGET_CACHE=/tmp/cargo-target-cache

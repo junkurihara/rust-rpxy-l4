@@ -61,6 +61,4 @@ ENV SSL_CERT_DIR=/etc/ssl/certs
 
 EXPOSE 80 443
 
-CMD ["/rpxy-l4/entrypoint.sh"]
-
 ENTRYPOINT ["/rpxy-l4/entrypoint.sh"]

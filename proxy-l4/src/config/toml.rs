@@ -1,9 +1,9 @@
 use crate::log::warn;
 use anyhow::anyhow;
 #[cfg(feature = "proxy-protocol")]
-use rpxy_l4_lib::IpNet;
-#[cfg(feature = "proxy-protocol")]
 use rpxy_l4_lib::ProxyProtocolVersion;
+#[cfg(feature = "proxy-protocol")]
+use rpxy_l4_lib::reexport::IpNet;
 use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
 use serde::Deserialize;
 use std::{

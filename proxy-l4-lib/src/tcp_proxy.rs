@@ -297,7 +297,7 @@ pub struct TcpProxy {
   #[cfg(feature = "proxy-protocol")]
   #[builder(default = "None")]
   /// Trusted proxy source CIDRs for inbound PROXY protocol.
-  trusted_proxies: Option<Vec<crate::config::IpNet>>,
+  trusted_proxies: Option<Vec<ipnet::IpNet>>,
 }
 
 impl TcpProxy {
@@ -334,12 +334,11 @@ impl TcpProxy {
           let recv_proxy_protocol = self
             .recv_proxy_protocol
             .then(|| {
-              self
-                .trusted_proxies
-                .as_ref()
-                .map(|proxies| Arc::new(InboundProxyProtocolConfig {
+              self.trusted_proxies.as_ref().map(|proxies| {
+                Arc::new(InboundProxyProtocolConfig {
                   trusted_proxies: proxies.clone(),
-                }))
+                })
+              })
             })
             .flatten();
           handle_tcp_connection(

@@ -1,6 +1,6 @@
 use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolType, target::TargetAddr};
 #[cfg(feature = "proxy-protocol")]
-pub use ipnet::IpNet;
+use ipnet::IpNet;
 use quic_tls::{EchConfigList, EchPrivateKey};
 use std::{str::FromStr, time::Duration};
 

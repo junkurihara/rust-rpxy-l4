@@ -126,7 +126,7 @@ struct ProxyService {
   #[cfg(feature = "proxy-protocol")]
   tcp_recv_proxy_protocol: bool,
   #[cfg(feature = "proxy-protocol")]
-  tcp_trusted_proxies: Option<Vec<IpNet>>,
+  tcp_trusted_proxies: Option<Vec<rpxy_l4_lib::reexport::IpNet>>,
   tcp_proxy_mux: Arc<TcpDestinationMux>,
   udp_proxy_mux: Arc<UdpDestinationMux>,
 }

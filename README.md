@@ -21,7 +21,7 @@
 - **Load balancing**: `rpxy-l4` can distribute incoming connections to multiple backend servers based on the several simple load balancing algorithms.
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
 - **TLS/QUIC forwarder**: `rpxy-l4` can forward TLS/IETF QUIC streams to appropriate backend servers based on the ServerName Indication (SNI) and Application Layer Protocol Negotiation (ALPN) values.
-- **HAProxy PROXY protocol support**: `rpxy-l4` can prepend a [HAProxy PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) header (v1 or v2) to outbound TCP connections, allowing backend servers to recover the original client's source IP and port. This can be configured globally or per-protocol. (Requires the `proxy-protocol` Cargo feature, enabled by default.)
+- **HAProxy PROXY protocol support**: `rpxy-l4` supports outbound PROXY protocol (prepend header to backend connections, global/per-protocol) and inbound PROXY protocol (parse header from trusted upstream proxies) for TCP. (Requires the `proxy-protocol` Cargo feature, enabled by default.)
 - **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with IETF-Draft Encrypted Client Hello. In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
 
 [^quic]: Not Google QUIC. Both QUIC v1 ([RFC9000](https://datatracker.ietf.org/doc/html/rfc9000), [RFC9001](https://datatracker.ietf.org/doc/html/rfc9001)) and QUIC v2 ([RFC9369](https://datatracker.ietf.org/doc/html/rfc9369)) are supported.
@@ -254,7 +254,10 @@ This is somewhat a security feature to prevent protocol over TCP/UDP mismatching
 
 ### 4. PROXY protocol (preserving client IP)
 
-`rpxy-l4` supports [HAProxy PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) (v1 and v2) for outbound TCP connections. When enabled, a PROXY header is prepended to the connection toward the backend server, allowing it to recover the original client's source IP and port.
+`rpxy-l4` supports [HAProxy PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) (v1 and v2) for both outbound and inbound TCP connections.
+
+- **Outbound**: prepend PROXY header toward backend servers.
+- **Inbound**: parse PROXY header from upstream proxies/load balancers and restore original client source address.
 
 #### Global setting
 
@@ -288,6 +291,24 @@ send_proxy_protocol = "none"  # override: disable for this protocol
 
 > [!NOTE]
 > This feature requires the `proxy-protocol` Cargo feature, which is enabled by default. To build without it, use `cargo build --release --no-default-features`.
+
+#### Inbound PROXY parsing (from upstream proxy/load balancer)
+
+Set `tcp_recv_proxy_protocol = true` to require an inbound PROXY header on all TCP connections.  
+When enabled, `tcp_trusted_proxies` is required and must contain trusted source IPs/CIDRs.
+
+```toml
+listen_port = 8448
+tcp_target = ["192.168.0.2:8000"]
+
+# Expect inbound PROXY header on every TCP connection
+tcp_recv_proxy_protocol = true
+
+# Trusted sources allowed to send PROXY headers (required when recv is enabled)
+tcp_trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
+```
+
+If `tcp_recv_proxy_protocol = true` and `tcp_trusted_proxies` is missing/empty, startup validation fails.
 
 ### 5. Advanced: Experimental features
 

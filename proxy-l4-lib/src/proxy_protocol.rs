@@ -1,5 +1,8 @@
 use crate::config::ProxyProtocolVersion;
-use std::net::{IpAddr, SocketAddr};
+use ipnet::IpNet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use tokio::{io::AsyncReadExt, net::TcpStream};
+use tracing::debug;
 
 /// Encode a PROXY protocol header for the given source and destination addresses.
 ///
@@ -70,7 +73,7 @@ pub(crate) fn resolve_dst_addr(listen_on: SocketAddr, local_addr: SocketAddr) ->
 /// When a dual-stack listener binds to [::] and accepts an IPv4 connection,
 /// the local_addr may return an IPv4-mapped IPv6 address (e.g., ::ffff:192.168.1.10).
 /// The PROXY protocol requires src/dst to use the same address family.
-fn normalize_mapped_ipv4(addr: IpAddr) -> IpAddr {
+pub(crate) fn normalize_mapped_ipv4(addr: IpAddr) -> IpAddr {
   match addr {
     IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
       Some(v4) => IpAddr::V4(v4),
@@ -104,6 +107,179 @@ fn normalize_address_pair(src: SocketAddr, dst: SocketAddr) -> (SocketAddr, Sock
     }
   }
 }
+
+/* ---------------------------------------------------------- */
+// Inbound PROXY protocol parsing
+/* ---------------------------------------------------------- */
+
+/// Configuration for inbound PROXY protocol parsing
+#[derive(Debug, Clone)]
+pub(crate) struct InboundProxyProtocolConfig {
+  /// Trusted source IPs/CIDRs allowed to send PROXY headers.
+  /// Must not be empty (enforced at config validation).
+  pub trusted_proxies: Vec<IpNet>,
+}
+
+/// v2 signature: 12-byte magic sequence
+const V2_SIGNATURE: &[u8; 12] = b"\r\n\r\n\x00\r\nQUIT\n";
+/// v2 fixed header size (signature + version/command + family/protocol + addr_len)
+const V2_HEADER_FIXED_SIZE: usize = 16;
+/// v1 prefix "PROXY "
+const V1_PREFIX: &[u8; 6] = b"PROXY ";
+/// v1 maximum header length per spec (including \r\n)
+const V1_MAX_LENGTH: usize = 107;
+
+/// Parse an inbound PROXY protocol header from the stream.
+///
+/// **I/O contract**: This function consumes exactly the PROXY header bytes
+/// from the stream and nothing more. After this function returns, the stream
+/// is positioned at the first byte of application data.
+///
+/// Returns:
+/// - `Ok(Some(src_addr))` if a PROXY command header was parsed (replace src_addr)
+/// - `Ok(None)` if a LOCAL/UNKNOWN command was parsed (keep original src_addr)
+/// - `Err(...)` on untrusted source, malformed header, or I/O error
+pub(crate) async fn parse_inbound_proxy_header(
+  stream: &mut TcpStream,
+  peer_addr: &SocketAddr,
+  config: &InboundProxyProtocolConfig,
+) -> Result<Option<SocketAddr>, std::io::Error> {
+  // 1. Validate peer_addr against trusted_proxies
+  let normalized_peer_ip = normalize_mapped_ipv4(peer_addr.ip());
+  if !config.trusted_proxies.iter().any(|net| net.contains(&normalized_peer_ip)) {
+    return Err(std::io::Error::new(
+      std::io::ErrorKind::PermissionDenied,
+      format!("PROXY header from untrusted source: {peer_addr}"),
+    ));
+  }
+
+  // 2. Peek first 16 bytes to determine version
+  let mut peek_buf = [0u8; V2_HEADER_FIXED_SIZE];
+  let peeked = stream.peek(&mut peek_buf).await?;
+  if peeked < 6 {
+    return Err(std::io::Error::new(
+      std::io::ErrorKind::InvalidData,
+      "Too few bytes to detect PROXY header version",
+    ));
+  }
+
+  // 3. Determine version and parse
+  if peeked >= 12 && peek_buf[..12] == *V2_SIGNATURE {
+    parse_v2_inbound(stream, &peek_buf, peeked).await
+  } else if peek_buf[..6] == *V1_PREFIX {
+    parse_v1_inbound(stream).await
+  } else {
+    Err(std::io::Error::new(
+      std::io::ErrorKind::InvalidData,
+      "No valid PROXY protocol signature detected",
+    ))
+  }
+}
+
+/// Parse a v2 (binary) PROXY protocol header.
+async fn parse_v2_inbound(
+  stream: &mut TcpStream,
+  peek_buf: &[u8; V2_HEADER_FIXED_SIZE],
+  peeked: usize,
+) -> Result<Option<SocketAddr>, std::io::Error> {
+  if peeked < V2_HEADER_FIXED_SIZE {
+    return Err(std::io::Error::new(
+      std::io::ErrorKind::InvalidData,
+      "Incomplete v2 PROXY header (need at least 16 bytes)",
+    ));
+  }
+
+  // Extract addr_len from bytes 14-15
+  let addr_len = u16::from_be_bytes([peek_buf[14], peek_buf[15]]) as usize;
+  let total_len = V2_HEADER_FIXED_SIZE + addr_len;
+
+  // Read exactly the full header
+  let mut header_buf = vec![0u8; total_len];
+  stream.read_exact(&mut header_buf).await?;
+
+  // Parse with ppp crate
+  let header = ppp::v2::Header::try_from(header_buf.as_slice()).map_err(|e| {
+    std::io::Error::new(
+      std::io::ErrorKind::InvalidData,
+      format!("Failed to parse PROXY v2 header: {e:?}"),
+    )
+  })?;
+
+  // Check command type
+  if header.command == ppp::v2::Command::Local {
+    debug!("PROXY v2 LOCAL command received");
+    return Ok(None);
+  }
+
+  // PROXY command - extract source address
+  match header.addresses {
+    ppp::v2::Addresses::IPv4(ipv4) => {
+      let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::from(ipv4.source_address)), ipv4.source_port);
+      Ok(Some(src))
+    }
+    ppp::v2::Addresses::IPv6(ipv6) => {
+      let src = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ipv6.source_address)), ipv6.source_port);
+      Ok(Some(src))
+    }
+    ppp::v2::Addresses::Unix(_) => Err(std::io::Error::new(
+      std::io::ErrorKind::Unsupported,
+      "Unix socket addresses not supported in PROXY protocol",
+    )),
+    ppp::v2::Addresses::Unspecified => {
+      debug!("PROXY v2 unspecified addresses");
+      Ok(None)
+    }
+  }
+}
+
+/// Parse a v1 (text) PROXY protocol header.
+/// Reads byte-by-byte until \r\n to avoid over-consuming application data.
+async fn parse_v1_inbound(stream: &mut TcpStream) -> Result<Option<SocketAddr>, std::io::Error> {
+  let mut header_bytes = Vec::with_capacity(V1_MAX_LENGTH);
+  let mut byte = [0u8; 1];
+  let mut found_cr = false;
+
+  loop {
+    stream.read_exact(&mut byte).await?;
+    header_bytes.push(byte[0]);
+
+    if found_cr && byte[0] == b'\n' {
+      break;
+    }
+    found_cr = byte[0] == b'\r';
+
+    if header_bytes.len() >= V1_MAX_LENGTH {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "PROXY v1 header exceeds maximum length",
+      ));
+    }
+  }
+
+  let header = ppp::v1::Header::try_from(header_bytes.as_slice()).map_err(|e| {
+    std::io::Error::new(
+      std::io::ErrorKind::InvalidData,
+      format!("Failed to parse PROXY v1 header: {e:?}"),
+    )
+  })?;
+
+  match header.addresses {
+    ppp::v1::Addresses::Tcp4(tcp4) => {
+      let src = SocketAddr::new(IpAddr::V4(tcp4.source_address), tcp4.source_port);
+      Ok(Some(src))
+    }
+    ppp::v1::Addresses::Tcp6(tcp6) => {
+      let src = SocketAddr::new(IpAddr::V6(tcp6.source_address), tcp6.source_port);
+      Ok(Some(src))
+    }
+    ppp::v1::Addresses::Unknown => {
+      debug!("PROXY v1 UNKNOWN command received");
+      Ok(None)
+    }
+  }
+}
+
+/* ---------------------------------------------------------- */
 
 #[cfg(test)]
 mod tests {

@@ -2,6 +2,8 @@
 use crate::config::ProxyProtocolVersion;
 #[cfg(feature = "proxy-protocol")]
 use crate::proxy_protocol;
+#[cfg(feature = "proxy-protocol")]
+use crate::proxy_protocol::InboundProxyProtocolConfig;
 use crate::{
   access_log::{AccessLogProtocolType, access_log_start},
   config::EchProtocolConfig,
@@ -286,6 +288,16 @@ pub struct TcpProxy {
 
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
+
+  #[cfg(feature = "proxy-protocol")]
+  #[builder(default = "false")]
+  /// Expect inbound PROXY protocol header on all incoming TCP connections.
+  recv_proxy_protocol: bool,
+
+  #[cfg(feature = "proxy-protocol")]
+  #[builder(default = "None")]
+  /// Trusted proxy source CIDRs for inbound PROXY protocol.
+  trusted_proxies: Option<Vec<crate::config::IpNet>>,
 }
 
 impl TcpProxy {
@@ -318,6 +330,18 @@ impl TcpProxy {
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
           let connection_count = self.connection_count.clone();
+          #[cfg(feature = "proxy-protocol")]
+          let recv_proxy_protocol = self
+            .recv_proxy_protocol
+            .then(|| {
+              self
+                .trusted_proxies
+                .as_ref()
+                .map(|proxies| Arc::new(InboundProxyProtocolConfig {
+                  trusted_proxies: proxies.clone(),
+                }))
+            })
+            .flatten();
           handle_tcp_connection(
             dst_mux,
             connection_count,
@@ -325,6 +349,8 @@ impl TcpProxy {
             src_addr,
             #[cfg(feature = "proxy-protocol")]
             self.listen_on,
+            #[cfg(feature = "proxy-protocol")]
+            recv_proxy_protocol,
           )
         });
       }
@@ -347,9 +373,41 @@ async fn handle_tcp_connection(
   dst_mux: Arc<TcpDestinationMux>,
   connection_count: ConnectionCount,
   mut incoming_stream: TcpStream,
-  src_addr: SocketAddr,
+  mut src_addr: SocketAddr,
   #[cfg(feature = "proxy-protocol")] listen_on: SocketAddr,
+  #[cfg(feature = "proxy-protocol")] recv_proxy_protocol: Option<Arc<InboundProxyProtocolConfig>>,
 ) {
+  #[cfg(feature = "proxy-protocol")]
+  if let Some(pp_config) = recv_proxy_protocol.as_ref() {
+    match timeout(
+      Duration::from_millis(crate::constants::TCP_PROXY_HEADER_READ_TIMEOUT_MSEC),
+      proxy_protocol::parse_inbound_proxy_header(&mut incoming_stream, &src_addr, pp_config),
+    )
+    .await
+    {
+      Ok(Ok(Some(parsed_src))) => {
+        debug!("PROXY header from {src_addr}: original client = {parsed_src}");
+        src_addr = parsed_src;
+      }
+      Ok(Ok(None)) => {
+        debug!("PROXY LOCAL/UNKNOWN from {src_addr}, keeping peer address");
+      }
+      Ok(Err(e)) => {
+        error!("Failed to parse inbound PROXY header from {src_addr}: {e}");
+        connection_count.decrement();
+        return;
+      }
+      Err(_) => {
+        error!(
+          "Timeout ({}ms) reading PROXY header from {src_addr}",
+          crate::constants::TCP_PROXY_HEADER_READ_TIMEOUT_MSEC
+        );
+        connection_count.decrement();
+        return;
+      }
+    }
+  }
+
   let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
   let Ok(probe_result) = timeout(
     Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),

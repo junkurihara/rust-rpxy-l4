@@ -1,4 +1,6 @@
 use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolType, target::TargetAddr};
+#[cfg(feature = "proxy-protocol")]
+pub use ipnet::IpNet;
 use quic_tls::{EchConfigList, EchPrivateKey};
 use std::{str::FromStr, time::Duration};
 
@@ -170,6 +172,24 @@ pub fn validate_basic_config(config: &Config) -> Result<(), ProxyBuildError> {
     }
   }
 
+  // Validate inbound PROXY protocol configuration
+  #[cfg(feature = "proxy-protocol")]
+  if config.tcp_recv_proxy_protocol {
+    match &config.tcp_trusted_proxies {
+      None => {
+        return Err(ProxyBuildError::BuildMultiplexersError(
+          "tcp_trusted_proxies must be specified when tcp_recv_proxy_protocol is enabled".to_string(),
+        ));
+      }
+      Some(proxies) if proxies.is_empty() => {
+        return Err(ProxyBuildError::BuildMultiplexersError(
+          "tcp_trusted_proxies must not be empty when tcp_recv_proxy_protocol is enabled".to_string(),
+        ));
+      }
+      _ => {}
+    }
+  }
+
   // Validate connection limits are reasonable
   if let Some(max_tcp) = config.tcp_max_connections {
     if max_tcp == 0 {
@@ -233,6 +253,10 @@ pub fn create_test_tcp_config(port: u16, target: &str) -> Config {
     protocols: std::collections::HashMap::new(),
     #[cfg(feature = "proxy-protocol")]
     tcp_send_proxy_protocol: None,
+    #[cfg(feature = "proxy-protocol")]
+    tcp_recv_proxy_protocol: false,
+    #[cfg(feature = "proxy-protocol")]
+    tcp_trusted_proxies: None,
   }
 }
 
@@ -255,6 +279,10 @@ pub fn create_test_udp_config(port: u16, target: &str) -> Config {
     protocols: std::collections::HashMap::new(),
     #[cfg(feature = "proxy-protocol")]
     tcp_send_proxy_protocol: None,
+    #[cfg(feature = "proxy-protocol")]
+    tcp_recv_proxy_protocol: false,
+    #[cfg(feature = "proxy-protocol")]
+    tcp_trusted_proxies: None,
   }
 }
 
@@ -293,6 +321,13 @@ pub struct Config {
   /// Global default: send PROXY protocol header to all TCP destinations [default: None (disabled)].
   /// Per-protocol override has higher priority than this global default. If both are set, the per-protocol setting will determine whether to send PROXY protocol header for that protocol's destinations.
   pub tcp_send_proxy_protocol: Option<ProxyProtocolVersion>,
+  #[cfg(feature = "proxy-protocol")]
+  /// Expect PROXY protocol header on all incoming TCP connections [default: false]
+  pub tcp_recv_proxy_protocol: bool,
+  #[cfg(feature = "proxy-protocol")]
+  /// IP addresses or CIDR ranges of trusted sources allowed to send PROXY headers.
+  /// Required when tcp_recv_proxy_protocol is true.
+  pub tcp_trusted_proxies: Option<Vec<IpNet>>,
 }
 
 /// Protocol specific configuration
@@ -559,6 +594,10 @@ mod tests {
       protocols: HashMap::new(),
       #[cfg(feature = "proxy-protocol")]
       tcp_send_proxy_protocol: None,
+      #[cfg(feature = "proxy-protocol")]
+      tcp_recv_proxy_protocol: false,
+      #[cfg(feature = "proxy-protocol")]
+      tcp_trusted_proxies: None,
     };
     assert!(validate_config(&empty_config).is_err());
 
@@ -602,6 +641,29 @@ mod tests {
       private_server_names: Default::default(),
     };
     assert!(validate_ech_config(&ech_config_empty_names, "test").is_err());
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_validate_inbound_proxy_protocol_config() {
+    // recv enabled without trusted_proxies → error
+    let mut config = create_test_tcp_config(8080, "127.0.0.1:8081");
+    config.tcp_recv_proxy_protocol = true;
+    config.tcp_trusted_proxies = None;
+    assert!(validate_basic_config(&config).is_err());
+
+    // recv enabled with empty trusted_proxies → error
+    config.tcp_trusted_proxies = Some(vec![]);
+    assert!(validate_basic_config(&config).is_err());
+
+    // recv enabled with valid trusted_proxies → ok
+    config.tcp_trusted_proxies = Some(vec!["10.0.0.0/8".parse().unwrap()]);
+    assert!(validate_basic_config(&config).is_ok());
+
+    // recv disabled without trusted_proxies → ok
+    config.tcp_recv_proxy_protocol = false;
+    config.tcp_trusted_proxies = None;
+    assert!(validate_basic_config(&config).is_ok());
   }
 
   #[test]

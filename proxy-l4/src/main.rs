@@ -123,6 +123,10 @@ struct ProxyService {
   tcp_backlog: Option<u32>,
   tcp_max_connections: Option<u32>,
   udp_max_connections: Option<u32>,
+  #[cfg(feature = "proxy-protocol")]
+  tcp_recv_proxy_protocol: bool,
+  #[cfg(feature = "proxy-protocol")]
+  tcp_trusted_proxies: Option<Vec<IpNet>>,
   tcp_proxy_mux: Arc<TcpDestinationMux>,
   udp_proxy_mux: Arc<UdpDestinationMux>,
 }
@@ -140,6 +144,10 @@ impl ProxyService {
       tcp_backlog: config.tcp_backlog,
       tcp_max_connections: config.tcp_max_connections,
       udp_max_connections: config.udp_max_connections,
+      #[cfg(feature = "proxy-protocol")]
+      tcp_recv_proxy_protocol: config.tcp_recv_proxy_protocol,
+      #[cfg(feature = "proxy-protocol")]
+      tcp_trusted_proxies: config.tcp_trusted_proxies,
       tcp_proxy_mux: Arc::new(tcp_proxy_mux),
       udp_proxy_mux: Arc::new(udp_proxy_mux),
     };
@@ -249,6 +257,11 @@ impl ProxyService {
     }
     if let Some(tcp_max_connections) = self.tcp_max_connections {
       tcp_proxy_builder.max_connections(tcp_max_connections as usize);
+    }
+    #[cfg(feature = "proxy-protocol")]
+    {
+      tcp_proxy_builder.recv_proxy_protocol(self.tcp_recv_proxy_protocol);
+      tcp_proxy_builder.trusted_proxies(self.tcp_trusted_proxies.clone());
     }
     tcp_proxy_builder
   }

@@ -28,6 +28,14 @@ udp_max_connections = 2048
 # client's source IP/port. Supported values: "v1", "v2", or "none" (default: "none")
 # tcp_send_proxy_protocol = "v2"
 
+# (Optional) Expect inbound PROXY protocol header from upstream proxy/load balancer [default: false]
+# When enabled, every inbound TCP connection must start with a PROXY protocol header (v1 or v2).
+# tcp_recv_proxy_protocol = true
+
+# (Required when tcp_recv_proxy_protocol = true) Trusted source IPs/CIDRs allowed to send PROXY headers
+# If tcp_recv_proxy_protocol = true and this is omitted or empty, configuration validation fails at startup.
+# tcp_trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
+
 # (Optional) Default targets for TCP connections. [default: empty]
 # If specified, connections that are not detected as specified protocols will be forwarded to these targets.
 # Otherwise, only specified protocols pass through and others are dropped.

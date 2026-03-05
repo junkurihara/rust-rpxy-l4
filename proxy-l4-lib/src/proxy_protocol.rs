@@ -15,7 +15,6 @@ pub(crate) fn encode_proxy_header(
   match version {
     ProxyProtocolVersion::V1 => encode_v1(src, dst),
     ProxyProtocolVersion::V2 => encode_v2(src, dst),
-    ProxyProtocolVersion::None => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "PROXY protocol is disabled")),
   }
 }
 

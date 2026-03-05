@@ -10,7 +10,8 @@ categories.workspace = true
 publish.workspace = true
 
 [features]
-default = []
+default = ["proxy-protocol"]
+# default = []
 proxy-protocol = ["rpxy-l4-lib/proxy-protocol"]
 
 [dependencies]

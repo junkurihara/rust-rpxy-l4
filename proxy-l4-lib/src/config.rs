@@ -12,8 +12,6 @@ pub enum ProxyProtocolVersion {
   V1,
   /// PROXY protocol v2 (binary format)
   V2,
-  /// Disable PROXY protocol (default)
-  None,
 }
 
 #[cfg(feature = "proxy-protocol")]
@@ -23,9 +21,8 @@ impl FromStr for ProxyProtocolVersion {
     match s.to_lowercase().as_str() {
       "v1" | "1" => Ok(Self::V1),
       "v2" | "2" => Ok(Self::V2),
-      "none" | "0" => Ok(Self::None),
       _ => Err(ProxyBuildError::BuildMultiplexersError(format!(
-        "Invalid proxy protocol version: '{s}'. Valid values: v1, v2, none"
+        "Invalid proxy protocol version: '{s}'. Valid values: v1, v2"
       ))),
     }
   }
@@ -293,7 +290,8 @@ pub struct Config {
   /// Protocol specific configurations
   pub protocols: std::collections::HashMap<String, ProtocolConfig>,
   #[cfg(feature = "proxy-protocol")]
-  /// Global default: send PROXY protocol header to all TCP destinations
+  /// Global default: send PROXY protocol header to all TCP destinations [default: None (disabled)].
+  /// Per-protocol override has higher priority than this global default. If both are set, the per-protocol setting will determine whether to send PROXY protocol header for that protocol's destinations.
   pub tcp_send_proxy_protocol: Option<ProxyProtocolVersion>,
 }
 
@@ -315,7 +313,9 @@ pub struct ProtocolConfig {
   /// Only TLS
   pub ech: Option<EchProtocolConfig>,
   #[cfg(feature = "proxy-protocol")]
-  /// Per-protocol override: send PROXY protocol header for this protocol's destinations
+  /// Per-protocol override: send PROXY protocol header for this protocol's destinations [default: None (disabled)].
+  /// If set, this will override the global default for this protocol.
+  /// Note that this is only valid for TCP-based protocols. If set for UDP-based protocols, it will be ignored.
   pub send_proxy_protocol: Option<ProxyProtocolVersion>,
 }
 

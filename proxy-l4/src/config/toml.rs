@@ -139,10 +139,19 @@ impl TryFrom<ConfigToml> for Config {
         }
 
         #[cfg(feature = "proxy-protocol")]
+        // If "none" is specified or None, treat it as None (disabled). Otherwise, parse the version string.
         let send_proxy_protocol = protocol_toml
           .send_proxy_protocol
           .as_ref()
-          .map(|v| v.parse::<ProxyProtocolVersion>())
+          .map(|v| match v.to_ascii_lowercase().as_str() {
+            "none" => None,
+            other => Some(other.to_string()),
+          })
+          .flatten()
+          .map(|v| {
+            warn!("PROXY protocol is enabled for protocol: {name} with version: {v}");
+            v.parse::<ProxyProtocolVersion>()
+          })
           .transpose()?;
 
         let protocol = ProtocolConfig {
@@ -193,10 +202,19 @@ impl TryFrom<ConfigToml> for Config {
       .transpose()?;
 
     #[cfg(feature = "proxy-protocol")]
+    // If "none" is specified or None, treat it as None (disabled). Otherwise, parse the version string.
     let tcp_send_proxy_protocol = config_toml
       .tcp_send_proxy_protocol
       .as_ref()
-      .map(|v| v.parse::<ProxyProtocolVersion>())
+      .map(|v| match v.to_ascii_lowercase().as_str() {
+        "none" => None,
+        other => Some(other.to_string()),
+      })
+      .flatten()
+      .map(|v| {
+        warn!("PROXY protocol is enabled for TCP connections by default with version: {v}");
+        v.parse::<ProxyProtocolVersion>()
+      })
       .transpose()?;
 
     Ok(Self {

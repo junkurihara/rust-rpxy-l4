@@ -6,8 +6,6 @@ mod destination;
 mod error;
 mod probe;
 mod proto;
-#[cfg(feature = "proxy-protocol")]
-mod proxy_protocol;
 mod socket;
 mod target;
 mod tcp_proxy;
@@ -16,13 +14,14 @@ mod trace;
 mod udp_conn;
 mod udp_proxy;
 
+#[cfg(feature = "proxy-protocol")]
+mod proxy_protocol;
+
 use constants::{DNS_CACHE_MAX_TTL, DNS_CACHE_MIN_TTL};
 use std::sync::Arc;
 use target::DnsCache;
 
 pub use config::{Config, EchProtocolConfig, ProtocolConfig};
-#[cfg(feature = "proxy-protocol")]
-pub use config::ProxyProtocolVersion;
 pub use constants::log_event_names;
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
@@ -31,6 +30,9 @@ pub use proto::ProtocolType;
 pub use target::TargetAddr;
 pub use tcp_proxy::{TcpDestinationMux, TcpDestinationMuxBuilder, TcpProxy, TcpProxyBuilder};
 pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpProxyBuilder};
+
+#[cfg(feature = "proxy-protocol")]
+pub use config::ProxyProtocolVersion;
 
 /* ---------------------------------------- */
 /// Build TCP and UDP multiplexers from the configuration

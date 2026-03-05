@@ -1,5 +1,7 @@
 use crate::log::warn;
 use anyhow::anyhow;
+#[cfg(feature = "proxy-protocol")]
+use rpxy_l4_lib::ProxyProtocolVersion;
 use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
 use serde::Deserialize;
 use std::{
@@ -25,6 +27,9 @@ pub struct ConfigToml {
   // DNS cache configuration
   pub dns_cache_min_ttl: Option<String>,
   pub dns_cache_max_ttl: Option<String>,
+  // proxy protocol
+  #[cfg(feature = "proxy-protocol")]
+  pub tcp_send_proxy_protocol: Option<String>,
   // protocols
   pub protocols: Option<ProtocolsToml>,
 }
@@ -48,6 +53,9 @@ pub struct ProtocolToml {
   pub server_names: Option<Vec<String>>,
   /// Only TLS
   pub ech: Option<EchToml>,
+  /// PROXY protocol version override for this protocol
+  #[cfg(feature = "proxy-protocol")]
+  pub send_proxy_protocol: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq, Eq, Clone)]
@@ -130,6 +138,13 @@ impl TryFrom<ConfigToml> for Config {
           );
         }
 
+        #[cfg(feature = "proxy-protocol")]
+        let send_proxy_protocol = protocol_toml
+          .send_proxy_protocol
+          .as_ref()
+          .map(|v| v.parse::<ProxyProtocolVersion>())
+          .transpose()?;
+
         let protocol = ProtocolConfig {
           protocol: proto_type,
           target,
@@ -138,6 +153,8 @@ impl TryFrom<ConfigToml> for Config {
           alpn: protocol_toml.alpn,
           server_names: protocol_toml.server_names,
           ech,
+          #[cfg(feature = "proxy-protocol")]
+          send_proxy_protocol,
         };
 
         protocols.insert(name, protocol);
@@ -175,6 +192,13 @@ impl TryFrom<ConfigToml> for Config {
       .map(|x| parse_duration(x))
       .transpose()?;
 
+    #[cfg(feature = "proxy-protocol")]
+    let tcp_send_proxy_protocol = config_toml
+      .tcp_send_proxy_protocol
+      .as_ref()
+      .map(|v| v.parse::<ProxyProtocolVersion>())
+      .transpose()?;
+
     Ok(Self {
       listen_port,
       listen_ipv6: config_toml.listen_ipv6.unwrap_or(false),
@@ -188,6 +212,8 @@ impl TryFrom<ConfigToml> for Config {
       udp_idle_lifetime: config_toml.udp_idle_lifetime,
       dns_cache_min_ttl,
       dns_cache_max_ttl,
+      #[cfg(feature = "proxy-protocol")]
+      tcp_send_proxy_protocol,
       protocols,
     })
   }

@@ -6,6 +6,8 @@ mod destination;
 mod error;
 mod probe;
 mod proto;
+#[cfg(feature = "proxy-protocol")]
+mod proxy_protocol;
 mod socket;
 mod target;
 mod tcp_proxy;
@@ -19,6 +21,8 @@ use std::sync::Arc;
 use target::DnsCache;
 
 pub use config::{Config, EchProtocolConfig, ProtocolConfig};
+#[cfg(feature = "proxy-protocol")]
+pub use config::ProxyProtocolVersion;
 pub use constants::log_event_names;
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
@@ -50,6 +54,8 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
       tcp_target.as_slice(),
       &dns_cache,
       config.tcp_load_balance.as_ref(),
+      #[cfg(feature = "proxy-protocol")]
+      config.tcp_send_proxy_protocol,
     );
   }
   if let Some(udp_target) = config.udp_target.as_ref() {
@@ -67,17 +73,42 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
     let target: &[_] = spec.target.as_ref();
     // No need to check if target is empty - already validated in validate_config()
 
+    #[cfg(feature = "proxy-protocol")]
+    // Per-protocol override takes precedence over global default
+    let pp_version = spec.send_proxy_protocol.or(config.tcp_send_proxy_protocol);
+
     match spec.protocol {
       ProtocolType::Http => {
-        tcp_mux_builder.set_base(proto::TcpProtocolType::Http, target, &dns_cache, spec.load_balance.as_ref());
+        tcp_mux_builder.set_base(
+          proto::TcpProtocolType::Http,
+          target,
+          &dns_cache,
+          spec.load_balance.as_ref(),
+          #[cfg(feature = "proxy-protocol")]
+          pp_version,
+        );
       }
       /* ---------------------------------------- */
       ProtocolType::Ssh => {
-        tcp_mux_builder.set_base(proto::TcpProtocolType::Ssh, target, &dns_cache, spec.load_balance.as_ref());
+        tcp_mux_builder.set_base(
+          proto::TcpProtocolType::Ssh,
+          target,
+          &dns_cache,
+          spec.load_balance.as_ref(),
+          #[cfg(feature = "proxy-protocol")]
+          pp_version,
+        );
       }
       /* ---------------------------------------- */
       ProtocolType::Socks5 => {
-        tcp_mux_builder.set_base(proto::TcpProtocolType::Socks5, target, &dns_cache, spec.load_balance.as_ref());
+        tcp_mux_builder.set_base(
+          proto::TcpProtocolType::Socks5,
+          target,
+          &dns_cache,
+          spec.load_balance.as_ref(),
+          #[cfg(feature = "proxy-protocol")]
+          pp_version,
+        );
       }
       /* ---------------------------------------- */
       ProtocolType::Wireguard => {
@@ -106,6 +137,8 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
           server_names.as_deref(),
           alpn.as_deref(),
           spec.ech.as_ref(),
+          #[cfg(feature = "proxy-protocol")]
+          pp_version,
         );
       }
       /* ---------------------------------------- */

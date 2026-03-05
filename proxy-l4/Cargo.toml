@@ -9,8 +9,12 @@ homepage.workspace = true
 categories.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+proxy-protocol = ["rpxy-l4-lib/proxy-protocol"]
+
 [dependencies]
-rpxy-l4-lib = { path = "../proxy-l4-lib" }
+rpxy-l4-lib = { path = "../proxy-l4-lib", default-features = false }
 
 # error handling
 anyhow = { version = "1.0.102" }

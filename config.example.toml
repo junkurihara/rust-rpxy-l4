@@ -11,6 +11,9 @@ udp_max_connections = 2048
 dns_cache_min_ttl = "30s" # Minimum DNS cache TTL
 dns_cache_max_ttl = "1h"  # Maximum DNS cache TTL
 
+# (Optional)PROXY protocol: prepend PROXY header to all TCP backend connections
+# tcp_send_proxy_protocol = "v2"  # "v1", "v2", or "none" (default: "none")
+
 # Default TCP target using domain names and IPs
 tcp_target = [
   "one.one.one.one:53", # Cloudflare DNS (resolved via DNS)
@@ -39,6 +42,8 @@ load_balance = "none"
 [protocols."tls_1"]
 # check with `dig t.co @localhost -p 8448 +tls`
 protocol = "tls"
+# (Optional) Per-protocol PROXY protocol override (overrides global tcp_send_proxy_protocol, only for TCP-based protocols)
+# send_proxy_protocol = "v2" # "v1", "v2", or "none" (default: inherits global tcp_send_proxy_protocol)
 target = [
   "dot.cloudflare.com:853", # Will be resolved via DNS
   "1.1.1.1:853",            # Direct IP as fallback

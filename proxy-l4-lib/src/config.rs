@@ -3,6 +3,35 @@ use quic_tls::{EchConfigList, EchPrivateKey};
 use std::{str::FromStr, time::Duration};
 
 /* ---------------------------------------------------------- */
+
+#[cfg(feature = "proxy-protocol")]
+/// Proxy Protocol version to use for outbound connections
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyProtocolVersion {
+  /// PROXY protocol v1 (text format)
+  V1,
+  /// PROXY protocol v2 (binary format)
+  V2,
+  /// Disable PROXY protocol (default)
+  None,
+}
+
+#[cfg(feature = "proxy-protocol")]
+impl FromStr for ProxyProtocolVersion {
+  type Err = ProxyBuildError;
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s.to_lowercase().as_str() {
+      "v1" | "1" => Ok(Self::V1),
+      "v2" | "2" => Ok(Self::V2),
+      "none" | "0" => Ok(Self::None),
+      _ => Err(ProxyBuildError::BuildMultiplexersError(format!(
+        "Invalid proxy protocol version: '{s}'. Valid values: v1, v2, none"
+      ))),
+    }
+  }
+}
+
+/* ---------------------------------------------------------- */
 // Configuration Validation Functions
 /* ---------------------------------------------------------- */
 
@@ -205,6 +234,8 @@ pub fn create_test_tcp_config(port: u16, target: &str) -> Config {
     dns_cache_min_ttl: None,
     dns_cache_max_ttl: None,
     protocols: std::collections::HashMap::new(),
+    #[cfg(feature = "proxy-protocol")]
+    tcp_send_proxy_protocol: None,
   }
 }
 
@@ -225,6 +256,8 @@ pub fn create_test_udp_config(port: u16, target: &str) -> Config {
     dns_cache_min_ttl: None,
     dns_cache_max_ttl: None,
     protocols: std::collections::HashMap::new(),
+    #[cfg(feature = "proxy-protocol")]
+    tcp_send_proxy_protocol: None,
   }
 }
 
@@ -259,6 +292,9 @@ pub struct Config {
   pub dns_cache_max_ttl: Option<Duration>,
   /// Protocol specific configurations
   pub protocols: std::collections::HashMap<String, ProtocolConfig>,
+  #[cfg(feature = "proxy-protocol")]
+  /// Global default: send PROXY protocol header to all TCP destinations
+  pub tcp_send_proxy_protocol: Option<ProxyProtocolVersion>,
 }
 
 /// Protocol specific configuration
@@ -278,6 +314,9 @@ pub struct ProtocolConfig {
   pub server_names: Option<Vec<String>>,
   /// Only TLS
   pub ech: Option<EchProtocolConfig>,
+  #[cfg(feature = "proxy-protocol")]
+  /// Per-protocol override: send PROXY protocol header for this protocol's destinations
+  pub send_proxy_protocol: Option<ProxyProtocolVersion>,
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +431,8 @@ mod tests {
       alpn: None,
       server_names: None,
       ech: None,
+      #[cfg(feature = "proxy-protocol")]
+      send_proxy_protocol: None,
     };
     assert!(validate_protocol_config("ssh", &ssh_config).is_ok());
 
@@ -421,6 +462,8 @@ mod tests {
       alpn: Some(vec!["h2".to_string(), "http/1.1".to_string()]),
       server_names: Some(vec!["example.com".to_string()]),
       ech: None,
+      #[cfg(feature = "proxy-protocol")]
+      send_proxy_protocol: None,
     };
     assert!(validate_protocol_config("tls", &tls_config).is_ok());
 
@@ -446,6 +489,8 @@ mod tests {
       alpn: Some(vec!["h3".to_string()]),
       server_names: Some(vec!["example.com".to_string()]),
       ech: None,
+      #[cfg(feature = "proxy-protocol")]
+      send_proxy_protocol: None,
     };
     assert!(validate_protocol_config("quic", &quic_config).is_ok());
 
@@ -469,6 +514,8 @@ mod tests {
       alpn: None,
       server_names: None,
       ech: None,
+      #[cfg(feature = "proxy-protocol")]
+      send_proxy_protocol: None,
     };
     assert!(validate_protocol_config("wireguard", &wg_config).is_ok());
 
@@ -510,6 +557,8 @@ mod tests {
       dns_cache_min_ttl: None,
       dns_cache_max_ttl: None,
       protocols: HashMap::new(),
+      #[cfg(feature = "proxy-protocol")]
+      tcp_send_proxy_protocol: None,
     };
     assert!(validate_config(&empty_config).is_err());
 
@@ -525,6 +574,8 @@ mod tests {
         alpn: None,
         server_names: None,
         ech: None,
+        #[cfg(feature = "proxy-protocol")]
+        send_proxy_protocol: None,
       },
     );
     assert!(validate_config(&config_with_protocols).is_ok());

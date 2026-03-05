@@ -1,6 +1,10 @@
+#[cfg(feature = "proxy-protocol")]
+use crate::proxy_protocol;
+#[cfg(feature = "proxy-protocol")]
+use crate::config::ProxyProtocolVersion;
 use crate::{
   access_log::{AccessLogProtocolType, access_log_start},
-  config::EchProtocolConfig,
+  config::{EchProtocolConfig},
   constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::ConnectionCount,
   destination::{LoadBalance, TargetDestination, TlsDestinationItem},
@@ -39,6 +43,9 @@ enum TcpDestination {
 pub(crate) struct TcpDestinationInner {
   /// Destination inner
   inner: TargetDestination,
+  /// PROXY protocol version to send for this destination
+  #[cfg(feature = "proxy-protocol")]
+  send_proxy_protocol: Option<ProxyProtocolVersion>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,13 +57,52 @@ pub(crate) enum FoundTcpDestination {
   Tls(TlsDestinationItem<TcpDestinationInner>),
 }
 
-impl TryFrom<(&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>)> for TcpDestinationInner {
+#[cfg(feature = "proxy-protocol")]
+impl
+  TryFrom<(
+    &[TargetAddr],
+    Option<&LoadBalance>,
+    &Arc<DnsCache>,
+    Option<ProxyProtocolVersion>,
+  )> for TcpDestinationInner
+{
   type Error = ProxyBuildError;
   fn try_from(
-    (dst_addrs, load_balance, dns_cache): (&[TargetAddr], Option<&LoadBalance>, &Arc<DnsCache>),
+    (dst_addrs, load_balance, dns_cache, send_proxy_protocol): (
+      &[TargetAddr],
+      Option<&LoadBalance>,
+      &Arc<DnsCache>,
+      Option<ProxyProtocolVersion>,
+    ),
   ) -> Result<Self, Self::Error> {
     let inner = TargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
-    Ok(Self { inner })
+    Ok(Self {
+      inner,
+      send_proxy_protocol,
+    })
+  }
+}
+
+#[cfg(not(feature = "proxy-protocol"))]
+impl
+  TryFrom<(
+    &[TargetAddr],
+    Option<&LoadBalance>,
+    &Arc<DnsCache>,
+  )> for TcpDestinationInner
+{
+  type Error = ProxyBuildError;
+  fn try_from(
+    (dst_addrs, load_balance, dns_cache): (
+      &[TargetAddr],
+      Option<&LoadBalance>,
+      &Arc<DnsCache>,
+    ),
+  ) -> Result<Self, Self::Error> {
+    let inner = TargetDestination::try_from((dst_addrs, load_balance, dns_cache.clone()))?;
+    Ok(Self {
+      inner,
+    })
   }
 }
 
@@ -64,6 +110,12 @@ impl TcpDestinationInner {
   /// Get the destination socket address
   pub(crate) async fn get_destination(&self, src_addr: &SocketAddr) -> Result<SocketAddr, ProxyError> {
     self.inner.get_destination(src_addr).await
+  }
+
+  /// Get the PROXY protocol version for this destination
+  #[cfg(feature = "proxy-protocol")]
+  pub(crate) fn proxy_protocol_version(&self) -> Option<ProxyProtocolVersion> {
+    self.send_proxy_protocol
   }
 }
 
@@ -73,6 +125,15 @@ impl FoundTcpDestination {
     match self {
       Self::Tcp(tcp_destination) => tcp_destination.get_destination(src_addr).await,
       Self::Tls(tls_destination) => tls_destination.destination().get_destination(src_addr).await,
+    }
+  }
+
+  /// Get the PROXY protocol version for this destination
+  #[cfg(feature = "proxy-protocol")]
+  pub(crate) fn proxy_protocol_version(&self) -> Option<ProxyProtocolVersion> {
+    match self {
+      Self::Tcp(tcp_destination) => tcp_destination.proxy_protocol_version(),
+      Self::Tls(tls_destination) => tls_destination.destination().proxy_protocol_version(),
     }
   }
 }
@@ -94,7 +155,12 @@ impl TcpDestinationMuxBuilder {
     addrs: &[TargetAddr],
     dns_cache: &Arc<DnsCache>,
     load_balance: Option<&LoadBalance>,
+    #[cfg(feature = "proxy-protocol")]
+    send_proxy_protocol: Option<ProxyProtocolVersion>,
   ) -> &mut Self {
+    #[cfg(feature = "proxy-protocol")]
+    let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance, dns_cache, send_proxy_protocol));
+    #[cfg(not(feature = "proxy-protocol"))]
     let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance, dns_cache));
     if tcp_dest.is_err() {
       return self;
@@ -129,7 +195,12 @@ impl TcpDestinationMuxBuilder {
     server_names: Option<&[&str]>,
     alpn: Option<&[&str]>,
     ech: Option<&EchProtocolConfig>,
+    #[cfg(feature = "proxy-protocol")]
+    send_proxy_protocol: Option<ProxyProtocolVersion>,
   ) -> &mut Self {
+    #[cfg(feature = "proxy-protocol")]
+    let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance, dns_cache, send_proxy_protocol));
+    #[cfg(not(feature = "proxy-protocol"))]
     let tcp_dest = TcpDestinationInner::try_from((addrs, load_balance, dns_cache));
     if tcp_dest.is_err() {
       return self;
@@ -261,7 +332,8 @@ impl TcpProxy {
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
           let connection_count = self.connection_count.clone();
-          handle_tcp_connection(dst_mux, connection_count, incoming_stream, src_addr)
+          let listen_on = self.listen_on;
+          handle_tcp_connection(dst_mux, connection_count, incoming_stream, src_addr, listen_on)
         });
       }
     };
@@ -279,11 +351,13 @@ impl TcpProxy {
 
 /* ---------------------------------------------------------- */
 /// Handle TCP connection
+#[cfg_attr(not(feature = "proxy-protocol"), allow(unused_variables))]
 async fn handle_tcp_connection(
   dst_mux: Arc<TcpDestinationMux>,
   connection_count: ConnectionCount,
   mut incoming_stream: TcpStream,
   src_addr: SocketAddr,
+  listen_on: SocketAddr,
 ) {
   let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
   let Ok(probe_result) = timeout(
@@ -361,6 +435,34 @@ async fn handle_tcp_connection(
     connection_count.decrement();
     return;
   };
+
+  // Write PROXY protocol header before any application data
+  #[cfg(feature = "proxy-protocol")]
+  if let Some(pp_version) = found_dst.proxy_protocol_version() {
+    let local_addr = incoming_stream.local_addr().unwrap_or(listen_on);
+    let pp_dst = proxy_protocol::resolve_dst_addr(listen_on, local_addr);
+    match proxy_protocol::encode_proxy_header(pp_version, src_addr, pp_dst) {
+      Ok(header_bytes) => {
+        if let Err(e) = outgoing_stream.write_all(&header_bytes).await {
+          let contextual_error = ProxyError::IoError(e)
+            .with_connection_context(src_addr, dst_addr)
+            .with_protocol_context(&probed_protocol.to_string());
+          error!("Failed to write PROXY header to {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
+          connection_count.decrement();
+          return;
+        }
+        debug!("Sent PROXY {pp_version:?} header to {dst_addr} for {probed_protocol} from {src_addr}");
+      }
+      Err(e) => {
+        let contextual_error = ProxyError::IoError(e)
+          .with_connection_context(src_addr, dst_addr)
+          .with_protocol_context(&probed_protocol.to_string());
+        error!("Failed to encode PROXY header for {probed_protocol} from {src_addr}: {contextual_error}");
+        connection_count.decrement();
+        return;
+      }
+    }
+  }
 
   if let Err(e) = outgoing_stream.write_all(&to_be_written).await {
     let contextual_error = ProxyError::IoError(e)
@@ -484,10 +586,10 @@ mod tests {
     let dst_tls_2 = &["127.0.0.1:50444".parse().unwrap()];
     let dst_mux = Arc::new(
       TcpDestinationMuxBuilder::default()
-        .set_base(TcpProtocolType::Any, dst_any, &dns_cache, None)
-        .set_base(TcpProtocolType::Ssh, dst_ssh, &dns_cache, None)
-        .set_base(TcpProtocolType::Tls, dst_tls_1, &dns_cache, None)
-        .set_tls(dst_tls_2, &dns_cache, None, Some(&["example.com"]), None, None)
+        .set_base(TcpProtocolType::Any, dst_any, &dns_cache, None, #[cfg(feature = "proxy-protocol")] None)
+        .set_base(TcpProtocolType::Ssh, dst_ssh, &dns_cache, None, #[cfg(feature = "proxy-protocol")] None)
+        .set_base(TcpProtocolType::Tls, dst_tls_1, &dns_cache, None, #[cfg(feature = "proxy-protocol")] None)
+        .set_tls(dst_tls_2, &dns_cache, None, Some(&["example.com"]), #[cfg(feature = "proxy-protocol")] None, None, None)
         .build()
         .unwrap(),
       // .dst_http(dst_http, None)
@@ -534,7 +636,7 @@ mod tests {
     let dst_any = &["one.one.one.one:53".parse().unwrap()];
     let dst_mux = Arc::new(
       TcpDestinationMuxBuilder::default()
-        .set_base(TcpProtocolType::Any, dst_any, &dns_cache, None)
+        .set_base(TcpProtocolType::Any, dst_any, &dns_cache, None, #[cfg(feature = "proxy-protocol")] None)
         .build()
         .unwrap(),
     );

@@ -22,6 +22,12 @@ tcp_max_connections = 1024
 # (Optional) Maximum UDP connections [default: 2048]
 udp_max_connections = 2048
 
+# (Optional) Send PROXY protocol header to all TCP backend connections [default: disabled]
+# When set, rpxy-l4 prepends a PROXY protocol header (v1 text or v2 binary)
+# to every outbound TCP connection, allowing the backend to recover the original
+# client's source IP/port. Supported values: "v1", "v2", or "none" (default: "none")
+# tcp_send_proxy_protocol = "v2"
+
 # (Optional) Default targets for TCP connections. [default: empty]
 # If specified, connections that are not detected as specified protocols will be forwarded to these targets.
 # Otherwise, only specified protocols pass through and others are dropped.
@@ -74,6 +80,10 @@ target = ["192.168.122.4:443"] # ip:port or domain:port
 # (Optional) Load balancing method specific to this connections [default: none]
 load_balance = "source_ip"
 
+# (Optional) Per-protocol PROXY protocol override [default: inherits tcp_send_proxy_protocol]
+# Overrides the global tcp_send_proxy_protocol for this protocol's destinations.
+# This is only for TCP-based protocols. For UDP-based protocols, this option is ignored and PROXY protocol is never sent.
+# send_proxy_protocol = "v2" #"v1", "v2", or "none" (default: inherits global tcp_send_proxy_protocol)
 
 #########################
 ### Example for TLS with SNI routing

@@ -21,6 +21,7 @@
 - **Load balancing**: `rpxy-l4` can distribute incoming connections to multiple backend servers based on the several simple load balancing algorithms.
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
 - **TLS/QUIC forwarder**: `rpxy-l4` can forward TLS/IETF QUIC streams to appropriate backend servers based on the ServerName Indication (SNI) and Application Layer Protocol Negotiation (ALPN) values.
+- **HAProxy PROXY protocol support**: `rpxy-l4` can prepend a [HAProxy PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) header (v1 or v2) to outbound TCP connections, allowing backend servers to recover the original client's source IP and port. This can be configured globally or per-protocol. (Requires the `proxy-protocol` Cargo feature, enabled by default.)
 - **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with IETF-Draft Encrypted Client Hello. In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
 
 [^quic]: Not Google QUIC. Both QUIC v1 ([RFC9000](https://datatracker.ietf.org/doc/html/rfc9000), [RFC9001](https://datatracker.ietf.org/doc/html/rfc9001)) and QUIC v2 ([RFC9369](https://datatracker.ietf.org/doc/html/rfc9369)) are supported.
@@ -43,6 +44,12 @@ You can build an executable binary yourself by checking out this Git repository.
 ```
 
 Then you have an executive binary `rust-rpxy/target/release/rpxy-l4`.
+
+To build without the PROXY protocol feature:
+
+```bash
+% cargo build --release --no-default-features
+```
 
 ### Package Installation for Linux (RPM/DEB)
 
@@ -245,9 +252,46 @@ idle_lifetime = 30
 
 This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
 
-### 4. Advanced: Experimental features
+### 4. PROXY protocol (preserving client IP)
 
-#### 4.1. TLS Encrypted Client Hello (ECH) proxy
+`rpxy-l4` supports [HAProxy PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) (v1 and v2) for outbound TCP connections. When enabled, a PROXY header is prepended to the connection toward the backend server, allowing it to recover the original client's source IP and port.
+
+#### Global setting
+
+Set `tcp_send_proxy_protocol` at the top level to apply to all TCP backend connections:
+
+```toml
+listen_port = 8448
+tcp_target = ["192.168.0.2:8000"]
+
+# Prepend PROXY protocol v2 header to all TCP backend connections
+tcp_send_proxy_protocol = "v2"  # "v1", "v2", or omit/"none" to disable
+```
+
+#### Per-protocol override
+
+Each protocol entry can override the global setting with `send_proxy_protocol`:
+
+```toml
+tcp_send_proxy_protocol = "v2"  # global default
+
+[protocols."tls_1"]
+protocol = "tls"
+target = ["192.168.0.5:443"]
+send_proxy_protocol = "v1"  # override: use v1 for this protocol
+
+[protocols."http_1"]
+protocol = "http"
+target = ["192.168.0.6:80"]
+send_proxy_protocol = "none"  # override: disable for this protocol
+```
+
+> [!NOTE]
+> This feature requires the `proxy-protocol` Cargo feature, which is enabled by default. To build without it, use `cargo build --release --no-default-features`.
+
+### 5. Advanced: Experimental features
+
+#### 5.1. TLS Encrypted Client Hello (ECH) proxy
 
 See [./examples/README.md](./examples/README.md) for the ECH proxy configuration and client and backend server examples.
 

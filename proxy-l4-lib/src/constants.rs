@@ -17,7 +17,7 @@ pub const TCP_PROTOCOL_DETECTION_BUFFER_SIZE: usize = 16384;
 /// Separate from TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC (100ms) because the PROXY
 /// header read may involve network latency from the upstream proxy.
 #[cfg(feature = "proxy-protocol")]
-pub const TCP_PROXY_HEADER_READ_TIMEOUT_MSEC: u64 = 3000;
+pub const TCP_PROXY_HEADER_READ_TIMEOUT_MSEC: u64 = 50;
 
 /// UDP buffer size, theoretical limit is 65535 bytes in IPv4
 /// But the practical limit is, due to the MTU, less than 1500 bytes.

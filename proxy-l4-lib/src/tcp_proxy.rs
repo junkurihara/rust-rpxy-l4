@@ -372,7 +372,8 @@ async fn handle_tcp_connection(
   dst_mux: Arc<TcpDestinationMux>,
   connection_count: ConnectionCount,
   mut incoming_stream: TcpStream,
-  mut src_addr: SocketAddr,
+  #[cfg(feature = "proxy-protocol")] mut src_addr: SocketAddr,
+  #[cfg(not(feature = "proxy-protocol"))] src_addr: SocketAddr,
   #[cfg(feature = "proxy-protocol")] listen_on: SocketAddr,
   #[cfg(feature = "proxy-protocol")] recv_proxy_protocol: Option<Arc<InboundProxyProtocolConfig>>,
 ) {

@@ -230,14 +230,18 @@ impl TryFrom<ConfigToml> for Config {
     let tcp_trusted_proxies = config_toml
       .tcp_trusted_proxies
       .map(|proxies| {
-        proxies
+        let trusted = proxies
           .iter()
           .map(|cidr| {
             cidr
               .parse::<IpNet>()
               .map_err(|e| anyhow!("Invalid CIDR in tcp_trusted_proxies '{}': {e}", cidr))
           })
-          .collect::<Result<Vec<IpNet>, anyhow::Error>>()
+          .collect::<Result<Vec<IpNet>, anyhow::Error>>();
+        if let Ok(trusted) = &trusted {
+          warn!("Inbound PROXY protocol is enabled with trusted proxies: {:?}", trusted);
+        }
+        trusted
       })
       .transpose()?;
 

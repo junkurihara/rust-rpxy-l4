@@ -1732,6 +1732,7 @@ dependencies = [
  "dashmap",
  "derive_builder",
  "hickory-resolver",
+ "ipnet",
  "ppp",
  "rand 0.10.0",
  "rpxy-l4-quic-tls",

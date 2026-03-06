@@ -33,6 +33,10 @@ pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpPr
 
 #[cfg(feature = "proxy-protocol")]
 pub use config::ProxyProtocolVersion;
+#[cfg(feature = "proxy-protocol")]
+pub mod reexport {
+  pub use ipnet::IpNet;
+}
 
 /* ---------------------------------------- */
 /// Build TCP and UDP multiplexers from the configuration

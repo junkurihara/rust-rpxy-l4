@@ -16,7 +16,7 @@ dns_cache_max_ttl = "1h"  # Maximum DNS cache TTL
 
 # (Optional) Inbound PROXY protocol: expect PROXY header from upstream proxy/load balancer
 # tcp_recv_proxy_protocol = true # default: false
-# (Required when tcp_recv_proxy_protocol = true) trusted source CIDRs allowed to send PROXY headers
+# (Required when tcp_recv_proxy_protocol = true) trusted source CIDRs allowed to send PROXY headers. IPv4 and IPv6 CIDRs are both supported like "192.168.0.0/16" and "2001:db8::/32".
 # tcp_trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
 
 # Default TCP target using domain names and IPs

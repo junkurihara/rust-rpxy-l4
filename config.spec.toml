@@ -34,6 +34,7 @@ udp_max_connections = 2048
 
 # (Required when tcp_recv_proxy_protocol = true) Trusted source IPs/CIDRs allowed to send PROXY headers
 # If tcp_recv_proxy_protocol = true and this is omitted or empty, configuration validation fails at startup.
+# IPv4 and IPv6 CIDRs are both supported like "192.168.0.0/16" and "2001:db8::/32".
 # tcp_trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
 
 # (Optional) Default targets for TCP connections. [default: empty]

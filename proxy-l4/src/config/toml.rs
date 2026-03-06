@@ -1,5 +1,9 @@
 use crate::log::warn;
 use anyhow::anyhow;
+#[cfg(feature = "proxy-protocol")]
+use rpxy_l4_lib::{ProxyProtocolVersion, SendProxyProtocol};
+#[cfg(feature = "proxy-protocol")]
+use rpxy_l4_lib::reexport::IpNet;
 use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
 use serde::Deserialize;
 use std::{
@@ -25,6 +29,13 @@ pub struct ConfigToml {
   // DNS cache configuration
   pub dns_cache_min_ttl: Option<String>,
   pub dns_cache_max_ttl: Option<String>,
+  // proxy protocol
+  #[cfg(feature = "proxy-protocol")]
+  pub tcp_send_proxy_protocol: Option<String>,
+  #[cfg(feature = "proxy-protocol")]
+  pub tcp_recv_proxy_protocol: Option<bool>,
+  #[cfg(feature = "proxy-protocol")]
+  pub tcp_trusted_proxies: Option<Vec<String>>,
   // protocols
   pub protocols: Option<ProtocolsToml>,
 }
@@ -48,6 +59,9 @@ pub struct ProtocolToml {
   pub server_names: Option<Vec<String>>,
   /// Only TLS
   pub ech: Option<EchToml>,
+  /// PROXY protocol version override for this protocol
+  #[cfg(feature = "proxy-protocol")]
+  pub send_proxy_protocol: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq, Eq, Clone)]
@@ -130,6 +144,20 @@ impl TryFrom<ConfigToml> for Config {
           );
         }
 
+        #[cfg(feature = "proxy-protocol")]
+        // Produce a tri-state SendProxyProtocol:
+        // - absent           → Inherit (fall back to global tcp_send_proxy_protocol)
+        // - "none"           → Disable (explicitly suppress, even if global is enabled)
+        // - "v1" / "v2"     → Version(v) (override global with this version)
+        let send_proxy_protocol = match protocol_toml.send_proxy_protocol.as_deref() {
+          None => SendProxyProtocol::Inherit,
+          Some(v) if v.eq_ignore_ascii_case("none") => SendProxyProtocol::Disable,
+          Some(v) => {
+            warn!("PROXY protocol is enabled for protocol: {name} with version: {v}");
+            SendProxyProtocol::Version(v.parse::<ProxyProtocolVersion>()?)
+          }
+        };
+
         let protocol = ProtocolConfig {
           protocol: proto_type,
           target,
@@ -138,6 +166,8 @@ impl TryFrom<ConfigToml> for Config {
           alpn: protocol_toml.alpn,
           server_names: protocol_toml.server_names,
           ech,
+          #[cfg(feature = "proxy-protocol")]
+          send_proxy_protocol,
         };
 
         protocols.insert(name, protocol);
@@ -175,6 +205,48 @@ impl TryFrom<ConfigToml> for Config {
       .map(|x| parse_duration(x))
       .transpose()?;
 
+    #[cfg(feature = "proxy-protocol")]
+    // If "none" is specified or None, treat it as None (disabled). Otherwise, parse the version string.
+    let tcp_send_proxy_protocol = config_toml
+      .tcp_send_proxy_protocol
+      .as_ref()
+      .map(|v| match v.to_ascii_lowercase().as_str() {
+        "none" => None,
+        other => Some(other.to_string()),
+      })
+      .flatten()
+      .map(|v| {
+        warn!("PROXY protocol is enabled for TCP connections by default with version: {v}");
+        v.parse::<ProxyProtocolVersion>()
+      })
+      .transpose()?;
+
+    #[cfg(feature = "proxy-protocol")]
+    let tcp_recv_proxy_protocol = config_toml.tcp_recv_proxy_protocol.unwrap_or(false);
+    #[cfg(feature = "proxy-protocol")]
+    let tcp_trusted_proxies = tcp_recv_proxy_protocol
+      .then(|| {
+        config_toml
+          .tcp_trusted_proxies
+          .map(|proxies| {
+            let trusted = proxies
+              .iter()
+              .map(|cidr| {
+                cidr
+                  .parse::<IpNet>()
+                  .map_err(|e| anyhow!("Invalid CIDR in tcp_trusted_proxies '{}': {e}", cidr))
+              })
+              .collect::<Result<Vec<IpNet>, _>>();
+            if let Ok(trusted) = &trusted {
+              warn!("Inbound PROXY protocol is enabled with trusted proxies: {:?}", trusted);
+            }
+            trusted
+          })
+          .transpose()
+      })
+      .transpose()?
+      .flatten();
+
     Ok(Self {
       listen_port,
       listen_ipv6: config_toml.listen_ipv6.unwrap_or(false),
@@ -188,6 +260,12 @@ impl TryFrom<ConfigToml> for Config {
       udp_idle_lifetime: config_toml.udp_idle_lifetime,
       dns_cache_min_ttl,
       dns_cache_max_ttl,
+      #[cfg(feature = "proxy-protocol")]
+      tcp_send_proxy_protocol,
+      #[cfg(feature = "proxy-protocol")]
+      tcp_recv_proxy_protocol,
+      #[cfg(feature = "proxy-protocol")]
+      tcp_trusted_proxies,
       protocols,
     })
   }
@@ -218,4 +296,137 @@ fn parse_duration(s: &str) -> Result<Duration, anyhow::Error> {
   };
 
   Ok(duration)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn parse_config_toml(toml_str: &str) -> ConfigToml {
+    toml::from_str::<ConfigToml>(toml_str).expect("failed to parse ConfigToml")
+  }
+
+  #[test]
+  fn test_toml_parse_minimal_config() {
+    let toml_str = r#"
+listen_port = 8448
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    assert_eq!(config_toml.listen_port, Some(8448));
+    assert_eq!(config_toml.tcp_target, Some(vec!["127.0.0.1:80".to_string()]));
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_proxy_protocol_global_and_per_protocol_parsing() {
+    let toml_str = r#"
+listen_port = 8448
+tcp_send_proxy_protocol = "v2"
+
+[protocols.ssh_main]
+protocol = "ssh"
+target = ["127.0.0.1:22"]
+send_proxy_protocol = "v1"
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+
+    assert_eq!(config.tcp_send_proxy_protocol, Some(ProxyProtocolVersion::V2));
+    let ssh = config.protocols.get("ssh_main").expect("missing ssh_main protocol");
+    assert_eq!(ssh.send_proxy_protocol, SendProxyProtocol::Version(ProxyProtocolVersion::V1));
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_proxy_protocol_none_disables_header() {
+    let toml_str = r#"
+listen_port = 8448
+tcp_send_proxy_protocol = "none"
+
+[protocols.http_main]
+protocol = "http"
+target = ["127.0.0.1:8080"]
+send_proxy_protocol = "none"
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+
+    // Global "none" → disabled
+    assert_eq!(config.tcp_send_proxy_protocol, None);
+    let http = config.protocols.get("http_main").expect("missing http_main protocol");
+    // Per-protocol "none" → explicit Disable (distinguishable from absent/Inherit)
+    assert_eq!(http.send_proxy_protocol, SendProxyProtocol::Disable);
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_proxy_protocol_per_protocol_absent_inherits() {
+    // When send_proxy_protocol is absent for a protocol, it should be Inherit.
+    let toml_str = r#"
+listen_port = 8448
+tcp_send_proxy_protocol = "v2"
+
+[protocols.ssh_main]
+protocol = "ssh"
+target = ["127.0.0.1:22"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+
+    let ssh = config.protocols.get("ssh_main").expect("missing ssh_main protocol");
+    assert_eq!(ssh.send_proxy_protocol, SendProxyProtocol::Inherit);
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_proxy_protocol_disable_overrides_global() {
+    // Per-protocol Disable must override a non-None global setting.
+    // This test documents the intended resolution semantics (exercised in lib.rs build_multiplexers).
+    let toml_str = r#"
+listen_port = 8448
+tcp_send_proxy_protocol = "v1"
+
+[protocols.http_main]
+protocol = "http"
+target = ["127.0.0.1:8080"]
+send_proxy_protocol = "none"
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+
+    assert_eq!(config.tcp_send_proxy_protocol, Some(ProxyProtocolVersion::V1));
+    let http = config.protocols.get("http_main").expect("missing http_main protocol");
+    assert_eq!(http.send_proxy_protocol, SendProxyProtocol::Disable);
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_proxy_protocol_invalid_version_returns_error() {
+    let toml_str = r#"
+listen_port = 8448
+tcp_send_proxy_protocol = "v3"
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let err = Config::try_from(config_toml).expect_err("expected invalid proxy protocol version");
+    let msg = err.to_string();
+    assert!(msg.contains("Invalid proxy protocol version"), "unexpected error: {msg}");
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_inbound_proxy_protocol_parsing() {
+    let toml_str = r#"
+listen_port = 8448
+tcp_target = ["127.0.0.1:80"]
+tcp_recv_proxy_protocol = true
+tcp_trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+
+    assert!(config.tcp_recv_proxy_protocol);
+    assert_eq!(config.tcp_trusted_proxies.as_ref().map(|v| v.len()), Some(2));
+  }
 }

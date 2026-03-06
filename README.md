@@ -21,6 +21,7 @@
 - **Load balancing**: `rpxy-l4` can distribute incoming connections to multiple backend servers based on the several simple load balancing algorithms.
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
 - **TLS/QUIC forwarder**: `rpxy-l4` can forward TLS/IETF QUIC streams to appropriate backend servers based on the ServerName Indication (SNI) and Application Layer Protocol Negotiation (ALPN) values.
+- **HAProxy PROXY protocol support**: `rpxy-l4` supports outbound PROXY protocol (prepend header to backend connections, global/per-protocol) and inbound PROXY protocol (parse header from trusted upstream proxies) for TCP. (Requires the `proxy-protocol` Cargo feature, enabled by default.)
 - **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with IETF-Draft Encrypted Client Hello. In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
 
 [^quic]: Not Google QUIC. Both QUIC v1 ([RFC9000](https://datatracker.ietf.org/doc/html/rfc9000), [RFC9001](https://datatracker.ietf.org/doc/html/rfc9001)) and QUIC v2 ([RFC9369](https://datatracker.ietf.org/doc/html/rfc9369)) are supported.
@@ -42,7 +43,13 @@ You can build an executable binary yourself by checking out this Git repository.
 % cargo build --release
 ```
 
-Then you have an executive binary `rust-rpxy/target/release/rpxy-l4`.
+Then you have an executable binary `rust-rpxy-l4/target/release/rpxy-l4`.
+
+To build without the PROXY protocol feature:
+
+```bash
+% cargo build --release --no-default-features
+```
 
 ### Package Installation for Linux (RPM/DEB)
 
@@ -147,14 +154,14 @@ Currently, `rpxy-l4` supports the following load balancing algorithms:
 
 ### 3. Third step: Protocol multiplexing
 
-Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocol.<service_name>]` filed in the configuration file as follows.
+Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocols.<service_name>]` field in the configuration file as follows.
 
 ```toml
 listen_port = 8448
 ...
 
 # Set for each multiplexed service
-[protocol."http_service"]
+[protocols."http_service"]
 ...
 ```
 
@@ -173,7 +180,7 @@ tcp_target = ["192.168.0.2:8000"]
 udp_target = ["192.168.0.3:4000"]
 
 # TLS
-[protocol."tls_service"]
+[protocols."tls_service"]
 # Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "tls"
 
@@ -185,7 +192,7 @@ load_balance = "source_ip"
 
 #####################
 # IETF QUIC
-[protocol."quic_service"]
+[protocols."quic_service"]
 # Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "quic"
 
@@ -205,7 +212,7 @@ idle_lifetime = 30
 Additionally, you can set the `tls_alpn` and `tls_sni` fields for the case where `protocol="tls"` or `protocol="quic"`. These are additional filters for the TLS/QUIC multiplexer to route the stream to the appropriate backend server based on the Application Layer Protocol Negotiation (ALPN) and Server Name Indication (SNI) values. This means that only streams with the specified ALPN and SNI values are forwarded to the target.
 
 ```toml
-[protocol."tls_service"]
+[protocols."tls_service"]
 protocol = "tls"
 target = ["192.168.0.5:443"]
 load_balance = "source_ip"
@@ -245,9 +252,82 @@ idle_lifetime = 30
 
 This is somewhat a security feature to prevent protocol over TCP/UDP mismatching between the client and the backend server. *By ignoring the default routes*, i.e., removing `tcp_target` and `udp_target` on the top level, and set only specific protocol multiplexers, `rpxy-l4` simply handles packets matching the expected protocols and drops the others.
 
-### 4. Advanced: Experimental features
+### 4. PROXY protocol (preserving client IP)
 
-#### 4.1. TLS Encrypted Client Hello (ECH) proxy
+`rpxy-l4` supports [HAProxy PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) (v1 and v2) for TCP connections. This enables client IP preservation when `rpxy-l4` sits in a proxy chain.
+
+> [!NOTE]
+> This feature requires the `proxy-protocol` Cargo feature, which is enabled by default. To build without it, use `cargo build --release --no-default-features`.
+
+> [!IMPORTANT]
+> The PROXY protocol is only supported for TCP connections, and UDP connections are not supported due to the stateless nature of UDP, meaning that the concept of a "connection" does not exist in the same way as TCP. Typically, for UDP-based protocols, the concept of `stream` is used the overlaid protocol, e.g., QUIC stream or WireGuard session, and it does not fit well with the connection-oriented design of the PROXY protocol.
+
+> [!WARNING]
+> Enabling inbound PROXY protocol may cause service disruption and security risks if not configured properly. Make sure to set `tcp_trusted_proxies` to only accept PROXY headers from trusted sources, and be aware that all incoming TCP connections are expected to start with a valid PROXY header when `tcp_recv_proxy_protocol` is enabled.
+
+#### 4.1. Outbound: Sending PROXY header to backend servers
+
+Prepend a PROXY protocol header to connections toward backend servers, so backends can see the original client IP.
+
+**Global setting** — applies to all TCP backend connections:
+
+```toml
+listen_port = 8448
+tcp_target = ["192.168.0.2:8000"]
+
+# Prepend PROXY protocol v2 header to all TCP backend connections
+tcp_send_proxy_protocol = "v2"  # "v1", "v2", or omit/"none" to disable
+```
+
+**Per-protocol override** — each protocol entry can override the global setting:
+
+```toml
+tcp_send_proxy_protocol = "v2"  # global default
+
+[protocols."tls_1"]
+protocol = "tls"
+target = ["192.168.0.5:443"]
+send_proxy_protocol = "v1"  # override: use v1 for this protocol
+
+[protocols."http_1"]
+protocol = "http"
+target = ["192.168.0.6:80"]
+send_proxy_protocol = "none"  # override: disable for this protocol
+```
+
+#### 4.2. Inbound: Parsing PROXY header from upstream proxies
+
+When `rpxy-l4` sits behind a load balancer or proxy (e.g., AWS NLB, HAProxy) that sends PROXY protocol, enable inbound parsing to extract the original client IP from the header.
+
+```toml
+listen_port = 8448
+tcp_target = ["192.168.0.2:8000"]
+
+# Expect inbound PROXY header on every TCP connection
+tcp_recv_proxy_protocol = true
+
+# Trusted sources allowed to send PROXY headers (required when recv is enabled)
+tcp_trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
+```
+
+- `tcp_recv_proxy_protocol = true` requires **all** incoming TCP connections to start with a PROXY header. Connections without a valid header are rejected.
+- `tcp_trusted_proxies` is **mandatory** when recv is enabled. Connections from untrusted source IPs are rejected. If this field is missing or empty, startup validation fails.
+- Both v1 and v2 headers are auto-detected — no version configuration is needed.
+- LOCAL (v2) / UNKNOWN (v1) commands (e.g., health checks) are accepted without modifying the source address.
+
+#### 4.3. End-to-end client IP preservation
+
+When both inbound and outbound are enabled, `rpxy-l4` achieves end-to-end client IP preservation through a proxy chain:
+
+```text
+Client → [LB with PROXY protocol] → rpxy-l4 (inbound parse → outbound send) → Backend
+```
+
+The inbound parser extracts the original client IP, and the outbound encoder forwards it to the backend. No special configuration is needed beyond enabling both.
+
+### 5. Advanced: Experimental features
+
+#### 5.1. TLS Encrypted Client Hello (ECH) proxy
 
 See [./examples/README.md](./examples/README.md) for the ECH proxy configuration and client and backend server examples.
 
@@ -285,7 +365,7 @@ TBD!
 
 ## Credits
 
-`rpxy-4` cannot be built without the following projects and inspirations:
+`rpxy-l4` cannot be built without the following projects and inspirations:
 
 - [`sslh`](https://github.com/yrutschle/sslh): `rpxy-l4` is strongly inspired by `sslh` for its protocol multiplexer feature.
 - [`tokio`](https://github.com/tokio-rs/tokio): Great async runtime for Rust.

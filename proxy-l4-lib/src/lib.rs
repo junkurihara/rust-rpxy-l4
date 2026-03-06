@@ -34,6 +34,8 @@ pub use udp_proxy::{UdpDestinationMux, UdpDestinationMuxBuilder, UdpProxy, UdpPr
 #[cfg(feature = "proxy-protocol")]
 pub use config::ProxyProtocolVersion;
 #[cfg(feature = "proxy-protocol")]
+pub use config::SendProxyProtocol;
+#[cfg(feature = "proxy-protocol")]
 pub mod reexport {
   pub use ipnet::IpNet;
 }
@@ -80,8 +82,15 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
     // No need to check if target is empty - already validated in validate_config()
 
     #[cfg(feature = "proxy-protocol")]
-    // Per-protocol override takes precedence over global default
-    let pp_version = spec.send_proxy_protocol.or(config.tcp_send_proxy_protocol);
+    // Resolve tri-state per-protocol setting against the global default.
+    // Inherit  → fall back to global tcp_send_proxy_protocol.
+    // Disable  → explicitly suppress, even if global is set.
+    // Version  → use specified version regardless of global.
+    let pp_version = match spec.send_proxy_protocol {
+      config::SendProxyProtocol::Inherit => config.tcp_send_proxy_protocol,
+      config::SendProxyProtocol::Disable => None,
+      config::SendProxyProtocol::Version(v) => Some(v),
+    };
 
     match spec.protocol {
       ProtocolType::Http => {

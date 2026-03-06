@@ -1,7 +1,7 @@
 use crate::log::warn;
 use anyhow::anyhow;
 #[cfg(feature = "proxy-protocol")]
-use rpxy_l4_lib::ProxyProtocolVersion;
+use rpxy_l4_lib::{ProxyProtocolVersion, SendProxyProtocol};
 #[cfg(feature = "proxy-protocol")]
 use rpxy_l4_lib::reexport::IpNet;
 use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
@@ -145,21 +145,18 @@ impl TryFrom<ConfigToml> for Config {
         }
 
         #[cfg(feature = "proxy-protocol")]
-        // If "none" is specified or None, treat it as None (disabled). Otherwise, parse the version string.
-        // This will override the global default if set, or enable PROXY protocol for this specific protocol if global default is not set.
-        let send_proxy_protocol = protocol_toml
-          .send_proxy_protocol
-          .as_ref()
-          .map(|v| match v.to_ascii_lowercase().as_str() {
-            "none" => None,
-            other => Some(other.to_string()),
-          })
-          .flatten()
-          .map(|v| {
+        // Produce a tri-state SendProxyProtocol:
+        // - absent           → Inherit (fall back to global tcp_send_proxy_protocol)
+        // - "none"           → Disable (explicitly suppress, even if global is enabled)
+        // - "v1" / "v2"     → Version(v) (override global with this version)
+        let send_proxy_protocol = match protocol_toml.send_proxy_protocol.as_deref() {
+          None => SendProxyProtocol::Inherit,
+          Some(v) if v.eq_ignore_ascii_case("none") => SendProxyProtocol::Disable,
+          Some(v) => {
             warn!("PROXY protocol is enabled for protocol: {name} with version: {v}");
-            v.parse::<ProxyProtocolVersion>()
-          })
-          .transpose()?;
+            SendProxyProtocol::Version(v.parse::<ProxyProtocolVersion>()?)
+          }
+        };
 
         let protocol = ProtocolConfig {
           protocol: proto_type,
@@ -337,7 +334,7 @@ send_proxy_protocol = "v1"
 
     assert_eq!(config.tcp_send_proxy_protocol, Some(ProxyProtocolVersion::V2));
     let ssh = config.protocols.get("ssh_main").expect("missing ssh_main protocol");
-    assert_eq!(ssh.send_proxy_protocol, Some(ProxyProtocolVersion::V1));
+    assert_eq!(ssh.send_proxy_protocol, SendProxyProtocol::Version(ProxyProtocolVersion::V1));
   }
 
   #[cfg(feature = "proxy-protocol")]
@@ -355,9 +352,52 @@ send_proxy_protocol = "none"
     let config_toml = parse_config_toml(toml_str);
     let config: Config = config_toml.try_into().expect("failed to convert config");
 
+    // Global "none" → disabled
     assert_eq!(config.tcp_send_proxy_protocol, None);
     let http = config.protocols.get("http_main").expect("missing http_main protocol");
-    assert_eq!(http.send_proxy_protocol, None);
+    // Per-protocol "none" → explicit Disable (distinguishable from absent/Inherit)
+    assert_eq!(http.send_proxy_protocol, SendProxyProtocol::Disable);
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_proxy_protocol_per_protocol_absent_inherits() {
+    // When send_proxy_protocol is absent for a protocol, it should be Inherit.
+    let toml_str = r#"
+listen_port = 8448
+tcp_send_proxy_protocol = "v2"
+
+[protocols.ssh_main]
+protocol = "ssh"
+target = ["127.0.0.1:22"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+
+    let ssh = config.protocols.get("ssh_main").expect("missing ssh_main protocol");
+    assert_eq!(ssh.send_proxy_protocol, SendProxyProtocol::Inherit);
+  }
+
+  #[cfg(feature = "proxy-protocol")]
+  #[test]
+  fn test_proxy_protocol_disable_overrides_global() {
+    // Per-protocol Disable must override a non-None global setting.
+    // This test documents the intended resolution semantics (exercised in lib.rs build_multiplexers).
+    let toml_str = r#"
+listen_port = 8448
+tcp_send_proxy_protocol = "v1"
+
+[protocols.http_main]
+protocol = "http"
+target = ["127.0.0.1:8080"]
+send_proxy_protocol = "none"
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+
+    assert_eq!(config.tcp_send_proxy_protocol, Some(ProxyProtocolVersion::V1));
+    let http = config.protocols.get("http_main").expect("missing http_main protocol");
+    assert_eq!(http.send_proxy_protocol, SendProxyProtocol::Disable);
   }
 
   #[cfg(feature = "proxy-protocol")]

@@ -43,7 +43,7 @@ You can build an executable binary yourself by checking out this Git repository.
 % cargo build --release
 ```
 
-Then you have an executive binary `rust-rpxy-l4/target/release/rpxy-l4`.
+Then you have an executable binary `rust-rpxy-l4/target/release/rpxy-l4`.
 
 To build without the PROXY protocol feature:
 
@@ -154,7 +154,7 @@ Currently, `rpxy-l4` supports the following load balancing algorithms:
 
 ### 3. Third step: Protocol multiplexing
 
-Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocols.<service_name>]` filed in the configuration file as follows.
+Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocols.<service_name>]` field in the configuration file as follows.
 
 ```toml
 listen_port = 8448

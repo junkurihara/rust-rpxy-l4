@@ -30,6 +30,22 @@ impl FromStr for ProxyProtocolVersion {
   }
 }
 
+#[cfg(feature = "proxy-protocol")]
+/// Tri-state setting for per-protocol outbound PROXY protocol header.
+///
+/// This distinguishes "inherit the global default", "explicitly disable", and "use a specific
+/// version", which `Option<ProxyProtocolVersion>` alone cannot express.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SendProxyProtocol {
+  /// Inherit from the global `tcp_send_proxy_protocol` setting (default).
+  #[default]
+  Inherit,
+  /// Explicitly disable outbound PROXY protocol for this protocol, overriding the global setting.
+  Disable,
+  /// Send a PROXY protocol header using the specified version.
+  Version(ProxyProtocolVersion),
+}
+
 /* ---------------------------------------------------------- */
 // Configuration Validation Functions
 /* ---------------------------------------------------------- */
@@ -348,10 +364,12 @@ pub struct ProtocolConfig {
   /// Only TLS
   pub ech: Option<EchProtocolConfig>,
   #[cfg(feature = "proxy-protocol")]
-  /// Per-protocol override: send PROXY protocol header for this protocol's destinations [default: None (disabled)].
-  /// If set, this will override the global default for this protocol.
-  /// Note that this is only valid for TCP-based protocols. If set for UDP-based protocols, it will be ignored.
-  pub send_proxy_protocol: Option<ProxyProtocolVersion>,
+  /// Per-protocol override for outbound PROXY protocol header.
+  /// - `Inherit` (default): use global `tcp_send_proxy_protocol`.
+  /// - `Disable`: explicitly disable, even if the global setting is enabled.
+  /// - `Version(v)`: use the specified version, overriding the global setting.
+  /// Note: only relevant for TCP-based protocols; ignored for UDP-based protocols.
+  pub send_proxy_protocol: SendProxyProtocol,
 }
 
 #[derive(Debug, Clone)]
@@ -467,7 +485,7 @@ mod tests {
       server_names: None,
       ech: None,
       #[cfg(feature = "proxy-protocol")]
-      send_proxy_protocol: None,
+      send_proxy_protocol: SendProxyProtocol::default(),
     };
     assert!(validate_protocol_config("ssh", &ssh_config).is_ok());
 
@@ -498,7 +516,7 @@ mod tests {
       server_names: Some(vec!["example.com".to_string()]),
       ech: None,
       #[cfg(feature = "proxy-protocol")]
-      send_proxy_protocol: None,
+      send_proxy_protocol: SendProxyProtocol::default(),
     };
     assert!(validate_protocol_config("tls", &tls_config).is_ok());
 
@@ -525,7 +543,7 @@ mod tests {
       server_names: Some(vec!["example.com".to_string()]),
       ech: None,
       #[cfg(feature = "proxy-protocol")]
-      send_proxy_protocol: None,
+      send_proxy_protocol: SendProxyProtocol::default(),
     };
     assert!(validate_protocol_config("quic", &quic_config).is_ok());
 
@@ -550,7 +568,7 @@ mod tests {
       server_names: None,
       ech: None,
       #[cfg(feature = "proxy-protocol")]
-      send_proxy_protocol: None,
+      send_proxy_protocol: SendProxyProtocol::default(),
     };
     assert!(validate_protocol_config("wireguard", &wg_config).is_ok());
 
@@ -614,7 +632,7 @@ mod tests {
         server_names: None,
         ech: None,
         #[cfg(feature = "proxy-protocol")]
-        send_proxy_protocol: None,
+        send_proxy_protocol: SendProxyProtocol::default(),
       },
     );
     assert!(validate_config(&config_with_protocols).is_ok());

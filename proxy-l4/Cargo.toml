@@ -30,7 +30,7 @@ toml = { version = "1.0.4", default-features = false, features = [
   "parse",
   "serde",
 ] }
-hot_reload = { version = "0.3.5" }
+hot_reload = { version = "0.3.6" }
 serde = { version = "1.0.228", default-features = false, features = [
   "derive",
   "std",

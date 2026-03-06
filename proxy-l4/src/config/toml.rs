@@ -227,23 +227,28 @@ impl TryFrom<ConfigToml> for Config {
     #[cfg(feature = "proxy-protocol")]
     let tcp_recv_proxy_protocol = config_toml.tcp_recv_proxy_protocol.unwrap_or(false);
     #[cfg(feature = "proxy-protocol")]
-    let tcp_trusted_proxies = config_toml
-      .tcp_trusted_proxies
-      .map(|proxies| {
-        let trusted = proxies
-          .iter()
-          .map(|cidr| {
-            cidr
-              .parse::<IpNet>()
-              .map_err(|e| anyhow!("Invalid CIDR in tcp_trusted_proxies '{}': {e}", cidr))
+    let tcp_trusted_proxies = tcp_recv_proxy_protocol
+      .then(|| {
+        config_toml
+          .tcp_trusted_proxies
+          .map(|proxies| {
+            let trusted = proxies
+              .iter()
+              .map(|cidr| {
+                cidr
+                  .parse::<IpNet>()
+                  .map_err(|e| anyhow!("Invalid CIDR in tcp_trusted_proxies '{}': {e}", cidr))
+              })
+              .collect::<Result<Vec<IpNet>, _>>();
+            if let Ok(trusted) = &trusted {
+              warn!("Inbound PROXY protocol is enabled with trusted proxies: {:?}", trusted);
+            }
+            trusted
           })
-          .collect::<Result<Vec<IpNet>, anyhow::Error>>();
-        if let Ok(trusted) = &trusted {
-          warn!("Inbound PROXY protocol is enabled with trusted proxies: {:?}", trusted);
-        }
-        trusted
+          .transpose()
       })
-      .transpose()?;
+      .transpose()?
+      .flatten();
 
     Ok(Self {
       listen_port,

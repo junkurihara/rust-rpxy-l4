@@ -154,14 +154,14 @@ Currently, `rpxy-l4` supports the following load balancing algorithms:
 
 ### 3. Third step: Protocol multiplexing
 
-Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocol.<service_name>]` filed in the configuration file as follows.
+Here are examples/use-cases of the protocol multiplexing scenario over TCP/UDP. For protocol multiplexing, you need to set a `[protocols.<service_name>]` filed in the configuration file as follows.
 
 ```toml
 listen_port = 8448
 ...
 
 # Set for each multiplexed service
-[protocol."http_service"]
+[protocols."http_service"]
 ...
 ```
 
@@ -180,7 +180,7 @@ tcp_target = ["192.168.0.2:8000"]
 udp_target = ["192.168.0.3:4000"]
 
 # TLS
-[protocol."tls_service"]
+[protocols."tls_service"]
 # Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "tls"
 
@@ -192,7 +192,7 @@ load_balance = "source_ip"
 
 #####################
 # IETF QUIC
-[protocol."quic_service"]
+[protocols."quic_service"]
 # Name of protocol tls|ssh|socks5|http|wireguard|quic
 protocol = "quic"
 
@@ -212,7 +212,7 @@ idle_lifetime = 30
 Additionally, you can set the `tls_alpn` and `tls_sni` fields for the case where `protocol="tls"` or `protocol="quic"`. These are additional filters for the TLS/QUIC multiplexer to route the stream to the appropriate backend server based on the Application Layer Protocol Negotiation (ALPN) and Server Name Indication (SNI) values. This means that only streams with the specified ALPN and SNI values are forwarded to the target.
 
 ```toml
-[protocol."tls_service"]
+[protocols."tls_service"]
 protocol = "tls"
 target = ["192.168.0.5:443"]
 load_balance = "source_ip"
@@ -237,7 +237,7 @@ alpns = ["h2", "http/1.1"]
 `rpxy-l4` can detect and multiplex WireGuard packets by probing the initial handshake packet. The following example demonstrates the scenario that any WireGuard packets are forwarded to the appropriate backend that are different from the default targets as well.
 
 ```toml
-[protocol."wireguard_service"]
+[protocols."wireguard_service"]
 protocol = "wireguard"
 target = ["192.168.0.10:51820"]
 load_balance = "none"

@@ -349,6 +349,7 @@ impl TcpProxy {
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
           let connection_count = self.connection_count.clone();
+          #[cfg(feature = "proxy-protocol")]
           let recv_proxy_protocol_config = self.recv_proxy_protocol_config.clone();
 
           handle_tcp_connection(

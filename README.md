@@ -254,14 +254,16 @@ This is somewhat a security feature to prevent protocol over TCP/UDP mismatching
 
 ### 4. PROXY protocol (preserving client IP)
 
-`rpxy-l4` supports [HAProxy PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) (v1 and v2) for both outbound and inbound TCP connections.
+`rpxy-l4` supports [HAProxy PROXY protocol](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) (v1 and v2) for TCP connections. This enables client IP preservation when `rpxy-l4` sits in a proxy chain.
 
-- **Outbound**: prepend PROXY header toward backend servers.
-- **Inbound**: parse PROXY header from upstream proxies/load balancers and restore original client source address.
+> [!NOTE]
+> This feature requires the `proxy-protocol` Cargo feature, which is enabled by default. To build without it, use `cargo build --release --no-default-features`.
 
-#### Global setting
+#### 4.1. Outbound: Sending PROXY header to backend servers
 
-Set `tcp_send_proxy_protocol` at the top level to apply to all TCP backend connections:
+Prepend a PROXY protocol header to connections toward backend servers, so backends can see the original client IP.
+
+**Global setting** — applies to all TCP backend connections:
 
 ```toml
 listen_port = 8448
@@ -271,9 +273,7 @@ tcp_target = ["192.168.0.2:8000"]
 tcp_send_proxy_protocol = "v2"  # "v1", "v2", or omit/"none" to disable
 ```
 
-#### Per-protocol override
-
-Each protocol entry can override the global setting with `send_proxy_protocol`:
+**Per-protocol override** — each protocol entry can override the global setting:
 
 ```toml
 tcp_send_proxy_protocol = "v2"  # global default
@@ -289,13 +289,9 @@ target = ["192.168.0.6:80"]
 send_proxy_protocol = "none"  # override: disable for this protocol
 ```
 
-> [!NOTE]
-> This feature requires the `proxy-protocol` Cargo feature, which is enabled by default. To build without it, use `cargo build --release --no-default-features`.
+#### 4.2. Inbound: Parsing PROXY header from upstream proxies
 
-#### Inbound PROXY parsing (from upstream proxy/load balancer)
-
-Set `tcp_recv_proxy_protocol = true` to require an inbound PROXY header on all TCP connections.  
-When enabled, `tcp_trusted_proxies` is required and must contain trusted source IPs/CIDRs.
+When `rpxy-l4` sits behind a load balancer or proxy (e.g., AWS NLB, HAProxy) that sends PROXY protocol, enable inbound parsing to extract the original client IP from the header.
 
 ```toml
 listen_port = 8448
@@ -308,7 +304,20 @@ tcp_recv_proxy_protocol = true
 tcp_trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
 ```
 
-If `tcp_recv_proxy_protocol = true` and `tcp_trusted_proxies` is missing/empty, startup validation fails.
+- `tcp_recv_proxy_protocol = true` requires **all** incoming TCP connections to start with a PROXY header. Connections without a valid header are rejected.
+- `tcp_trusted_proxies` is **mandatory** when recv is enabled. Connections from untrusted source IPs are rejected. If this field is missing or empty, startup validation fails.
+- Both v1 and v2 headers are auto-detected — no version configuration is needed.
+- LOCAL (v2) / UNKNOWN (v1) commands (e.g., health checks) are accepted without modifying the source address.
+
+#### 4.3. End-to-end client IP preservation
+
+When both inbound and outbound are enabled, `rpxy-l4` achieves end-to-end client IP preservation through a proxy chain:
+
+```text
+Client → [LB with PROXY protocol] → rpxy-l4 (inbound parse → outbound send) → Backend
+```
+
+The inbound parser extracts the original client IP, and the outbound encoder forwards it to the backend. No special configuration is needed beyond enabling both.
 
 ### 5. Advanced: Experimental features
 

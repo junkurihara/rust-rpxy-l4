@@ -114,7 +114,7 @@ impl EchConfigList {
   /// By default, it generates a list of size 1 with a single EchConfig [X25519HkdfSha256 + AesGcm128 + HkdfSha256]
   pub fn generate(public_name: &str) -> Result<(Self, Vec<EchPrivateKey>), EchConfigError> {
     let kem_id = X25519HkdfSha256::KEM_ID;
-    let (sk, pk) = X25519HkdfSha256::gen_keypair(&mut rand::rng());
+    let (sk, pk) = X25519HkdfSha256::gen_keypair();
     // let sk_bytes = Bytes::copy_from_slice(&sk.to_bytes());
     let config_id = rand::random_range(0..=255);
     let public_name = Bytes::copy_from_slice(public_name.as_bytes());

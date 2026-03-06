@@ -14,7 +14,7 @@ publish.workspace = true
 tracing = { version = "0.1.44" }
 
 # error handling
-anyhow = { version = "1.0.100" }
+anyhow = { version = "1.0.102" }
 thiserror = { version = "2.0.18" }
 
 # quic parser
@@ -25,10 +25,13 @@ aes-gcm = { version = "0.10.3" }
 hex-literal = { version = "1.1.0" }
 
 # ech
-bytes = { version = "1.11.0" }
-rand = { version = "0.9.2" }
-hpke = { version = "0.13.0" }
+bytes = { version = "1.11.1" }
+rand = { version = "0.10.0" }
 base64 = { version = "0.22.1" }
+# Use my own fork of HPKE until the upstream crate is update to support the braking change at RustCrypto crypto-common 0.2.1
+# hpke = { version = "0.14.0-pre.2" }
+hpke = { git = "https://github.com/junkurihara/rust-hpke", rev = "b7fa9e8325761e852905f97e1b1b44fbfa8eef3d"}
+
 
 [dev-dependencies]
-rustls = { version = "0.23.36" }
+rustls = { version = "0.23.37" }

@@ -16,11 +16,11 @@ CONFIG_FILE_IN_DIR=${CONFIG_FILENAME:-config.toml}
 
 #######################################
 # Setup logrotate
-function setup_logrotate () {
-  if [ $LOGROTATE_NUM ]; then
+setup_logrotate() {
+  if [ -n "$LOGROTATE_NUM" ]; then
     LOG_NUM=${LOGROTATE_NUM}
   fi
-  if [ $LOGROTATE_SIZE ]; then
+  if [ -n "$LOGROTATE_SIZE" ]; then
     LOG_SIZE=${LOGROTATE_SIZE}
   fi
 
@@ -78,8 +78,8 @@ EOF
 }
 
 #######################################
-function setup_alpine () {
-  id ${USER} > /dev/null
+setup_alpine() {
+  id "${USER}" > /dev/null
   # Check the existence of the user, if not exist, create it.
   if [ $? -eq 1 ]; then
     echo "rpxy-l4: Create user ${USER} with ${USER_ID}:${GROUP_ID}"
@@ -100,7 +100,7 @@ function setup_alpine () {
 
 #######################################
 
-if [ $(whoami) != "root" -o $(id -u) -ne 0 -a $(id -g) -ne 0 ]; then
+if [ "$(whoami)" != "root" ] || [ "$(id -u)" -ne 0 ] || [ "$(id -g)" -ne 0 ]; then
   echo "Do not execute 'docker run' or 'docker-compose up' with a specific user through '-u'."
   echo "If you want to run 'rpxy-l4' with a specific user, use HOST_USER, HOST_UID and HOST_GID environment variables."
   exit 1
@@ -113,18 +113,18 @@ setup_alpine
 update-ca-certificates
 
 # Check the given user and its uid:gid
-if [ $(id -u ${USER}) -ne ${USER_ID} -a $(id -g ${USER}) -ne ${GROUP_ID} ]; then
+if [ "$(id -u "${USER}")" -ne "${USER_ID}" ] || [ "$(id -g "${USER}")" -ne "${GROUP_ID}" ]; then
   echo "${USER} exists or was previously created. However, its uid and gid are inconsistent. Please recreate your container."
   exit 1
 fi
 
 # Change permission according to the given user
 # except for the config dir that possibly get mounted with read-only
-find /rpxy-l4 -path ${CONFIG_DIR} -prune -o -exec chown ${USER_ID}:${USER_ID} {} +
+find /rpxy-l4 -path "${CONFIG_DIR}" -prune -o -exec chown "${USER_ID}":"${GROUP_ID}" {} +
 
 # Check the config file existence
-if [[ ! -f ${CONFIG_FILE} ]]; then
-  if [[ ! -f ${CONFIG_DIR}/${CONFIG_FILE_IN_DIR} ]]; then
+if [ ! -f "${CONFIG_FILE}" ]; then
+  if [ ! -f "${CONFIG_DIR}/${CONFIG_FILE_IN_DIR}" ]; then
     echo "No config file is given. Mount a config dir or file."
     exit 1
   fi

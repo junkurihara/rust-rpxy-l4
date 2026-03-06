@@ -9,19 +9,24 @@ homepage.workspace = true
 categories.workspace = true
 publish.workspace = true
 
+[features]
+default = ["proxy-protocol"]
+# default = []
+proxy-protocol = ["rpxy-l4-lib/proxy-protocol"]
+
 [dependencies]
-rpxy-l4-lib = { path = "../proxy-l4-lib" }
+rpxy-l4-lib = { path = "../proxy-l4-lib", default-features = false }
 
 # error handling
-anyhow = { version = "1.0.100" }
+anyhow = { version = "1.0.102" }
 
 # logging
 tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.22" }
 
 # config
-clap = { version = "4.5.55", features = ["std", "cargo", "wrap_help"] }
-toml = { version = "0.9.11", default-features = false, features = [
+clap = { version = "4.5.60", features = ["std", "cargo", "wrap_help"] }
+toml = { version = "1.0.4", default-features = false, features = [
   "parse",
   "serde",
 ] }
@@ -37,7 +42,7 @@ async-trait = { version = "0.1.89" }
 mimalloc = { version = "0.1.48", default-features = false }
 
 # async runtime
-tokio = { version = "1.49.0", default-features = false, features = [
+tokio = { version = "1.50.0", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",
@@ -46,4 +51,4 @@ tokio = { version = "1.49.0", default-features = false, features = [
   "io-util",
 ] }
 tokio-util = { version = "0.7.18", default-features = false }
-futures = { version = "0.3.31", default-features = false, features = ["alloc"] }
+futures = { version = "0.3.32", default-features = false, features = ["alloc"] }

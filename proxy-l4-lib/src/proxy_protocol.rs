@@ -404,4 +404,238 @@ mod tests {
     assert!(s.ip().is_ipv6());
     assert!(d.ip().is_ipv6());
   }
+
+  /* ---------------------------------------------------------- */
+  // Inbound PROXY protocol parsing tests
+  /* ---------------------------------------------------------- */
+
+  use tokio::io::AsyncWriteExt;
+  use tokio::net::TcpListener;
+
+  /// Helper: create a connected TcpStream pair with given data written from the "client" side.
+  /// Returns the server-side stream (for parsing) and the client-side stream.
+  async fn setup_stream_with_data(data: &[u8]) -> (TcpStream, TcpStream) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let (server, _) = listener.accept().await.unwrap();
+    client.write_all(data).await.unwrap();
+    (server, client)
+  }
+
+  fn trusted_config(cidrs: &[&str]) -> InboundProxyProtocolConfig {
+    InboundProxyProtocolConfig {
+      trusted_proxies: cidrs.iter().map(|c| c.parse::<IpNet>().unwrap()).collect(),
+    }
+  }
+
+  // --- Trusted proxy validation tests ---
+
+  #[tokio::test]
+  async fn test_inbound_reject_untrusted_source() {
+    let data = b"PROXY TCP4 1.2.3.4 5.6.7.8 1234 80\r\n";
+    let (mut server, _client) = setup_stream_with_data(data).await;
+    let peer: SocketAddr = "99.99.99.99:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+  }
+
+  #[tokio::test]
+  async fn test_inbound_accept_trusted_source_cidr() {
+    let data = b"PROXY TCP4 1.2.3.4 5.6.7.8 1234 80\r\n";
+    let (mut server, _client) = setup_stream_with_data(data).await;
+    let peer: SocketAddr = "10.1.2.3:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert!(result.is_ok());
+    let src = result.unwrap().unwrap();
+    assert_eq!(src, "1.2.3.4:1234".parse::<SocketAddr>().unwrap());
+  }
+
+  #[tokio::test]
+  async fn test_inbound_trusted_proxy_ipv4_mapped_ipv6() {
+    // Peer address is ::ffff:10.0.0.1 (IPv4-mapped), trusted CIDR is 10.0.0.0/8
+    let data = b"PROXY TCP4 1.2.3.4 5.6.7.8 1234 80\r\n";
+    let (mut server, _client) = setup_stream_with_data(data).await;
+    let mapped_ip = Ipv4Addr::new(10, 0, 0, 1).to_ipv6_mapped();
+    let peer = SocketAddr::new(IpAddr::V6(mapped_ip), 9999);
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().unwrap(), "1.2.3.4:1234".parse::<SocketAddr>().unwrap());
+  }
+
+  // --- v1 parsing tests ---
+
+  #[tokio::test]
+  async fn test_inbound_v1_tcp4() {
+    let data = b"PROXY TCP4 192.168.1.100 10.0.0.1 45000 443\r\nGET / HTTP/1.1\r\n";
+    let (mut server, _client) = setup_stream_with_data(data).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    let src = result.unwrap().unwrap();
+    assert_eq!(src, "192.168.1.100:45000".parse::<SocketAddr>().unwrap());
+  }
+
+  #[tokio::test]
+  async fn test_inbound_v1_tcp6() {
+    let data = b"PROXY TCP6 2001:db8::1 2001:db8::2 45000 443\r\n";
+    let (mut server, _client) = setup_stream_with_data(data).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    let src = result.unwrap().unwrap();
+    assert_eq!(src, "[2001:db8::1]:45000".parse::<SocketAddr>().unwrap());
+  }
+
+  #[tokio::test]
+  async fn test_inbound_v1_unknown_returns_none() {
+    let data = b"PROXY UNKNOWN\r\n";
+    let (mut server, _client) = setup_stream_with_data(data).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert_eq!(result.unwrap(), None);
+  }
+
+  #[tokio::test]
+  async fn test_inbound_v1_exact_byte_consumption() {
+    let app_data = b"GET / HTTP/1.1\r\n";
+    let mut full_data = b"PROXY TCP4 1.2.3.4 5.6.7.8 1234 80\r\n".to_vec();
+    full_data.extend_from_slice(app_data);
+
+    let (mut server, _client) = setup_stream_with_data(&full_data).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    // Parse header
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert!(result.is_ok());
+
+    // Read remaining application data - must match exactly
+    let mut remaining = vec![0u8; app_data.len()];
+    server.read_exact(&mut remaining).await.unwrap();
+    assert_eq!(&remaining, app_data);
+  }
+
+  // --- v2 parsing tests ---
+
+  /// Build a v2 PROXY header with given addresses
+  fn build_v2_proxy_header(src: SocketAddr, dst: SocketAddr) -> Vec<u8> {
+    encode_proxy_header(ProxyProtocolVersion::V2, src, dst).unwrap()
+  }
+
+  /// Build a v2 LOCAL header (no addresses)
+  fn build_v2_local_header() -> Vec<u8> {
+    let version_command = ppp::v2::Version::Two | ppp::v2::Command::Local;
+    ppp::v2::Builder::with_addresses(
+      version_command,
+      ppp::v2::Protocol::Stream,
+      ppp::v2::Addresses::Unspecified,
+    )
+    .build()
+    .unwrap()
+  }
+
+  #[tokio::test]
+  async fn test_inbound_v2_proxy_ipv4() {
+    let header = build_v2_proxy_header(
+      "192.168.1.100:45000".parse().unwrap(),
+      "10.0.0.1:443".parse().unwrap(),
+    );
+    let (mut server, _client) = setup_stream_with_data(&header).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    let src = result.unwrap().unwrap();
+    assert_eq!(src, "192.168.1.100:45000".parse::<SocketAddr>().unwrap());
+  }
+
+  #[tokio::test]
+  async fn test_inbound_v2_proxy_ipv6() {
+    let header = build_v2_proxy_header(
+      "[2001:db8::1]:45000".parse().unwrap(),
+      "[2001:db8::2]:443".parse().unwrap(),
+    );
+    let (mut server, _client) = setup_stream_with_data(&header).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    let src = result.unwrap().unwrap();
+    assert_eq!(src, "[2001:db8::1]:45000".parse::<SocketAddr>().unwrap());
+  }
+
+  #[tokio::test]
+  async fn test_inbound_v2_local_returns_none() {
+    let header = build_v2_local_header();
+    let (mut server, _client) = setup_stream_with_data(&header).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert_eq!(result.unwrap(), None);
+  }
+
+  #[tokio::test]
+  async fn test_inbound_v2_exact_byte_consumption() {
+    let app_data = b"\x16\x03\x01\x00\x05hello";
+    let mut header = build_v2_proxy_header(
+      "192.168.1.100:45000".parse().unwrap(),
+      "10.0.0.1:443".parse().unwrap(),
+    );
+    header.extend_from_slice(app_data);
+
+    let (mut server, _client) = setup_stream_with_data(&header).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    // Parse header
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert!(result.is_ok());
+
+    // Read remaining application data - must match exactly
+    let mut remaining = vec![0u8; app_data.len()];
+    server.read_exact(&mut remaining).await.unwrap();
+    assert_eq!(&remaining, app_data);
+  }
+
+  // --- Error cases ---
+
+  #[tokio::test]
+  async fn test_inbound_malformed_header() {
+    let data = b"NOT_A_PROXY_HEADER\r\n";
+    let (mut server, _client) = setup_stream_with_data(data).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+  }
+
+  #[tokio::test]
+  async fn test_inbound_too_few_bytes() {
+    let data = b"PRO";
+    let (mut server, mut client) = setup_stream_with_data(data).await;
+    // Close client so peek returns only 3 bytes
+    client.shutdown().await.unwrap();
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+  }
 }

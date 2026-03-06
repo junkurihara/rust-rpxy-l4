@@ -259,10 +259,11 @@ impl ProxyService {
       tcp_proxy_builder.max_connections(tcp_max_connections as usize);
     }
     #[cfg(feature = "proxy-protocol")]
-    {
-      tcp_proxy_builder.recv_proxy_protocol(self.tcp_recv_proxy_protocol);
-      tcp_proxy_builder.trusted_proxies(self.tcp_trusted_proxies.clone());
-    }
+    tcp_proxy_builder.recv_proxy_protocol_config(&self.tcp_recv_proxy_protocol, self.tcp_trusted_proxies.as_ref());
+    // {
+    //   tcp_proxy_builder.recv_proxy_protocol(self.tcp_recv_proxy_protocol);
+    //   tcp_proxy_builder.trusted_proxies(self.tcp_trusted_proxies.clone());
+    // }
     tcp_proxy_builder
   }
 

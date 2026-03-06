@@ -286,18 +286,37 @@ pub struct TcpProxy {
   /// If `cnt` is shared with other spawned TCP proxies, this value is evaluated for the total number of connections
   max_connections: usize,
 
+  #[cfg(feature = "proxy-protocol")]
+  #[builder(default = "None", setter(custom))]
+  /// Configuration for receiving inbound PROXY protocol header, if None, the proxy will not attempt to parse the PROXY header
+  /// If Some, the proxy will expect the PROXY header and parse it for all incoming TCP connections. If the parsing fails, the connection will be dropped.
+  recv_proxy_protocol_config: Option<Arc<InboundProxyProtocolConfig>>,
+
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
+}
 
-  #[cfg(feature = "proxy-protocol")]
-  #[builder(default = "false")]
-  /// Expect inbound PROXY protocol header on all incoming TCP connections.
-  recv_proxy_protocol: bool,
-
-  #[cfg(feature = "proxy-protocol")]
-  #[builder(default = "None")]
-  /// Trusted proxy source CIDRs for inbound PROXY protocol.
-  trusted_proxies: Option<Vec<ipnet::IpNet>>,
+#[cfg(feature = "proxy-protocol")]
+impl TcpProxyBuilder {
+  /// Custom setter for recv_proxy_config to allow setting from Config
+  pub fn recv_proxy_protocol_config(
+    &mut self,
+    recv_proxy_protocol: &bool,
+    trusted_proxies: Option<&Vec<ipnet::IpNet>>,
+  ) -> &mut Self {
+    // Determine whether to parse inbound PROXY protocol header based on configuration, and prepare the config if needed
+    let recv_proxy_protocol = recv_proxy_protocol
+      .then(|| {
+        trusted_proxies.as_ref().map(|&proxies| {
+          Arc::new(InboundProxyProtocolConfig {
+            trusted_proxies: proxies.clone(),
+          })
+        })
+      })
+      .flatten();
+    self.recv_proxy_protocol_config = Some(recv_proxy_protocol);
+    self
+  }
 }
 
 impl TcpProxy {
@@ -330,17 +349,8 @@ impl TcpProxy {
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
           let connection_count = self.connection_count.clone();
-          #[cfg(feature = "proxy-protocol")]
-          let recv_proxy_protocol = self
-            .recv_proxy_protocol
-            .then(|| {
-              self.trusted_proxies.as_ref().map(|proxies| {
-                Arc::new(InboundProxyProtocolConfig {
-                  trusted_proxies: proxies.clone(),
-                })
-              })
-            })
-            .flatten();
+          let recv_proxy_protocol_config = self.recv_proxy_protocol_config.clone();
+
           handle_tcp_connection(
             dst_mux,
             connection_count,
@@ -349,7 +359,7 @@ impl TcpProxy {
             #[cfg(feature = "proxy-protocol")]
             self.listen_on,
             #[cfg(feature = "proxy-protocol")]
-            recv_proxy_protocol,
+            recv_proxy_protocol_config,
           )
         });
       }

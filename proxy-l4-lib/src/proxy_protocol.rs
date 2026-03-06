@@ -2,7 +2,7 @@ use crate::config::ProxyProtocolVersion;
 use ipnet::IpNet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::{io::AsyncReadExt, net::TcpStream};
-use tracing::debug;
+use tracing::{debug, trace};
 
 /// Encode a PROXY protocol header for the given source and destination addresses.
 ///
@@ -128,6 +128,10 @@ const V2_HEADER_FIXED_SIZE: usize = 16;
 const V1_PREFIX: &[u8; 6] = b"PROXY ";
 /// v1 maximum header length per spec (including \r\n)
 const V1_MAX_LENGTH: usize = 107;
+/// Interval between peek retries when waiting for enough bytes
+const PEEK_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
+/// Maximum number of peek retries without progress before giving up
+const PEEK_MAX_RETRIES: u32 = 20;
 
 /// Parse an inbound PROXY protocol header from the stream.
 ///
@@ -153,19 +157,44 @@ pub(crate) async fn parse_inbound_proxy_header(
     ));
   }
 
-  // 2. Peek first 16 bytes to determine version
+  // 2. Peek first 16 bytes to determine version.
+  //    TCP peek may return fewer bytes than available in the receive buffer,
+  //    so retry with a short sleep until we have enough bytes for version detection.
   let mut peek_buf = [0u8; V2_HEADER_FIXED_SIZE];
-  let peeked = stream.peek(&mut peek_buf).await?;
-  if peeked < 6 {
-    return Err(std::io::Error::new(
-      std::io::ErrorKind::InvalidData,
-      "Too few bytes to detect PROXY header version",
-    ));
-  }
+  let peeked = {
+    let mut last_n = 0usize;
+    let mut retries = 0u32;
+    loop {
+      let n = stream.peek(&mut peek_buf).await?;
+      if n >= V2_HEADER_FIXED_SIZE {
+        break n;
+      }
+      // We need at least 6 bytes to distinguish v1 from v2.
+      // If we have 6+ bytes and the prefix is clearly v1 ("PROXY "), we can proceed.
+      if n >= 6 && peek_buf[..6] == *V1_PREFIX {
+        break n;
+      }
+      // No progress and exceeded retry limit
+      if n <= last_n {
+        retries += 1;
+        if retries >= PEEK_MAX_RETRIES {
+          return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Too few bytes to detect PROXY header version (got {n} bytes after {retries} retries)"),
+          ));
+        }
+      } else {
+        // Made progress, reset retry counter
+        retries = 0;
+      }
+      last_n = n;
+      tokio::time::sleep(PEEK_RETRY_INTERVAL).await;
+    }
+  };
 
   // 3. Determine version and parse
   if peeked >= 12 && peek_buf[..12] == *V2_SIGNATURE {
-    parse_v2_inbound(stream, &peek_buf, peeked).await
+    parse_v2_inbound(stream, &peek_buf).await
   } else if peek_buf[..6] == *V1_PREFIX {
     parse_v1_inbound(stream).await
   } else {
@@ -177,18 +206,11 @@ pub(crate) async fn parse_inbound_proxy_header(
 }
 
 /// Parse a v2 (binary) PROXY protocol header.
+/// The caller guarantees that peek_buf contains at least 16 bytes (V2_HEADER_FIXED_SIZE).
 async fn parse_v2_inbound(
   stream: &mut TcpStream,
   peek_buf: &[u8; V2_HEADER_FIXED_SIZE],
-  peeked: usize,
 ) -> Result<Option<SocketAddr>, std::io::Error> {
-  if peeked < V2_HEADER_FIXED_SIZE {
-    return Err(std::io::Error::new(
-      std::io::ErrorKind::InvalidData,
-      "Incomplete v2 PROXY header (need at least 16 bytes)",
-    ));
-  }
-
   // Extract addr_len from bytes 14-15
   let addr_len = u16::from_be_bytes([peek_buf[14], peek_buf[15]]) as usize;
   let total_len = V2_HEADER_FIXED_SIZE + addr_len;
@@ -215,10 +237,20 @@ async fn parse_v2_inbound(
   match header.addresses {
     ppp::v2::Addresses::IPv4(ipv4) => {
       let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::from(ipv4.source_address)), ipv4.source_port);
+      trace!(
+        "Parsed PROXY v2 IPv4 header: src={}, dst={}",
+        src,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::from(ipv4.destination_address)), ipv4.destination_port)
+      );
       Ok(Some(src))
     }
     ppp::v2::Addresses::IPv6(ipv6) => {
       let src = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ipv6.source_address)), ipv6.source_port);
+      trace!(
+        "Parsed PROXY v2 IPv6 header: src={}, dst={}",
+        src,
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ipv6.destination_address)), ipv6.destination_port)
+      );
       Ok(Some(src))
     }
     ppp::v2::Addresses::Unix(_) => Err(std::io::Error::new(
@@ -266,10 +298,21 @@ async fn parse_v1_inbound(stream: &mut TcpStream) -> Result<Option<SocketAddr>, 
   match header.addresses {
     ppp::v1::Addresses::Tcp4(tcp4) => {
       let src = SocketAddr::new(IpAddr::V4(tcp4.source_address), tcp4.source_port);
+      trace!(
+        "Parsed PROXY v1 TCP4 header: src={}, dst={}",
+        src,
+        SocketAddr::new(IpAddr::V4(tcp4.destination_address), tcp4.destination_port)
+      );
       Ok(Some(src))
     }
     ppp::v1::Addresses::Tcp6(tcp6) => {
       let src = SocketAddr::new(IpAddr::V6(tcp6.source_address), tcp6.source_port);
+      trace!(
+        "Parsed PROXY v1 TCP6 header: src={}, dst={}",
+        src,
+        SocketAddr::new(IpAddr::V6(tcp6.destination_address), tcp6.destination_port)
+      );
+
       Ok(Some(src))
     }
     ppp::v1::Addresses::Unknown => {
@@ -538,21 +581,14 @@ mod tests {
   /// Build a v2 LOCAL header (no addresses)
   fn build_v2_local_header() -> Vec<u8> {
     let version_command = ppp::v2::Version::Two | ppp::v2::Command::Local;
-    ppp::v2::Builder::with_addresses(
-      version_command,
-      ppp::v2::Protocol::Stream,
-      ppp::v2::Addresses::Unspecified,
-    )
-    .build()
-    .unwrap()
+    ppp::v2::Builder::with_addresses(version_command, ppp::v2::Protocol::Stream, ppp::v2::Addresses::Unspecified)
+      .build()
+      .unwrap()
   }
 
   #[tokio::test]
   async fn test_inbound_v2_proxy_ipv4() {
-    let header = build_v2_proxy_header(
-      "192.168.1.100:45000".parse().unwrap(),
-      "10.0.0.1:443".parse().unwrap(),
-    );
+    let header = build_v2_proxy_header("192.168.1.100:45000".parse().unwrap(), "10.0.0.1:443".parse().unwrap());
     let (mut server, _client) = setup_stream_with_data(&header).await;
     let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
     let config = trusted_config(&["10.0.0.0/8"]);
@@ -564,10 +600,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_inbound_v2_proxy_ipv6() {
-    let header = build_v2_proxy_header(
-      "[2001:db8::1]:45000".parse().unwrap(),
-      "[2001:db8::2]:443".parse().unwrap(),
-    );
+    let header = build_v2_proxy_header("[2001:db8::1]:45000".parse().unwrap(), "[2001:db8::2]:443".parse().unwrap());
     let (mut server, _client) = setup_stream_with_data(&header).await;
     let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
     let config = trusted_config(&["10.0.0.0/8"]);
@@ -591,10 +624,7 @@ mod tests {
   #[tokio::test]
   async fn test_inbound_v2_exact_byte_consumption() {
     let app_data = b"\x16\x03\x01\x00\x05hello";
-    let mut header = build_v2_proxy_header(
-      "192.168.1.100:45000".parse().unwrap(),
-      "10.0.0.1:443".parse().unwrap(),
-    );
+    let mut header = build_v2_proxy_header("192.168.1.100:45000".parse().unwrap(), "10.0.0.1:443".parse().unwrap());
     header.extend_from_slice(app_data);
 
     let (mut server, _client) = setup_stream_with_data(&header).await;
@@ -636,6 +666,8 @@ mod tests {
 
     let result = parse_inbound_proxy_header(&mut server, &peer, &config).await;
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("Too few bytes"));
   }
 }

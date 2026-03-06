@@ -43,7 +43,7 @@ You can build an executable binary yourself by checking out this Git repository.
 % cargo build --release
 ```
 
-Then you have an executive binary `rust-rpxy/target/release/rpxy-l4`.
+Then you have an executive binary `rust-rpxy-l4/target/release/rpxy-l4`.
 
 To build without the PROXY protocol feature:
 
@@ -237,7 +237,7 @@ alpns = ["h2", "http/1.1"]
 `rpxy-l4` can detect and multiplex WireGuard packets by probing the initial handshake packet. The following example demonstrates the scenario that any WireGuard packets are forwarded to the appropriate backend that are different from the default targets as well.
 
 ```toml
-[protocols."wireguard_service"]
+[protocol."wireguard_service"]
 protocol = "wireguard"
 target = ["192.168.0.10:51820"]
 load_balance = "none"
@@ -258,6 +258,12 @@ This is somewhat a security feature to prevent protocol over TCP/UDP mismatching
 
 > [!NOTE]
 > This feature requires the `proxy-protocol` Cargo feature, which is enabled by default. To build without it, use `cargo build --release --no-default-features`.
+
+> [!IMPORTANT]
+> The PROXY protocol is only supported for TCP connections, and UDP connections are not supported due to the stateless nature of UDP, meaning that the concept of a "connection" does not exist in the same way as TCP. Typically, for UDP-based protocols, the concept of `stream` is used the overlaid protocol, e.g., QUIC stream or WireGuard session, and it does not fit well with the connection-oriented design of the PROXY protocol.
+
+> [!WARNING]
+> Enabling inbound PROXY protocol may cause service disruption and security risks if not configured properly. Make sure to set `tcp_trusted_proxies` to only accept PROXY headers from trusted sources, and be aware that all incoming TCP connections are expected to start with a valid PROXY header when `tcp_recv_proxy_protocol` is enabled.
 
 #### 4.1. Outbound: Sending PROXY header to backend servers
 
@@ -359,7 +365,7 @@ TBD!
 
 ## Credits
 
-`rpxy-4` cannot be built without the following projects and inspirations:
+`rpxy-l4` cannot be built without the following projects and inspirations:
 
 - [`sslh`](https://github.com/yrutschle/sslh): `rpxy-l4` is strongly inspired by `sslh` for its protocol multiplexer feature.
 - [`tokio`](https://github.com/tokio-rs/tokio): Great async runtime for Rust.

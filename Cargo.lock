@@ -1010,9 +1010,9 @@ dependencies = [
 
 [[package]]
 name = "hot_reload"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e24f4b0953a93e73492835a75fa6149cd160665fa7301ecd7de0a7041f0be9c"
+checksum = "4227e412f4ec6a1f67e432028abedeb6d540d17d5148b242f3f35df3a8f5898b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1691,7 +1691,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-examples"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64",
  "clap",
@@ -1725,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-lib"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ahash",
  "bytes",
@@ -1736,7 +1736,7 @@ dependencies = [
  "ppp",
  "rand 0.10.0",
  "rpxy-l4-quic-tls",
- "socket2 0.6.2",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-quic-tls"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -1999,12 +1999,12 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86f4aa3ad99f2088c990dfa82d367e19cb29268ed67c574d10d0a4bfe71f07e0"
+checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2147,7 +2147,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
- "socket2 0.6.2",
+ "socket2 0.6.3",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]
@@ -2334,9 +2334,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.21.0"
+version = "1.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b672338555252d43fd2240c714dc444b8c6fb0a5c5335e65a07bba7742735ddb"
+checksum = "a68d3c8f01c0cfa54a75291d83601161799e4a89a39e0929f4b0354d88757a37"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
@@ -2703,9 +2703,9 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winnow"
-version = "0.7.14"
+version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"
+checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 
 [[package]]
 name = "winreg"

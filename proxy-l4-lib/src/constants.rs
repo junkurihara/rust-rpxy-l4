@@ -1,4 +1,12 @@
-use std::time::Duration;
+use std::{
+  net::{Ipv4Addr, Ipv6Addr},
+  time::Duration,
+};
+
+/// Default IPv4 listen address
+pub const DEFAULT_LISTEN_ADDRESS_V4: Ipv4Addr = Ipv4Addr::UNSPECIFIED; // 0.0.0.0
+/// Default IPv6 listen address
+pub const DEFAULT_LISTEN_ADDRESS_V6: Ipv6Addr = Ipv6Addr::UNSPECIFIED; // ::
 
 /// TCP backlog size
 pub const TCP_BACKLOG: u32 = 1024;

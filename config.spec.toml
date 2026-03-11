@@ -10,7 +10,16 @@
 # TODO: Is it nice to have multiple listen ports?
 listen_port = 8448
 
+# (Optional) IPv4 bind address [default: "0.0.0.0"]
+# listen_address_v4 = "0.0.0.0"
+
+# (Optional) IPv6 bind address [default: "::" when listen_ipv6 = true]
+# Accepts both bare (::1) and bracketed ([::1]) forms.
+# When specified, listen_ipv6 is implicitly enabled and does not need to be set.
+# listen_address_v6 = "[::]"
+
 # (Optional) Listen [::], [default: false]
+# Ignored when listen_address_v6 is specified.
 listen_ipv6 = true
 
 # (Optional) TCP backlog size [default: 1024]

@@ -1,10 +1,13 @@
 use crate::log::warn;
 use anyhow::anyhow;
 #[cfg(feature = "proxy-protocol")]
-use rpxy_l4_lib::{ProxyProtocolVersion, SendProxyProtocol};
-#[cfg(feature = "proxy-protocol")]
 use rpxy_l4_lib::reexport::IpNet;
-use rpxy_l4_lib::{Config, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType, TargetAddr};
+use rpxy_l4_lib::{
+  Config, DEFAULT_LISTEN_ADDRESS_V4, DEFAULT_LISTEN_ADDRESS_V6, EchProtocolConfig, LoadBalance, ProtocolConfig, ProtocolType,
+  TargetAddr,
+};
+#[cfg(feature = "proxy-protocol")]
+use rpxy_l4_lib::{ProxyProtocolVersion, SendProxyProtocol};
 use serde::Deserialize;
 use std::{
   collections::{HashMap, HashSet},
@@ -15,6 +18,8 @@ use std::{
 #[derive(Deserialize, Debug, Default, PartialEq, Eq, Clone)]
 pub struct ConfigToml {
   pub listen_port: Option<u16>,
+  pub listen_address_v4: Option<String>,
+  pub listen_address_v6: Option<String>,
   pub listen_ipv6: Option<bool>,
   pub tcp_backlog: Option<u32>,
   pub tcp_max_connections: Option<u32>,
@@ -247,9 +252,44 @@ impl TryFrom<ConfigToml> for Config {
       .transpose()?
       .flatten();
 
+    // Parse listen addresses
+    let listen_address_v4 = match config_toml.listen_address_v4.as_deref() {
+      Some(addr_str) => {
+        let addr: std::net::IpAddr = addr_str
+          .parse()
+          .map_err(|e| anyhow!("Invalid listen_address_v4 '{}': {}", addr_str, e))?;
+        match addr {
+          std::net::IpAddr::V4(v4) => v4,
+          _ => return Err(anyhow!("listen_address_v4 '{}' is not an IPv4 address", addr_str)),
+        }
+      }
+      None => DEFAULT_LISTEN_ADDRESS_V4,
+    };
+
+    let listen_ipv6 = config_toml.listen_ipv6.unwrap_or(false);
+    let listen_address_v6 = match config_toml.listen_address_v6.as_deref() {
+      Some(addr_str) => {
+        // Strip surrounding brackets if present (e.g., [::1] -> ::1)
+        let bare = addr_str
+          .strip_prefix('[')
+          .and_then(|s| s.strip_suffix(']'))
+          .unwrap_or(addr_str);
+        let addr: std::net::IpAddr = bare
+          .parse()
+          .map_err(|e| anyhow!("Invalid listen_address_v6 '{}': {}", addr_str, e))?;
+        match addr {
+          std::net::IpAddr::V6(v6) => Some(v6),
+          _ => return Err(anyhow!("listen_address_v6 '{}' is not an IPv6 address", addr_str)),
+        }
+      }
+      None if listen_ipv6 => Some(DEFAULT_LISTEN_ADDRESS_V6),
+      None => None,
+    };
+
     Ok(Self {
       listen_port,
-      listen_ipv6: config_toml.listen_ipv6.unwrap_or(false),
+      listen_address_v4,
+      listen_address_v6,
       tcp_backlog: config_toml.tcp_backlog,
       tcp_max_connections: config_toml.tcp_max_connections,
       udp_max_connections: config_toml.udp_max_connections,
@@ -412,6 +452,116 @@ tcp_target = ["127.0.0.1:80"]
     let err = Config::try_from(config_toml).expect_err("expected invalid proxy protocol version");
     let msg = err.to_string();
     assert!(msg.contains("Invalid proxy protocol version"), "unexpected error: {msg}");
+  }
+
+  #[test]
+  fn test_listen_address_defaults() {
+    let toml_str = r#"
+listen_port = 8448
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+    assert_eq!(config.listen_address_v4, std::net::Ipv4Addr::UNSPECIFIED);
+    assert_eq!(config.listen_address_v6, None);
+  }
+
+  #[test]
+  fn test_listen_address_v4_custom() {
+    let toml_str = r#"
+listen_port = 8448
+listen_address_v4 = "127.0.0.1"
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+    assert_eq!(config.listen_address_v4, std::net::Ipv4Addr::LOCALHOST);
+  }
+
+  #[test]
+  fn test_listen_address_v6_bare() {
+    let toml_str = r#"
+listen_port = 8448
+listen_address_v6 = "::1"
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+    assert_eq!(config.listen_address_v6, Some(std::net::Ipv6Addr::LOCALHOST));
+  }
+
+  #[test]
+  fn test_listen_address_v6_bracketed() {
+    let toml_str = r#"
+listen_port = 8448
+listen_address_v6 = "[::1]"
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+    assert_eq!(config.listen_address_v6, Some(std::net::Ipv6Addr::LOCALHOST));
+  }
+
+  #[test]
+  fn test_listen_ipv6_enables_default_v6() {
+    let toml_str = r#"
+listen_port = 8448
+listen_ipv6 = true
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+    assert_eq!(config.listen_address_v6, Some(std::net::Ipv6Addr::UNSPECIFIED));
+  }
+
+  #[test]
+  fn test_listen_address_v6_overrides_listen_ipv6() {
+    // listen_address_v6 implicitly enables IPv6, listen_ipv6 is ignored
+    let toml_str = r#"
+listen_port = 8448
+listen_ipv6 = false
+listen_address_v6 = "[::1]"
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let config: Config = config_toml.try_into().expect("failed to convert config");
+    assert_eq!(config.listen_address_v6, Some(std::net::Ipv6Addr::LOCALHOST));
+  }
+
+  #[test]
+  fn test_listen_address_v4_rejects_v6() {
+    let toml_str = r#"
+listen_port = 8448
+listen_address_v4 = "::1"
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let err = Config::try_from(config_toml).expect_err("expected error for v6 in v4 field");
+    assert!(err.to_string().contains("not an IPv4 address"));
+  }
+
+  #[test]
+  fn test_listen_address_v6_rejects_v4() {
+    let toml_str = r#"
+listen_port = 8448
+listen_address_v6 = "127.0.0.1"
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let err = Config::try_from(config_toml).expect_err("expected error for v4 in v6 field");
+    assert!(err.to_string().contains("not an IPv6 address"));
+  }
+
+  #[test]
+  fn test_listen_address_invalid_string() {
+    let toml_str = r#"
+listen_port = 8448
+listen_address_v4 = "not-an-ip"
+tcp_target = ["127.0.0.1:80"]
+"#;
+    let config_toml = parse_config_toml(toml_str);
+    let err = Config::try_from(config_toml).expect_err("expected error for invalid address");
+    assert!(err.to_string().contains("Invalid listen_address_v4"));
   }
 
   #[cfg(feature = "proxy-protocol")]

@@ -2,7 +2,11 @@ use crate::{destination::LoadBalance, error::ProxyBuildError, proto::ProtocolTyp
 #[cfg(feature = "proxy-protocol")]
 use ipnet::IpNet;
 use quic_tls::{EchConfigList, EchPrivateKey};
-use std::{str::FromStr, time::Duration};
+use std::{
+  net::{Ipv4Addr, Ipv6Addr},
+  str::FromStr,
+  time::Duration,
+};
 
 /* ---------------------------------------------------------- */
 
@@ -255,7 +259,8 @@ pub fn validate_config(config: &Config) -> Result<(), ProxyBuildError> {
 pub fn create_test_tcp_config(port: u16, target: &str) -> Config {
   Config {
     listen_port: port,
-    listen_ipv6: false,
+    listen_address_v4: crate::constants::DEFAULT_LISTEN_ADDRESS_V4,
+    listen_address_v6: None,
     tcp_backlog: None,
     tcp_max_connections: None,
     udp_max_connections: None,
@@ -281,7 +286,8 @@ pub fn create_test_tcp_config(port: u16, target: &str) -> Config {
 pub fn create_test_udp_config(port: u16, target: &str) -> Config {
   Config {
     listen_port: port,
-    listen_ipv6: false,
+    listen_address_v4: crate::constants::DEFAULT_LISTEN_ADDRESS_V4,
+    listen_address_v6: None,
     tcp_backlog: None,
     tcp_max_connections: None,
     udp_max_connections: None,
@@ -303,14 +309,15 @@ pub fn create_test_udp_config(port: u16, target: &str) -> Config {
 }
 
 /* ---------------------------------------------------------- */
-
 /// Configuration for the proxy service
 #[derive(Debug, Clone)]
 pub struct Config {
   /// Listening port
   pub listen_port: u16,
-  /// Listen on IPv6
-  pub listen_ipv6: bool,
+  /// IPv4 bind address
+  pub listen_address_v4: Ipv4Addr,
+  /// IPv6 bind address (None = IPv6 disabled)
+  pub listen_address_v6: Option<Ipv6Addr>,
   /// TCP backlog size
   pub tcp_backlog: Option<u32>,
   /// Max TCP concurrent connections in total of all spawned TCP proxies
@@ -598,7 +605,8 @@ mod tests {
     // Test configuration with no targets at all
     let empty_config = Config {
       listen_port: 8080,
-      listen_ipv6: false,
+      listen_address_v4: crate::constants::DEFAULT_LISTEN_ADDRESS_V4,
+      listen_address_v6: None,
       tcp_backlog: None,
       tcp_max_connections: None,
       udp_max_connections: None,

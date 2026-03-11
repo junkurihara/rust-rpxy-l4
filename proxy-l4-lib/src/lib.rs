@@ -22,7 +22,7 @@ use std::sync::Arc;
 use target::DnsCache;
 
 pub use config::{Config, EchProtocolConfig, ProtocolConfig};
-pub use constants::log_event_names;
+pub use constants::{DEFAULT_LISTEN_ADDRESS_V4, DEFAULT_LISTEN_ADDRESS_V6, log_event_names};
 pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
 pub use error::{ProxyBuildError, ProxyError};

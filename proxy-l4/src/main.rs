@@ -8,14 +8,13 @@ use crate::{config::parse_opts, log::*};
 use config::{ConfigToml, ConfigTomlReloader};
 use hot_reload::{ReloaderReceiver, ReloaderService};
 use rpxy_l4_lib::*;
-use std::sync::Arc;
+use std::{
+  net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+  sync::Arc,
+};
 
 /// Delay in seconds to watch the config file
 const CONFIG_WATCH_DELAY_SECS: u32 = 15;
-/// Listen on v4 address
-const LISTEN_ON_V4: &str = "0.0.0.0";
-/// Listen on v6 address
-const LISTEN_ON_V6: &str = "[::]";
 /// Access log file name
 pub(crate) const ACCESS_LOG_FILE: &str = "access.log";
 /// System log file name
@@ -119,7 +118,8 @@ async fn entrypoint(
 struct ProxyService {
   runtime_handle: tokio::runtime::Handle,
   listen_port: u16,
-  listen_ipv6: bool,
+  listen_address_v4: Ipv4Addr,
+  listen_address_v6: Option<Ipv6Addr>,
   tcp_backlog: Option<u32>,
   tcp_max_connections: Option<u32>,
   udp_max_connections: Option<u32>,
@@ -140,7 +140,8 @@ impl ProxyService {
     let res = Self {
       runtime_handle,
       listen_port: config.listen_port,
-      listen_ipv6: config.listen_ipv6,
+      listen_address_v4: config.listen_address_v4,
+      listen_address_v6: config.listen_address_v6,
       tcp_backlog: config.tcp_backlog,
       tcp_max_connections: config.tcp_max_connections,
       udp_max_connections: config.udp_max_connections,
@@ -159,8 +160,11 @@ impl ProxyService {
   async fn start(&self, cancel_token: tokio_util::sync::CancellationToken) -> Result<(), anyhow::Error> {
     let mut join_handles = Vec::new();
 
-    let listen_on_v4 = format!("{LISTEN_ON_V4}:{}", self.listen_port).parse()?;
-    let listen_on_v6 = format!("{LISTEN_ON_V6}:{}", self.listen_port).parse()?;
+    let listen_on_v4 = SocketAddr::new(self.listen_address_v4.into(), self.listen_port);
+    let listen_on_v6 = self
+      .listen_address_v6
+      .map(|addr| SocketAddr::new(addr.into(), self.listen_port));
+
     /* -------------------------- Tcp -------------------------- */
     if !self.tcp_proxy_mux.is_empty() {
       // connection count will be shared among all TCP proxies
@@ -180,7 +184,7 @@ impl ProxyService {
       });
       join_handles.push(tcp_proxy_v4_handle);
 
-      if self.listen_ipv6 {
+      if let Some(listen_on_v6) = listen_on_v6 {
         let tcp_proxy_v6 = self
           .tcp_builder()
           .listen_on(listen_on_v6)
@@ -201,7 +205,7 @@ impl ProxyService {
     /* -------------------------- Udp -------------------------- */
     if !self.udp_proxy_mux.is_empty() {
       // connection count will be shared among all UDP proxies
-      let udp_conn_count = UdpConnectionCount::<std::net::SocketAddr>::default();
+      let udp_conn_count = UdpConnectionCount::<SocketAddr>::default();
       let udp_proxy_v4 = self
         .udp_builder()
         .listen_on(listen_on_v4)
@@ -217,7 +221,7 @@ impl ProxyService {
       });
       join_handles.push(udp_proxy_v4_handle);
 
-      if self.listen_ipv6 {
+      if let Some(listen_on_v6) = listen_on_v6 {
         let udp_proxy_v6 = self
           .udp_builder()
           .listen_on(listen_on_v6)

@@ -469,9 +469,25 @@ mod tests {
     let dst_mux = Arc::new(
       TcpDestinationMuxBuilder::default()
         // TLS without ALPN -> localhost:3443 (catch-all)
-        .set_base(TcpProtocolType::Tls, dst_yggdrasil, &dns_cache, None, #[cfg(feature = "proxy-protocol")] None)
+        .set_base(
+          TcpProtocolType::Tls,
+          dst_yggdrasil,
+          &dns_cache,
+          None,
+          #[cfg(feature = "proxy-protocol")]
+          None,
+        )
         // TLS w/ ALPN http/1.1 -> localhost:2443
-        .set_tls(dst_https, &dns_cache, None, None, Some(&["http/1.1"]), None, #[cfg(feature = "proxy-protocol")] None)
+        .set_tls(
+          dst_https,
+          &dns_cache,
+          None,
+          None,
+          Some(&["http/1.1"]),
+          None,
+          #[cfg(feature = "proxy-protocol")]
+          None,
+        )
         .build()
         .unwrap(),
     );
@@ -527,8 +543,24 @@ mod tests {
 
     let dst_mux2 = Arc::new(
       TcpDestinationMuxBuilder::default()
-        .set_tls(dst_https, &dns_cache2, None, None, Some(&["http/1.1"]), None, #[cfg(feature = "proxy-protocol")] None)
-        .set_base(TcpProtocolType::Tls, dst_yggdrasil, &dns_cache2, None, #[cfg(feature = "proxy-protocol")] None)
+        .set_tls(
+          dst_https,
+          &dns_cache2,
+          None,
+          None,
+          Some(&["http/1.1"]),
+          None,
+          #[cfg(feature = "proxy-protocol")]
+          None,
+        )
+        .set_base(
+          TcpProtocolType::Tls,
+          dst_yggdrasil,
+          &dns_cache2,
+          None,
+          #[cfg(feature = "proxy-protocol")]
+          None,
+        )
         .build()
         .unwrap(),
     );

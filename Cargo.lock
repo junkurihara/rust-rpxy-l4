@@ -1024,7 +1024,7 @@ dependencies = [
 [[package]]
 name = "hpke"
 version = "0.14.0-pre.2"
-source = "git+https://github.com/junkurihara/rust-hpke?rev=b7fa9e8325761e852905f97e1b1b44fbfa8eef3d#b7fa9e8325761e852905f97e1b1b44fbfa8eef3d"
+source = "git+https://github.com/junkurihara/rust-hpke?rev=b38153c594e6adc5d3351f5d7b11730df6f1f826#b38153c594e6adc5d3351f5d7b11730df6f1f826"
 dependencies = [
  "aead 0.6.0-rc.10",
  "aes-gcm 0.11.0-rc.3",
@@ -1043,9 +1043,9 @@ dependencies = [
 
 [[package]]
 name = "hybrid-array"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1b229d73f5803b562cc26e4da0396c8610a4ee209f4fac8fa4f8d709166dc45"
+checksum = "8655f91cd07f2b9d0c24137bd650fe69617773435ee5ec83022377777ce65ef1"
 dependencies = [
  "typenum",
 ]
@@ -1291,9 +1291,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
-version = "0.2.182"
+version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
+checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 
 [[package]]
 name = "libmimalloc-sys"
@@ -1691,7 +1691,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-examples"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "clap",
@@ -1725,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-lib"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ahash",
  "bytes",
@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-quic-tls"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -2178,9 +2178,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.0.4+spec-1.1.0"
+version = "1.0.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c94c3321114413476740df133f0d8862c61d87c8d26f04c6841e033c8c80db47"
+checksum = "399b1124a3c9e16766831c6bba21e50192572cdd98706ea114f9502509686ffc"
 dependencies = [
  "serde_core",
  "serde_spanned",
@@ -2846,18 +2846,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.40"
+version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a789c6e490b576db9f7e6b6d661bcc9799f7c0ac8352f56ea20193b2681532e5"
+checksum = "f2578b716f8a7a858b7f02d5bd870c14bf4ddbbcf3a4c05414ba6503640505e3"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.40"
+version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f65c489a7071a749c849713807783f70672b28094011623e200cb86dcb835953"
+checksum = "7e6cc098ea4d3bd6246687de65af3f920c430e236bee1e3bf2e441463f08a02f"
 dependencies = [
  "proc-macro2",
  "quote",

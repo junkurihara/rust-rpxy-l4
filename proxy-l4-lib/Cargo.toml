@@ -55,5 +55,5 @@ quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }
 libc = { version = "0.2.183" }
 
 [dev-dependencies]
-tracing-subscriber = { version = "0.3.22" }
+tracing-subscriber = { version = "0.3.23" }
 # quic and tls

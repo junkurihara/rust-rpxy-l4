@@ -22,7 +22,7 @@ anyhow = { version = "1.0.102" }
 
 # logging
 tracing = { version = "0.1.44" }
-tracing-subscriber = { version = "0.3.22" }
+tracing-subscriber = { version = "0.3.23" }
 
 # config
 clap = { version = "4.6.0", features = ["std", "cargo", "wrap_help"] }

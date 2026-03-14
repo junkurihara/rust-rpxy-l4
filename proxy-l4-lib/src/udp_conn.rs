@@ -3,13 +3,13 @@ use crate::{
   constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
   error::ProxyError,
   proto::UdpProtocolType,
-  socket::bind_udp_socket,
+  socket::{DownstreamUdpSocket, bind_udp_socket},
   time_util::get_since_the_epoch,
   trace::*,
   udp_proxy::UdpDestinationInner,
 };
 use std::{
-  net::SocketAddr,
+  net::{IpAddr, SocketAddr},
   sync::{
     Arc, OnceLock,
     atomic::{AtomicU64, Ordering},
@@ -32,12 +32,25 @@ fn init_once_lock() {
 /// DashMap type alias, uses ahash::RandomState as hashbuilder
 type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+/// Key for UDP pseudo-connections scoped by downstream source socket and local destination IP.
+pub(crate) struct UdpFlowKey {
+  pub src_addr: SocketAddr,
+  pub local_ip: IpAddr,
+}
+
+impl UdpFlowKey {
+  pub(crate) fn new(src_addr: SocketAddr, local_ip: IpAddr) -> Self {
+    Self { src_addr, local_ip }
+  }
+}
+
 /* ---------------------------------------------------------- */
 #[derive(Clone)]
 /// Udp connection pool
 pub(crate) struct UdpConnectionPool {
   /// inner hashmap
-  inner: DashMap<SocketAddr, UdpConnection>,
+  inner: DashMap<UdpFlowKey, UdpConnection>,
   /// parent cancel token to cancel all connections
   parent_cancel_token: CancellationToken,
   /// runtime handle
@@ -49,7 +62,7 @@ impl UdpConnectionPool {
   pub(crate) fn new(runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
     init_once_lock();
 
-    let inner: DashMap<SocketAddr, UdpConnection> = DashMap::default();
+    let inner: DashMap<UdpFlowKey, UdpConnection> = DashMap::default();
     Self {
       inner,
       runtime_handle,
@@ -57,9 +70,9 @@ impl UdpConnectionPool {
     }
   }
 
-  /// Get Arc<UdpConnection> by the source address + port
-  pub(crate) fn get(&self, src_addr: &SocketAddr) -> Option<UdpConnection> {
-    self.inner.get(src_addr).map(|arc| arc.value().clone())
+  /// Get Arc<UdpConnection> by the downstream flow key.
+  pub(crate) fn get(&self, flow_key: &UdpFlowKey) -> Option<UdpConnection> {
+    self.inner.get(flow_key).map(|arc| arc.value().clone())
   }
 
   /// Get current connection count for this pool
@@ -74,7 +87,8 @@ impl UdpConnectionPool {
     src_addr: &SocketAddr,
     udp_dst: &UdpDestinationInner,
     protocol: &UdpProtocolType,
-    udp_socket_to_downstream: Arc<UdpSocket>,
+    udp_socket_to_downstream: Arc<DownstreamUdpSocket>,
+    local_ip: IpAddr,
   ) -> Result<UdpConnection, ProxyError> {
     // Connection limit is handled by the caller
 
@@ -84,26 +98,27 @@ impl UdpConnectionPool {
         src_addr,
         udp_dst,
         udp_socket_to_downstream,
+        local_ip,
         self.parent_cancel_token.child_token(),
       )
       .await?,
     );
     let (tx, rx) = mpsc::channel::<Vec<u8>>(UDP_CHANNEL_CAPACITY);
     let new_conn = UdpConnection { tx, inner: conn.clone() };
+    let flow_key = UdpFlowKey::new(*src_addr, local_ip);
 
-    if let Some(old_conn) = self.inner.insert(*src_addr, new_conn.clone()) {
+    if let Some(old_conn) = self.inner.insert(flow_key, new_conn.clone()) {
       warn!("UdpConnection was already existed but overwritten. Should not call create_new_connection() for existing keys.");
       old_conn.inner.cancel_token.cancel(); // cancel the old connection
     }
     // spawn the connection service
     let self_clone = self.clone();
-    let src_addr = *src_addr;
     self.runtime_handle.spawn(async move {
       // Here we are establishing a udp connection. Logging info for the connection as an access log.
       udp_access_log_start(&conn);
       conn.serve(rx, self_clone.runtime_handle.clone()).await;
       // clean up if the connection service is closed, here the connection service was already closed
-      self_clone.remove(&src_addr);
+      self_clone.remove(&flow_key);
       // finish log
       udp_access_log_finish(&conn);
     });
@@ -112,9 +127,9 @@ impl UdpConnectionPool {
     Ok(new_conn)
   }
 
-  /// Remove the entry by the source address + port
-  fn remove(&self, src_addr: &SocketAddr) {
-    self.inner.remove(src_addr);
+  /// Remove the entry by the downstream flow key.
+  fn remove(&self, flow_key: &UdpFlowKey) {
+    self.inner.remove(flow_key);
   }
 
   /// Prune inactive connections
@@ -186,7 +201,11 @@ struct UdpConnectionInner {
   udp_socket_to_upstream: Arc<UdpSocket>,
 
   /// Local UdpSocket to send data back to the downstream client
-  udp_socket_to_downstream: Arc<UdpSocket>,
+  udp_socket_to_downstream: Arc<DownstreamUdpSocket>,
+
+  /// Local IP address that the client originally sent to.
+  /// Used by the downstream socket abstraction to preserve the response source IP.
+  local_ip: IpAddr,
 
   /// Cancel token to cancel the connection service
   cancel_token: CancellationToken,
@@ -205,7 +224,8 @@ impl UdpConnectionInner {
     protocol: &UdpProtocolType,
     src_addr: &SocketAddr,
     udp_dst: &UdpDestinationInner,
-    udp_socket_to_downstream: Arc<UdpSocket>,
+    udp_socket_to_downstream: Arc<DownstreamUdpSocket>,
+    local_ip: IpAddr,
     cancel_token: CancellationToken,
   ) -> Result<Self, ProxyError> {
     let dst_addr = udp_dst.get_destination(src_addr).await?;
@@ -227,6 +247,7 @@ impl UdpConnectionInner {
       dst_addr,
       udp_socket_to_upstream,
       udp_socket_to_downstream,
+      local_ip,
       cancel_token,
       idle_lifetime,
       last_active,
@@ -326,11 +347,11 @@ impl UdpConnectionInner {
         );
         self.update_last_active();
 
-        let response = udp_buf[..buf_size].to_vec();
+        let response = &udp_buf[..buf_size];
 
         if let Err(e) = self
           .udp_socket_to_downstream
-          .send_to(response.as_slice(), self.src_addr)
+          .send_to(response, &self.src_addr, self.local_ip)
           .await
         {
           error!("Error sending datagram to downstream: {e}");
@@ -418,11 +439,17 @@ mod tests {
     .unwrap();
 
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
-    let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());
+    let udp_socket_to_downstream = Arc::new(DownstreamUdpSocket::bind(&socket).unwrap());
     let protocol = UdpProtocolType::Any;
 
     let _udp_connection = udp_connection_pool
-      .create_new_connection(&src_addr, &udp_dst, &protocol, udp_socket_to_downstream)
+      .create_new_connection(
+        &src_addr,
+        &udp_dst,
+        &protocol,
+        udp_socket_to_downstream,
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+      )
       .await
       .unwrap();
 
@@ -430,5 +457,97 @@ mod tests {
 
     udp_connection_pool.prune_inactive_connections();
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+  }
+
+  #[test]
+  fn test_udp_flow_key_distinguishes_local_ip() {
+    // Same client (src_addr) connecting to two different VIPs must produce distinct flow keys.
+    let src: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+    let vip_a: IpAddr = "192.168.1.1".parse().unwrap();
+    let vip_b: IpAddr = "192.168.1.2".parse().unwrap();
+
+    let key_a = UdpFlowKey::new(src, vip_a);
+    let key_b = UdpFlowKey::new(src, vip_b);
+
+    assert_ne!(
+      key_a, key_b,
+      "same src_addr with different local_ip must be distinct flow keys"
+    );
+
+    // Same local_ip but different src_addr must also be distinct.
+    let src2: SocketAddr = "10.0.0.2:5000".parse().unwrap();
+    let key_c = UdpFlowKey::new(src2, vip_a);
+    assert_ne!(key_a, key_c);
+
+    // Identical (src_addr, local_ip) must be equal.
+    let key_a2 = UdpFlowKey::new(src, vip_a);
+    assert_eq!(key_a, key_a2);
+  }
+
+  #[test]
+  fn test_udp_flow_key_hash_consistency() {
+    use std::collections::HashMap;
+
+    let src: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+    let vip_a: IpAddr = "192.168.1.1".parse().unwrap();
+    let vip_b: IpAddr = "192.168.1.2".parse().unwrap();
+
+    let mut map = HashMap::new();
+    map.insert(UdpFlowKey::new(src, vip_a), "conn_a");
+    map.insert(UdpFlowKey::new(src, vip_b), "conn_b");
+
+    // Two distinct entries must coexist, not overwrite each other.
+    assert_eq!(map.len(), 2);
+    assert_eq!(map[&UdpFlowKey::new(src, vip_a)], "conn_a");
+    assert_eq!(map[&UdpFlowKey::new(src, vip_b)], "conn_b");
+  }
+
+  #[tokio::test]
+  async fn test_udp_connection_pool_multi_vip() {
+    // Verify that the connection pool creates separate entries for the same client
+    // connecting via different local IPs (multi-VIP scenario).
+    //
+    // We use the same downstream socket (bound to 127.0.0.1) but pass different
+    // local_ip values to simulate the multi-VIP scenario at the pool level,
+    // because not all CI environments have multiple loopback addresses available.
+    let runtime_handle = tokio::runtime::Handle::current();
+    let cancel_token = CancellationToken::new();
+    let pool = UdpConnectionPool::new(runtime_handle, cancel_token.clone());
+
+    let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+    let dns_cache = Arc::new(DnsCache::default());
+    let udp_dst = UdpDestinationInner::try_from((
+      ["127.0.0.1:54321".parse::<TargetAddr>().unwrap()].as_slice(),
+      None,
+      &dns_cache,
+      Some(10),
+    ))
+    .unwrap();
+
+    // Simulate two VIPs: the pool keys differ by local_ip.
+    let vip_a: IpAddr = "192.168.1.1".parse().unwrap();
+    let vip_b: IpAddr = "192.168.1.2".parse().unwrap();
+
+    // Both connections share the same downstream socket (bind to loopback).
+    let socket_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let ds = Arc::new(DownstreamUdpSocket::bind(&socket_addr).unwrap());
+
+    let _conn_a = pool
+      .create_new_connection(&src_addr, &udp_dst, &UdpProtocolType::Any, ds.clone(), vip_a)
+      .await
+      .unwrap();
+    let _conn_b = pool
+      .create_new_connection(&src_addr, &udp_dst, &UdpProtocolType::Any, ds, vip_b)
+      .await
+      .unwrap();
+
+    // Both connections must coexist in the pool.
+    assert_eq!(pool.local_pool_size(), 2);
+    assert!(pool.get(&UdpFlowKey::new(src_addr, vip_a)).is_some());
+    assert!(pool.get(&UdpFlowKey::new(src_addr, vip_b)).is_some());
+
+    cancel_token.cancel();
+    // Give spawned tasks time to clean up.
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
   }
 }

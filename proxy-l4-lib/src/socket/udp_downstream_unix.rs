@@ -110,15 +110,16 @@ fn recv_sync(socket: &UdpSocket, buf: &mut [u8]) -> Result<DownstreamRecvInfo, i
   let mut src_storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
   let mut control_buf = [0u8; 256];
 
-  let mut msghdr = libc::msghdr {
-    msg_name: &mut src_storage as *mut _ as *mut libc::c_void,
-    msg_namelen: std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t,
-    msg_iov: &mut iov,
-    msg_iovlen: 1,
-    msg_control: control_buf.as_mut_ptr() as *mut libc::c_void,
-    msg_controllen: control_buf.len() as _,
-    msg_flags: 0,
-  };
+  // SAFETY: zeroed msghdr is immediately populated before use; this avoids
+  // platform-specific private padding fields present on some libc targets (e.g. musl).
+  let mut msghdr: libc::msghdr = unsafe { std::mem::zeroed() };
+  msghdr.msg_name = &mut src_storage as *mut _ as *mut libc::c_void;
+  msghdr.msg_namelen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+  msghdr.msg_iov = &mut iov;
+  msghdr.msg_iovlen = 1;
+  msghdr.msg_control = control_buf.as_mut_ptr() as *mut libc::c_void;
+  msghdr.msg_controllen = control_buf.len() as _;
+  msghdr.msg_flags = 0;
 
   // SAFETY: fd is a valid socket descriptor; msghdr and its referenced buffers
   // (iov, src_storage, control_buf) are all valid and live for the duration of the call.
@@ -145,15 +146,16 @@ fn send_sync(socket: &UdpSocket, buf: &[u8], dst_addr: &SocketAddr, local_ip: Ip
   let mut control_buf = [0u8; 256];
   let control_len = build_pktinfo_cmsg(&mut control_buf, local_ip)?;
 
-  let msghdr = libc::msghdr {
-    msg_name: &dst_storage as *const _ as *mut libc::c_void,
-    msg_namelen: dst_len,
-    msg_iov: &iov as *const _ as *mut libc::iovec,
-    msg_iovlen: 1,
-    msg_control: control_buf.as_ptr() as *mut libc::c_void,
-    msg_controllen: control_len as _,
-    msg_flags: 0,
-  };
+  // SAFETY: zeroed msghdr is immediately populated before use; this avoids
+  // platform-specific private padding fields present on some libc targets (e.g. musl).
+  let mut msghdr: libc::msghdr = unsafe { std::mem::zeroed() };
+  msghdr.msg_name = &dst_storage as *const _ as *mut libc::c_void;
+  msghdr.msg_namelen = dst_len;
+  msghdr.msg_iov = &iov as *const _ as *mut libc::iovec;
+  msghdr.msg_iovlen = 1;
+  msghdr.msg_control = control_buf.as_ptr() as *mut libc::c_void;
+  msghdr.msg_controllen = control_len as _;
+  msghdr.msg_flags = 0;
 
   // SAFETY: fd is a valid socket descriptor; msghdr and its referenced buffers
   // (iov, dst_storage, control_buf) are all valid and live for the duration of the call.

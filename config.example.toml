@@ -2,8 +2,18 @@
 
 # Global settings
 listen_port = 8448
-# listen_address_v4 = "0.0.0.0"  # (Optional) IPv4 bind address [default: "0.0.0.0"]
-# listen_address_v6 = "[::]"     # (Optional) IPv6 bind address [default: "::" when listen_ipv6 = true]. Accepts both bare (::1) and bracketed ([::1]) forms. When specified, listen_ipv6 is implicitly enabled.
+
+# (Optional) IPv4 bind address [default: "0.0.0.0"]
+# Multiple specific IPv4 bind addresses can also be specified. Do not mix with "0.0.0.0".
+# listen_address_v4 = "0.0.0.0"
+# listen_address_v4 = ["192.168.1.10", "10.0.0.5"]
+
+# (Optional) IPv6 bind address [default: "::" when listen_ipv6 = true].
+# Multiple specific IPv6 bind addresses can also be specified. Accepts both bare and bracketed forms. Do not mix with "::".
+# listen_address_v6 = "[::]"
+# listen_address_v6 = ["::1", "[fe80::1]"]
+
+# When listen_address_v6 is specified, listen_ipv6 is implicitly enabled.
 listen_ipv6 = true
 tcp_backlog = 1024
 tcp_max_connections = 1024

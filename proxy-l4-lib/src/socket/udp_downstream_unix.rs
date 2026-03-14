@@ -174,10 +174,17 @@ fn sockaddr_storage_to_socket_addr(storage: &libc::sockaddr_storage) -> Result<S
       Ok(SocketAddr::new(IpAddr::V4(ip), port))
     }
     libc::AF_INET6 => {
+      // SAFETY: ss_family == AF_INET6 guarantees sockaddr_in6 layout.
       let addr = unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
       let ip = Ipv6Addr::from(addr.sin6_addr.s6_addr);
       let port = u16::from_be(addr.sin6_port);
-      Ok(SocketAddr::new(IpAddr::V6(ip), port))
+      // Preserve flowinfo and scope_id so link-local addresses (fe80::…%ifN) work correctly.
+      Ok(SocketAddr::V6(std::net::SocketAddrV6::new(
+        ip,
+        port,
+        addr.sin6_flowinfo,
+        addr.sin6_scope_id,
+      )))
     }
     _ => Err(io::Error::new(
       io::ErrorKind::InvalidData,
@@ -234,10 +241,12 @@ fn socket_addr_to_sockaddr_storage(addr: &SocketAddr) -> (libc::sockaddr_storage
       (storage, std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t)
     }
     SocketAddr::V6(v6) => {
+      // SAFETY: storage is zeroed and large enough for sockaddr_in6.
       let sockaddr = unsafe { &mut *(&mut storage as *mut _ as *mut libc::sockaddr_in6) };
       sockaddr.sin6_family = libc::AF_INET6 as libc::sa_family_t;
       sockaddr.sin6_port = v6.port().to_be();
       sockaddr.sin6_addr.s6_addr = v6.ip().octets();
+      sockaddr.sin6_flowinfo = v6.flowinfo();
       sockaddr.sin6_scope_id = v6.scope_id();
       (storage, std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t)
     }

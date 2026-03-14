@@ -458,4 +458,96 @@ mod tests {
     udp_connection_pool.prune_inactive_connections();
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
   }
+
+  #[test]
+  fn test_udp_flow_key_distinguishes_local_ip() {
+    // Same client (src_addr) connecting to two different VIPs must produce distinct flow keys.
+    let src: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+    let vip_a: IpAddr = "192.168.1.1".parse().unwrap();
+    let vip_b: IpAddr = "192.168.1.2".parse().unwrap();
+
+    let key_a = UdpFlowKey::new(src, vip_a);
+    let key_b = UdpFlowKey::new(src, vip_b);
+
+    assert_ne!(
+      key_a, key_b,
+      "same src_addr with different local_ip must be distinct flow keys"
+    );
+
+    // Same local_ip but different src_addr must also be distinct.
+    let src2: SocketAddr = "10.0.0.2:5000".parse().unwrap();
+    let key_c = UdpFlowKey::new(src2, vip_a);
+    assert_ne!(key_a, key_c);
+
+    // Identical (src_addr, local_ip) must be equal.
+    let key_a2 = UdpFlowKey::new(src, vip_a);
+    assert_eq!(key_a, key_a2);
+  }
+
+  #[test]
+  fn test_udp_flow_key_hash_consistency() {
+    use std::collections::HashMap;
+
+    let src: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+    let vip_a: IpAddr = "192.168.1.1".parse().unwrap();
+    let vip_b: IpAddr = "192.168.1.2".parse().unwrap();
+
+    let mut map = HashMap::new();
+    map.insert(UdpFlowKey::new(src, vip_a), "conn_a");
+    map.insert(UdpFlowKey::new(src, vip_b), "conn_b");
+
+    // Two distinct entries must coexist, not overwrite each other.
+    assert_eq!(map.len(), 2);
+    assert_eq!(map[&UdpFlowKey::new(src, vip_a)], "conn_a");
+    assert_eq!(map[&UdpFlowKey::new(src, vip_b)], "conn_b");
+  }
+
+  #[tokio::test]
+  async fn test_udp_connection_pool_multi_vip() {
+    // Verify that the connection pool creates separate entries for the same client
+    // connecting via different local IPs (multi-VIP scenario).
+    //
+    // We use the same downstream socket (bound to 127.0.0.1) but pass different
+    // local_ip values to simulate the multi-VIP scenario at the pool level,
+    // because not all CI environments have multiple loopback addresses available.
+    let runtime_handle = tokio::runtime::Handle::current();
+    let cancel_token = CancellationToken::new();
+    let pool = UdpConnectionPool::new(runtime_handle, cancel_token.clone());
+
+    let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+    let dns_cache = Arc::new(DnsCache::default());
+    let udp_dst = UdpDestinationInner::try_from((
+      ["127.0.0.1:54321".parse::<TargetAddr>().unwrap()].as_slice(),
+      None,
+      &dns_cache,
+      Some(10),
+    ))
+    .unwrap();
+
+    // Simulate two VIPs: the pool keys differ by local_ip.
+    let vip_a: IpAddr = "192.168.1.1".parse().unwrap();
+    let vip_b: IpAddr = "192.168.1.2".parse().unwrap();
+
+    // Both connections share the same downstream socket (bind to loopback).
+    let socket_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let ds = Arc::new(DownstreamUdpSocket::bind(&socket_addr).unwrap());
+
+    let _conn_a = pool
+      .create_new_connection(&src_addr, &udp_dst, &UdpProtocolType::Any, ds.clone(), vip_a)
+      .await
+      .unwrap();
+    let _conn_b = pool
+      .create_new_connection(&src_addr, &udp_dst, &UdpProtocolType::Any, ds, vip_b)
+      .await
+      .unwrap();
+
+    // Both connections must coexist in the pool.
+    assert_eq!(pool.local_pool_size(), 2);
+    assert!(pool.get(&UdpFlowKey::new(src_addr, vip_a)).is_some());
+    assert!(pool.get(&UdpFlowKey::new(src_addr, vip_b)).is_some());
+
+    cancel_token.cancel();
+    // Give spawned tasks time to clean up.
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+  }
 }

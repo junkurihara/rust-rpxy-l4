@@ -33,7 +33,7 @@ impl DownstreamUdpSocketImpl {
     if listening_on.ip().is_unspecified() {
       return Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "Wildcard UDP listen with preserved downstream source IP is not supported on this platform",
+        "Wildcard UDP listen with preserved response source IP (original local destination IP) is not supported on this platform",
       ));
     }
 

@@ -259,8 +259,8 @@ pub fn validate_config(config: &Config) -> Result<(), ProxyBuildError> {
 pub fn create_test_tcp_config(port: u16, target: &str) -> Config {
   Config {
     listen_port: port,
-    listen_address_v4: crate::constants::DEFAULT_LISTEN_ADDRESS_V4,
-    listen_address_v6: None,
+    listen_addresses_v4: vec![crate::constants::DEFAULT_LISTEN_ADDRESS_V4],
+    listen_addresses_v6: vec![],
     tcp_backlog: None,
     tcp_max_connections: None,
     udp_max_connections: None,
@@ -286,8 +286,8 @@ pub fn create_test_tcp_config(port: u16, target: &str) -> Config {
 pub fn create_test_udp_config(port: u16, target: &str) -> Config {
   Config {
     listen_port: port,
-    listen_address_v4: crate::constants::DEFAULT_LISTEN_ADDRESS_V4,
-    listen_address_v6: None,
+    listen_addresses_v4: vec![crate::constants::DEFAULT_LISTEN_ADDRESS_V4],
+    listen_addresses_v6: vec![],
     tcp_backlog: None,
     tcp_max_connections: None,
     udp_max_connections: None,
@@ -314,10 +314,10 @@ pub fn create_test_udp_config(port: u16, target: &str) -> Config {
 pub struct Config {
   /// Listening port
   pub listen_port: u16,
-  /// IPv4 bind address
-  pub listen_address_v4: Ipv4Addr,
-  /// IPv6 bind address (None = IPv6 disabled)
-  pub listen_address_v6: Option<Ipv6Addr>,
+  /// IPv4 bind addresses
+  pub listen_addresses_v4: Vec<Ipv4Addr>,
+  /// IPv6 bind addresses (empty = IPv6 disabled)
+  pub listen_addresses_v6: Vec<Ipv6Addr>,
   /// TCP backlog size
   pub tcp_backlog: Option<u32>,
   /// Max TCP concurrent connections in total of all spawned TCP proxies
@@ -605,8 +605,8 @@ mod tests {
     // Test configuration with no targets at all
     let empty_config = Config {
       listen_port: 8080,
-      listen_address_v4: crate::constants::DEFAULT_LISTEN_ADDRESS_V4,
-      listen_address_v6: None,
+      listen_addresses_v4: vec![crate::constants::DEFAULT_LISTEN_ADDRESS_V4],
+      listen_addresses_v6: vec![],
       tcp_backlog: None,
       tcp_max_connections: None,
       udp_max_connections: None,

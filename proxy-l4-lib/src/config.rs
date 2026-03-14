@@ -165,6 +165,12 @@ pub fn validate_basic_config(config: &Config) -> Result<(), ProxyBuildError> {
     return Err(ProxyBuildError::BuildMultiplexersError("Listen port cannot be 0".to_string()));
   }
 
+  if config.listen_addresses_v4.is_empty() && config.listen_addresses_v6.is_empty() {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "At least one listen address must be configured".to_string(),
+    ));
+  }
+
   // Validate TCP configuration consistency
   if let Some(ref tcp_target) = config.tcp_target {
     if tcp_target.is_empty() {
@@ -601,6 +607,13 @@ mod tests {
     // Test valid configuration
     let config = create_test_tcp_config(8080, "127.0.0.1:8081");
     assert!(validate_config(&config).is_ok());
+
+    let no_listeners_config = Config {
+      listen_addresses_v4: vec![],
+      ..config.clone()
+    };
+    let err = validate_basic_config(&no_listeners_config).expect_err("expected missing listener validation");
+    assert!(err.to_string().contains("At least one listen address"));
 
     // Test configuration with no targets at all
     let empty_config = Config {

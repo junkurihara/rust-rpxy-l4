@@ -341,7 +341,11 @@ impl UdpProxy {
 
     tokio::select! {
       result = listener_service => {
-        error!("UDP proxy stopped");
+        if let Err(ref e) = result {
+          error!("UDP proxy on {} stopped: {e}", self.listen_on);
+        } else {
+          error!("UDP proxy on {} stopped", self.listen_on);
+        }
         result
       }
       _ = cancel_token.cancelled() => {

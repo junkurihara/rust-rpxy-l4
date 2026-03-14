@@ -8,10 +8,7 @@ use crate::{config::parse_opts, log::*};
 use config::{ConfigToml, ConfigTomlReloader};
 use hot_reload::{ReloaderReceiver, ReloaderService};
 use rpxy_l4_lib::*;
-use std::{
-  net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-  sync::Arc,
-};
+use std::{net::SocketAddr, sync::Arc};
 
 /// Delay in seconds to watch the config file
 const CONFIG_WATCH_DELAY_SECS: u32 = 15;
@@ -117,9 +114,7 @@ async fn entrypoint(
 /// Proxy service struct
 struct ProxyService {
   runtime_handle: tokio::runtime::Handle,
-  listen_port: u16,
-  listen_address_v4: Ipv4Addr,
-  listen_address_v6: Option<Ipv6Addr>,
+  listen_sockets: Vec<SocketAddr>,
   tcp_backlog: Option<u32>,
   tcp_max_connections: Option<u32>,
   udp_max_connections: Option<u32>,
@@ -139,9 +134,7 @@ impl ProxyService {
 
     let res = Self {
       runtime_handle,
-      listen_port: config.listen_port,
-      listen_address_v4: config.listen_address_v4,
-      listen_address_v6: config.listen_address_v6,
+      listen_sockets: Self::build_listen_sockets(&config),
       tcp_backlog: config.tcp_backlog,
       tcp_max_connections: config.tcp_max_connections,
       udp_max_connections: config.udp_max_connections,
@@ -160,45 +153,26 @@ impl ProxyService {
   async fn start(&self, cancel_token: tokio_util::sync::CancellationToken) -> Result<(), anyhow::Error> {
     let mut join_handles = Vec::new();
 
-    let listen_on_v4 = SocketAddr::new(self.listen_address_v4.into(), self.listen_port);
-    let listen_on_v6 = self
-      .listen_address_v6
-      .map(|addr| SocketAddr::new(addr.into(), self.listen_port));
-
     /* -------------------------- Tcp -------------------------- */
     if !self.tcp_proxy_mux.is_empty() {
       // connection count will be shared among all TCP proxies
       let tcp_conn_count = TcpConnectionCount::default();
-      let tcp_proxy_v4 = self
-        .tcp_builder()
-        .listen_on(listen_on_v4)
-        .connection_count(tcp_conn_count.clone())
-        .build()?;
-      let tcp_proxy_v4_handle = self.runtime_handle.spawn({
-        let cancel_token = cancel_token.child_token();
-        async move {
-          if let Err(e) = tcp_proxy_v4.start(cancel_token).await {
-            error!("TCPv4 proxy stopped: {e}");
-          }
-        }
-      });
-      join_handles.push(tcp_proxy_v4_handle);
-
-      if let Some(listen_on_v6) = listen_on_v6 {
-        let tcp_proxy_v6 = self
+      for &listen_on in &self.listen_sockets {
+        let tcp_proxy = self
           .tcp_builder()
-          .listen_on(listen_on_v6)
-          .connection_count(tcp_conn_count)
+          .listen_on(listen_on)
+          .connection_count(tcp_conn_count.clone())
           .build()?;
-        let tcp_proxy_v6_handle = self.runtime_handle.spawn({
+        let tcp_proxy_handle = self.runtime_handle.spawn({
           let cancel_token = cancel_token.child_token();
           async move {
-            if let Err(e) = tcp_proxy_v6.start(cancel_token).await {
-              error!("TCPv6 proxy stopped: {e}");
-            }
+            tcp_proxy
+              .start(cancel_token)
+              .await
+              .map_err(|e| anyhow::anyhow!("TCP proxy on {listen_on} stopped: {e}"))
           }
         });
-        join_handles.push(tcp_proxy_v6_handle);
+        join_handles.push(tcp_proxy_handle);
       }
     }
 
@@ -206,36 +180,22 @@ impl ProxyService {
     if !self.udp_proxy_mux.is_empty() {
       // connection count will be shared among all UDP proxies
       let udp_conn_count = UdpConnectionCount::<SocketAddr>::default();
-      let udp_proxy_v4 = self
-        .udp_builder()
-        .listen_on(listen_on_v4)
-        .connection_count(udp_conn_count.clone())
-        .build()?;
-      let udp_proxy_v4_handle = self.runtime_handle.spawn({
-        let cancel_token = cancel_token.child_token();
-        async move {
-          if let Err(e) = udp_proxy_v4.start(cancel_token).await {
-            error!("UDPv4 proxy stopped: {e}");
-          }
-        }
-      });
-      join_handles.push(udp_proxy_v4_handle);
-
-      if let Some(listen_on_v6) = listen_on_v6 {
-        let udp_proxy_v6 = self
+      for &listen_on in &self.listen_sockets {
+        let udp_proxy = self
           .udp_builder()
-          .listen_on(listen_on_v6)
-          .connection_count(udp_conn_count)
+          .listen_on(listen_on)
+          .connection_count(udp_conn_count.clone())
           .build()?;
-        let udp_proxy_v6_handle = self.runtime_handle.spawn({
+        let udp_proxy_handle = self.runtime_handle.spawn({
           let cancel_token = cancel_token.child_token();
           async move {
-            if let Err(e) = udp_proxy_v6.start(cancel_token).await {
-              error!("UDPv6 proxy stopped: {e}");
-            }
+            udp_proxy
+              .start(cancel_token)
+              .await
+              .map_err(|e| anyhow::anyhow!("UDP proxy on {listen_on} stopped: {e}"))
           }
         });
-        join_handles.push(udp_proxy_v6_handle);
+        join_handles.push(udp_proxy_handle);
       }
     }
 
@@ -244,10 +204,27 @@ impl ProxyService {
       return Err(anyhow::anyhow!("No proxy service is configured"));
     }
 
-    let _ = futures::future::select_all(join_handles.into_iter()).await;
-    // Kill all spawned services
+    let (result, _, _) = futures::future::select_all(join_handles.into_iter()).await;
     cancel_token.cancel();
-    Ok(())
+    match result {
+      Ok(Ok(())) => Ok(()),
+      Ok(Err(e)) => Err(e),
+      Err(e) => Err(anyhow::anyhow!("Listener task join error: {e}")),
+    }
+  }
+
+  fn build_listen_sockets(config: &Config) -> Vec<SocketAddr> {
+    config
+      .listen_addresses_v4
+      .iter()
+      .map(|addr| SocketAddr::new((*addr).into(), config.listen_port))
+      .chain(
+        config
+          .listen_addresses_v6
+          .iter()
+          .map(|addr| SocketAddr::new((*addr).into(), config.listen_port)),
+      )
+      .collect()
   }
 
   /// Create a TCP proxy builder common for v4 and v6

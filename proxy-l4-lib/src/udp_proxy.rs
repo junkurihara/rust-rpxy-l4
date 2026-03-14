@@ -294,7 +294,7 @@ impl UdpProxy {
               .with_source_context(self.listen_on)
               .with_protocol_context("UDP");
             error!("Error in UDP listener on {}: {contextual_error}", self.listen_on);
-            break;
+            return Err(contextual_error);
           }
           Ok(DownstreamRecvInfo {
             bytes_read,
@@ -337,18 +337,22 @@ impl UdpProxy {
           continue;
         }
       }
-      Ok(()) as Result<(), ProxyError>
     };
 
     tokio::select! {
-      _ = listener_service => {
-        error!("UDP proxy stopped");
+      result = listener_service => {
+        if let Err(ref e) = result {
+          error!("UDP proxy on {} stopped: {e}", self.listen_on);
+        } else {
+          error!("UDP proxy on {} stopped", self.listen_on);
+        }
+        result
       }
       _ = cancel_token.cancelled() => {
         warn!("UDP proxy cancelled");
+        Ok(())
       }
     }
-    Ok(())
   }
 }
 

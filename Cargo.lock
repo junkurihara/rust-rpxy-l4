@@ -1757,6 +1757,7 @@ dependencies = [
  "derive_builder",
  "hickory-resolver",
  "ipnet",
+ "libc",
  "ppp",
  "rand 0.10.0",
  "rpxy-l4-quic-tls",

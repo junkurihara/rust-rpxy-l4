@@ -3,13 +3,13 @@ use crate::{
   constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
   error::ProxyError,
   proto::UdpProtocolType,
-  socket::bind_udp_socket,
+  socket::{bind_udp_socket, udp_pktinfo},
   time_util::get_since_the_epoch,
   trace::*,
   udp_proxy::UdpDestinationInner,
 };
 use std::{
-  net::SocketAddr,
+  net::{IpAddr, SocketAddr},
   sync::{
     Arc, OnceLock,
     atomic::{AtomicU64, Ordering},
@@ -32,12 +32,25 @@ fn init_once_lock() {
 /// DashMap type alias, uses ahash::RandomState as hashbuilder
 type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+/// Key for UDP pseudo-connections scoped by downstream source socket and local destination IP.
+pub(crate) struct UdpFlowKey {
+  pub src_addr: SocketAddr,
+  pub local_ip: IpAddr,
+}
+
+impl UdpFlowKey {
+  pub(crate) fn new(src_addr: SocketAddr, local_ip: IpAddr) -> Self {
+    Self { src_addr, local_ip }
+  }
+}
+
 /* ---------------------------------------------------------- */
 #[derive(Clone)]
 /// Udp connection pool
 pub(crate) struct UdpConnectionPool {
   /// inner hashmap
-  inner: DashMap<SocketAddr, UdpConnection>,
+  inner: DashMap<UdpFlowKey, UdpConnection>,
   /// parent cancel token to cancel all connections
   parent_cancel_token: CancellationToken,
   /// runtime handle
@@ -49,7 +62,7 @@ impl UdpConnectionPool {
   pub(crate) fn new(runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
     init_once_lock();
 
-    let inner: DashMap<SocketAddr, UdpConnection> = DashMap::default();
+    let inner: DashMap<UdpFlowKey, UdpConnection> = DashMap::default();
     Self {
       inner,
       runtime_handle,
@@ -57,9 +70,9 @@ impl UdpConnectionPool {
     }
   }
 
-  /// Get Arc<UdpConnection> by the source address + port
-  pub(crate) fn get(&self, src_addr: &SocketAddr) -> Option<UdpConnection> {
-    self.inner.get(src_addr).map(|arc| arc.value().clone())
+  /// Get Arc<UdpConnection> by the downstream flow key.
+  pub(crate) fn get(&self, flow_key: &UdpFlowKey) -> Option<UdpConnection> {
+    self.inner.get(flow_key).map(|arc| arc.value().clone())
   }
 
   /// Get current connection count for this pool
@@ -75,6 +88,7 @@ impl UdpConnectionPool {
     udp_dst: &UdpDestinationInner,
     protocol: &UdpProtocolType,
     udp_socket_to_downstream: Arc<UdpSocket>,
+    local_ip: IpAddr,
   ) -> Result<UdpConnection, ProxyError> {
     // Connection limit is handled by the caller
 
@@ -84,26 +98,27 @@ impl UdpConnectionPool {
         src_addr,
         udp_dst,
         udp_socket_to_downstream,
+        local_ip,
         self.parent_cancel_token.child_token(),
       )
       .await?,
     );
     let (tx, rx) = mpsc::channel::<Vec<u8>>(UDP_CHANNEL_CAPACITY);
     let new_conn = UdpConnection { tx, inner: conn.clone() };
+    let flow_key = UdpFlowKey::new(*src_addr, local_ip);
 
-    if let Some(old_conn) = self.inner.insert(*src_addr, new_conn.clone()) {
+    if let Some(old_conn) = self.inner.insert(flow_key, new_conn.clone()) {
       warn!("UdpConnection was already existed but overwritten. Should not call create_new_connection() for existing keys.");
       old_conn.inner.cancel_token.cancel(); // cancel the old connection
     }
     // spawn the connection service
     let self_clone = self.clone();
-    let src_addr = *src_addr;
     self.runtime_handle.spawn(async move {
       // Here we are establishing a udp connection. Logging info for the connection as an access log.
       udp_access_log_start(&conn);
       conn.serve(rx, self_clone.runtime_handle.clone()).await;
       // clean up if the connection service is closed, here the connection service was already closed
-      self_clone.remove(&src_addr);
+      self_clone.remove(&flow_key);
       // finish log
       udp_access_log_finish(&conn);
     });
@@ -112,9 +127,9 @@ impl UdpConnectionPool {
     Ok(new_conn)
   }
 
-  /// Remove the entry by the source address + port
-  fn remove(&self, src_addr: &SocketAddr) {
-    self.inner.remove(src_addr);
+  /// Remove the entry by the downstream flow key.
+  fn remove(&self, flow_key: &UdpFlowKey) {
+    self.inner.remove(flow_key);
   }
 
   /// Prune inactive connections
@@ -188,6 +203,10 @@ struct UdpConnectionInner {
   /// Local UdpSocket to send data back to the downstream client
   udp_socket_to_downstream: Arc<UdpSocket>,
 
+  /// Local IP address that the client originally sent to.
+  /// Used with sendmsg + IP_PKTINFO to ensure responses come from the correct source IP.
+  local_ip: IpAddr,
+
   /// Cancel token to cancel the connection service
   cancel_token: CancellationToken,
 
@@ -206,6 +225,7 @@ impl UdpConnectionInner {
     src_addr: &SocketAddr,
     udp_dst: &UdpDestinationInner,
     udp_socket_to_downstream: Arc<UdpSocket>,
+    local_ip: IpAddr,
     cancel_token: CancellationToken,
   ) -> Result<Self, ProxyError> {
     let dst_addr = udp_dst.get_destination(src_addr).await?;
@@ -227,6 +247,7 @@ impl UdpConnectionInner {
       dst_addr,
       udp_socket_to_upstream,
       udp_socket_to_downstream,
+      local_ip,
       cancel_token,
       idle_lifetime,
       last_active,
@@ -326,13 +347,10 @@ impl UdpConnectionInner {
         );
         self.update_last_active();
 
-        let response = udp_buf[..buf_size].to_vec();
+        let response = &udp_buf[..buf_size];
 
-        if let Err(e) = self
-          .udp_socket_to_downstream
-          .send_to(response.as_slice(), self.src_addr)
-          .await
-        {
+        // Use sendmsg with IP_PKTINFO to ensure the response is sent from the correct local IP
+        if let Err(e) = udp_pktinfo::send_msg(&self.udp_socket_to_downstream, response, &self.src_addr, self.local_ip).await {
           error!("Error sending datagram to downstream: {e}");
           return Err(ProxyError::BrokenUdpConnection(String::new()));
         };
@@ -422,7 +440,13 @@ mod tests {
     let protocol = UdpProtocolType::Any;
 
     let _udp_connection = udp_connection_pool
-      .create_new_connection(&src_addr, &udp_dst, &protocol, udp_socket_to_downstream)
+      .create_new_connection(
+        &src_addr,
+        &udp_dst,
+        &protocol,
+        udp_socket_to_downstream,
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+      )
       .await
       .unwrap();
 

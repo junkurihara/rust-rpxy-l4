@@ -3,7 +3,7 @@ use crate::{
   constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
   error::ProxyError,
   proto::UdpProtocolType,
-  socket::{bind_udp_socket, udp_pktinfo},
+  socket::{DownstreamUdpSocket, bind_udp_socket},
   time_util::get_since_the_epoch,
   trace::*,
   udp_proxy::UdpDestinationInner,
@@ -87,7 +87,7 @@ impl UdpConnectionPool {
     src_addr: &SocketAddr,
     udp_dst: &UdpDestinationInner,
     protocol: &UdpProtocolType,
-    udp_socket_to_downstream: Arc<UdpSocket>,
+    udp_socket_to_downstream: Arc<DownstreamUdpSocket>,
     local_ip: IpAddr,
   ) -> Result<UdpConnection, ProxyError> {
     // Connection limit is handled by the caller
@@ -201,10 +201,10 @@ struct UdpConnectionInner {
   udp_socket_to_upstream: Arc<UdpSocket>,
 
   /// Local UdpSocket to send data back to the downstream client
-  udp_socket_to_downstream: Arc<UdpSocket>,
+  udp_socket_to_downstream: Arc<DownstreamUdpSocket>,
 
   /// Local IP address that the client originally sent to.
-  /// Used with sendmsg + IP_PKTINFO to ensure responses come from the correct source IP.
+  /// Used by the downstream socket abstraction to preserve the response source IP.
   local_ip: IpAddr,
 
   /// Cancel token to cancel the connection service
@@ -224,7 +224,7 @@ impl UdpConnectionInner {
     protocol: &UdpProtocolType,
     src_addr: &SocketAddr,
     udp_dst: &UdpDestinationInner,
-    udp_socket_to_downstream: Arc<UdpSocket>,
+    udp_socket_to_downstream: Arc<DownstreamUdpSocket>,
     local_ip: IpAddr,
     cancel_token: CancellationToken,
   ) -> Result<Self, ProxyError> {
@@ -349,8 +349,11 @@ impl UdpConnectionInner {
 
         let response = &udp_buf[..buf_size];
 
-        // Use sendmsg with IP_PKTINFO to ensure the response is sent from the correct local IP
-        if let Err(e) = udp_pktinfo::send_msg(&self.udp_socket_to_downstream, response, &self.src_addr, self.local_ip).await {
+        if let Err(e) = self
+          .udp_socket_to_downstream
+          .send_to(response, &self.src_addr, self.local_ip)
+          .await
+        {
           error!("Error sending datagram to downstream: {e}");
           return Err(ProxyError::BrokenUdpConnection(String::new()));
         };
@@ -436,7 +439,7 @@ mod tests {
     .unwrap();
 
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
-    let udp_socket_to_downstream = Arc::new(UdpSocket::from_std(bind_udp_socket(&socket).unwrap()).unwrap());
+    let udp_socket_to_downstream = Arc::new(DownstreamUdpSocket::bind(&socket).unwrap());
     let protocol = UdpProtocolType::Any;
 
     let _udp_connection = udp_connection_pool

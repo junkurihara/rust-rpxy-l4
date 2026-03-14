@@ -6,7 +6,7 @@ use crate::{
   error::{ProxyBuildError, ProxyError},
   probe::{ProbeResult, UdpInitialDatagrams, UdpProbedProtocol},
   proto::UdpProtocolType,
-  socket::udp_pktinfo,
+  socket::{DownstreamRecvInfo, DownstreamUdpSocket},
   target::{DnsCache, TargetAddr},
   time_util::get_since_the_epoch,
   trace::*,
@@ -16,7 +16,7 @@ use std::{
   net::{IpAddr, SocketAddr},
   sync::{Arc, atomic::AtomicU64},
 };
-use tokio::{net::UdpSocket, sync::mpsc};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Type alias for QUIC destinations
@@ -252,17 +252,15 @@ impl UdpProxy {
   pub async fn start(&self, cancel_token: CancellationToken) -> Result<(), ProxyError> {
     info!("Starting UDP proxy on {}", self.listen_on);
 
-    // Bind the socket with IP_PKTINFO enabled to receive destination address information.
-    // This allows us to know which local IP the client sent the datagram to,
-    // so we can respond from the same IP on multi-homed servers.
-    let udp_socket = UdpSocket::from_std(udp_pktinfo::bind_udp_socket_with_pktinfo(&self.listen_on)?)?;
+    // Bind the downstream socket so we can preserve the local destination IP
+    // that the client originally sent to when replying on multi-homed servers.
+    let udp_socket = Arc::new(DownstreamUdpSocket::bind(&self.listen_on)?);
 
     // Channel to receive incoming datagram from the source
-    let udp_socket_rx = Arc::new(udp_socket);
+    let udp_socket_rx = udp_socket.clone();
 
-    // Shared listening socket for sending responses back to clients.
-    // Source IP is controlled per-datagram via sendmsg + IP_PKTINFO.
-    let udp_socket_tx = Arc::clone(&udp_socket_rx);
+    // Shared downstream socket for sending responses back to clients.
+    let udp_socket_tx = udp_socket;
 
     // Build the UDP connection pool
     let udp_connection_pool = Arc::new(UdpConnectionPool::new(self.runtime_handle.clone(), cancel_token.clone()));
@@ -290,8 +288,7 @@ impl UdpProxy {
     /* ----------------- */
     let listener_service = async {
       loop {
-        // Use recvmsg with IP_PKTINFO to get both source address and local destination IP
-        let (buf_size, src_addr, local_ip) = match udp_pktinfo::recv_msg(&udp_socket_rx, &mut udp_buf).await {
+        let (buf_size, src_addr, local_ip) = match udp_socket_rx.recv(&mut udp_buf).await {
           Err(e) => {
             let contextual_error = ProxyError::IoError(e)
               .with_source_context(self.listen_on)
@@ -299,7 +296,7 @@ impl UdpProxy {
             error!("Error in UDP listener on {}: {contextual_error}", self.listen_on);
             break;
           }
-          Ok(udp_pktinfo::RecvMsgResult {
+          Ok(DownstreamRecvInfo {
             bytes_read,
             src_addr,
             local_ip,
@@ -321,7 +318,15 @@ impl UdpProxy {
         }
 
         // Handle case there is no existing connection
-        debug!("No existing connection for {} -> {}", src_addr, local_ip);
+        debug!(
+          "No existing connection for {src_addr} -> {}:{}",
+          if local_ip.is_ipv6() {
+            format!("[{}]", local_ip)
+          } else {
+            local_ip.to_string()
+          },
+          self.listen_on.port()
+        );
 
         // Buffer the initial datagram with local_ip for correct source address on response
         if let Err(e) = udp_initial_datagrams_tx
@@ -394,7 +399,7 @@ struct UdpInitialDatagramsBufferPool {
   inner: DashMap<UdpFlowKey, UdpInitialDatagrams>,
 
   /// Shared listening socket for sending responses back to clients
-  udp_socket_tx: Arc<UdpSocket>,
+  udp_socket_tx: Arc<DownstreamUdpSocket>,
 
   /// pointer to udp connection pool
   udp_connection_pool: Arc<UdpConnectionPool>,
@@ -414,7 +419,7 @@ struct UdpInitialDatagramsBufferPool {
 
 impl UdpInitialDatagramsBufferPool {
   /// Create a new UdpInitialDatagramsBufferPool
-  fn new((udp_proxy, udp_socket_tx, udp_conn_pool): (&UdpProxy, &Arc<UdpSocket>, &Arc<UdpConnectionPool>)) -> Self {
+  fn new((udp_proxy, udp_socket_tx, udp_conn_pool): (&UdpProxy, &Arc<DownstreamUdpSocket>, &Arc<UdpConnectionPool>)) -> Self {
     Self {
       listen_on: udp_proxy.listen_on,
       inner: DashMap::with_hasher(ahash::RandomState::default()),
@@ -465,7 +470,15 @@ impl UdpInitialDatagramsBufferPool {
               );
               continue;
             }
-            debug!("No existing initial datagram buffer for {} -> {}", src_addr, local_ip);
+            debug!(
+              "No existing initial datagram buffer for {src_addr} -> {}:{}",
+              if local_ip.is_ipv6() {
+                format!("[{}]", local_ip)
+              } else {
+                local_ip.to_string()
+              },
+              self_clone.listen_on.port()
+            );
             UdpInitialDatagrams {
               inner: vec![udp_datagram],
               created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),

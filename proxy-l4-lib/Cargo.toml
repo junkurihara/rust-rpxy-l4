@@ -52,7 +52,7 @@ hickory-resolver = { version = "0.25.2" }
 quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }
 
 [target.'cfg(unix)'.dependencies]
-libc = { version = "0.2.183" }
+libc = { version = "0.2.184" }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.23" }

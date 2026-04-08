@@ -18,8 +18,8 @@ anyhow = { version = "1.0.102" }
 thiserror = { version = "2.0.18" }
 
 # quic parser
-hkdf = { version = "0.12.4" }
-sha2 = { version = "0.10.9" }
+hkdf = { version = "0.13.0" }
+sha2 = { version = "0.11.0" }
 aes = { version = "0.8.4" }
 aes-gcm = { version = "0.10.3" }
 hex-literal = { version = "1.1.0" }
@@ -30,7 +30,7 @@ rand = { version = "0.10.0" }
 base64 = { version = "0.22.1" }
 # Use my own fork of HPKE until the upstream crate is update to support the braking change at RustCrypto crypto-common 0.2.1
 # hpke = { version = "0.14.0-pre.2" }
-hpke = { git = "https://github.com/junkurihara/rust-hpke", rev = "8dd99412cbbb68a8f824442990767b97be232ca4" }
+hpke = { git = "https://github.com/junkurihara/rust-hpke", rev = "bfee2e6898e0540719ed94952b30a9124b1e797e" }
 
 
 [dev-dependencies]

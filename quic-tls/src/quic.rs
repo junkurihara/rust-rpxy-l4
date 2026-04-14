@@ -410,7 +410,7 @@ fn parse_cc_frame(buf: &[u8], ptr: &mut usize) -> Result<(), anyhow::Error> {
 /* ---------------------------------------------------- */
 use aes::{
   Aes128,
-  cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray},
+  cipher::{Array, BlockCipherEncrypt, KeyInit},
 };
 use aes_gcm::{
   Aes128Gcm, Key, Nonce,
@@ -473,9 +473,9 @@ fn unprotect(
 
   // Generate mask for header protection
   let sampled_part = &buf[pn_offset + 4..pn_offset + 20];
-  let mut mask = GenericArray::clone_from_slice(sampled_part);
-  let hp_key = GenericArray::from_slice(protection_values.hp.as_slice());
-  let cipher = Aes128::new(hp_key);
+  let mut mask = Array::try_from(sampled_part).map_err(|e| anyhow!("Failed to create mask ({e})"))?;
+  let hp_key = Array::try_from(protection_values.hp.as_slice()).map_err(|e| anyhow!("Failed to create HP key ({e})"))?;
+  let cipher = Aes128::new(&hp_key);
   cipher.encrypt_block(&mut mask);
   trace!("Header protection mask: {:x?}", mask);
 
@@ -509,12 +509,13 @@ fn unprotect(
     aad: unprotected_header.as_ref(),
     msg: encrypted_part,
   };
-  let key = Key::<Aes128Gcm>::from_slice(protection_values.key.as_slice());
+  let key =
+    Key::<Aes128Gcm>::try_from(protection_values.key.as_slice()).map_err(|e| anyhow!("Failed to create GCM key ({e})"))?;
   let nonce = build_nonce(&protection_values.iv, packet_number);
-  let nonce = Nonce::from_slice(nonce.as_slice());
-  // let nonce = Nonce::from_slice(protection_values.iv.as_slice());
-  let cipher = Aes128Gcm::new(key);
-  let Ok(decrypted) = cipher.decrypt(nonce, payload) else {
+  let nonce = Nonce::try_from(nonce.as_slice()).map_err(|e| anyhow!("Failed to create nonce ({e})"))?;
+  // // let nonce = Nonce::try_from(protection_values.iv.as_slice()).map_err(|_| anyhow!("Failed to create nonce"))?;
+  let cipher = Aes128Gcm::new(&key);
+  let Ok(decrypted) = cipher.decrypt(&nonce, payload) else {
     error!("Failed to decrypt");
     return Err(anyhow!("Failed to decrypt"));
   };
@@ -771,12 +772,12 @@ mod tests {
     ];
     let iv = [0xdd, 0xbc, 0x15, 0xde, 0xa8, 0x09, 0x25, 0xa5, 0x56, 0x86, 0xa7, 0xdf];
 
-    let key = Key::<Aes128Gcm>::from_slice(key.as_slice());
-    let iv = Nonce::from_slice(iv.as_slice());
-    let cipher = Aes128Gcm::new(key);
+    let key = Key::<Aes128Gcm>::try_from(key.as_slice()).unwrap();
+    let iv = Nonce::try_from(iv.as_slice()).unwrap();
+    let cipher = Aes128Gcm::new(&key);
     let decrypted = cipher
       .decrypt(
-        iv,
+        &iv,
         Payload {
           aad: unprotected_header.as_ref(),
           msg: ciphertext.as_ref(),

@@ -30,7 +30,7 @@ rand = { version = "0.10.1" }
 base64 = { version = "0.22.1" }
 # Use my own fork of HPKE until the upstream crate is update to support the braking change at RustCrypto crypto-common 0.2.1
 # hpke = { version = "0.14.0-pre.2" }
-hpke = { git = "https://github.com/junkurihara/rust-hpke", rev = "dbda9943f775b2b96f0e26332501bdae8110201f" }
+hpke = { git = "https://github.com/junkurihara/rust-hpke", rev = "2c91fb460e5857be4a12284f03c76afedc24d541" }
 
 
 [dev-dependencies]

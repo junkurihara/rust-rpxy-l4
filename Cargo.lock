@@ -968,7 +968,7 @@ dependencies = [
 [[package]]
 name = "hpke"
 version = "0.14.0-pre.2"
-source = "git+https://github.com/junkurihara/rust-hpke?rev=dbda9943f775b2b96f0e26332501bdae8110201f#dbda9943f775b2b96f0e26332501bdae8110201f"
+source = "git+https://github.com/junkurihara/rust-hpke?rev=2c91fb460e5857be4a12284f03c76afedc24d541#2c91fb460e5857be4a12284f03c76afedc24d541"
 dependencies = [
  "aead",
  "aes-gcm",

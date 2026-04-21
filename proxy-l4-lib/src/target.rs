@@ -103,9 +103,9 @@ impl DnsCache {
     let mut opts = ResolverOpts::default();
     opts.cache_size = 0; // Disable internal cache since we implement our own
     let resolver = TokioResolver::builder_tokio()
-      .map_err(|e| ProxyError::DnsResolutionError(format!("Failed to create resolver: {}", e)))?
-      .with_options(opts)
-      .build();
+      .map(|builder| builder.with_options(opts).build())
+      .flatten()
+      .map_err(|e| ProxyError::DnsResolutionError(format!("Failed to build resolver: {e}")))?;
 
     trace!("domain: {}", domain);
 

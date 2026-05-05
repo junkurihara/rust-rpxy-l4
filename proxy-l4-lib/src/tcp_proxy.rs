@@ -740,7 +740,15 @@ mod tests {
 
     let found = dst_mux.find_destination(&TcpProbedProtocol::Any).unwrap();
     let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
-    assert!(["1.1.1.1:53".parse().unwrap(), "1.0.0.1:53".parse().unwrap()].contains(&destination));
+    assert!(
+      [
+        "[2606:4700:4700::1111]:53".parse().unwrap(),
+        "[2606:4700:4700::1001]:53".parse().unwrap(),
+        "1.1.1.1:53".parse().unwrap(),
+        "1.0.0.1:53".parse().unwrap()
+      ]
+      .contains(&destination)
+    );
   }
 }
 

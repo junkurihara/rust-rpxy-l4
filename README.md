@@ -375,6 +375,16 @@ TBD!
 
 `rpxy-l4` is free, open-source software licensed under MIT License.
 
-You can open issues for bugs you've found or features you think are missing. You can also submit pull requests to this repository.
+## Security
 
-Contributors are more than welcome!
+If you discover a security vulnerability, **do not open a public Issue**.
+Please use [GitHub's Private vulnerability reporting](../../security/advisories/new) to notify the maintainers.
+
+## Contributing
+
+Contributions are welcome (issues, feature requests, bug reports, pull requests).
+
+Please note that this project is maintained primarily based on the code owner’s personal interests, and not backed by any commercial agreement.
+Contributions are handled on a best-effort basis. Sponsorship is also welcome to help sustain the project.
+
+For more details on contribution guidelines and project scope, please see [CONTRIBUTING.md](./CONTRIBUTING.md).

@@ -20,7 +20,7 @@ bytes = { version = "1.11.1" }
 rand = { version = "0.10.1" }
 
 # Connection pool
-dashmap = { version = "6.1.0" }
+dashmap = { version = "6.2.1" }
 ahash = { version = "0.8.12" }
 
 # proxy protocol (optional)

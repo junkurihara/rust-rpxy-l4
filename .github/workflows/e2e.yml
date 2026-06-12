@@ -2,7 +2,7 @@ name: E2E ECH Tests
 
 on:
   pull_request:
-    branches: [ "e2e-test" ]
+    branches: [ "feature/e2e-test" ]
 
 jobs:
   test-e2e:

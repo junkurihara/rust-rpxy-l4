@@ -13,7 +13,7 @@ echo "Starting E2E ECH Testing..."
 BACKEND_PID=$!
 
 # Start rpxy-l4
-./target/release/rpxy-l4 --config config.toml &
+./target/release/rpxy-l4 --config e2e.config.toml &
 PROXY_PID=$!
 
 sleep 2

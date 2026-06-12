@@ -9,11 +9,11 @@ echo "Starting E2E ECH Testing..."
 # ==========================================
 
 # Start the Backend Server
-./target/release/tlsserver-mio --certs ./examples/server.crt --key ./examples/server.key --verbose http &
+sudo ./target/release/tlsserver-mio --certs ./examples/server.crt --key ./examples/server.key --verbose http &
 BACKEND_PID=$!
 
 # Start rpxy-l4
-./target/release/rpxy-l4 --config e2e.config.toml &
+sudo ./target/release/rpxy-l4 --config e2e.config.toml &
 PROXY_PID=$!
 
 sleep 2
@@ -94,7 +94,7 @@ fi
 # ==========================================
 echo "Cleaning up processes..."
 
-kill $PROXY_PID $BACKEND_PID
+sudo kill $PROXY_PID $BACKEND_PID
 
 # Exit with the test result (0 = GitHub Action Pass, 1 = GitHub Action Fail)
 exit $TEST_RESULT

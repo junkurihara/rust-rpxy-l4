@@ -1,0 +1,45 @@
+name: E2E ECH Tests
+
+on:
+  push:
+    branches: [ "e2e-test" ]
+  pull_request:
+    branches: [ "e2e-test" ]
+
+jobs:
+  test-e2e:
+    name: Run E2E Testing
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "e2e-tests"
+
+      - name: Install tshark
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark
+
+      - name: Build rpxy-l4
+        run: cargo build --release
+
+      - name: Run E2E Test Script
+        run: |
+          chmod +x ./e2e_test.sh
+          ./e2e_test.sh
+
+      - name: Upload Packet Capture on Failure
+        uses: actions/upload-artifact@v4
+        if: failure() 
+        with:
+          name: failed-e2e-capture
+          path: e2e_capture.pcap 
+          retention-days: 3

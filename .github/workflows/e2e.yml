@@ -1,6 +1,8 @@
 name: E2E ECH Tests
 
 on:
+  push:
+    branches: [ "feature/e2e-test" ]
   pull_request:
     branches: [ "feature/e2e-test" ]
 

@@ -18,7 +18,7 @@ PROXY_PID=$!
 
 sleep 2
 
-sudo tshark -i lo -w e2e_capture.pcap -a duration:6 > /dev/null 2>&1 &
+sudo tshark -i lo -w /tmp/e2e_capture.pcap -a duration:6 > /dev/null 2>&1 &
 TSHARK_PID=$!
 
 sleep 1
@@ -39,7 +39,7 @@ set -e
 wait $TSHARK_PID || true
 echo "Capture timer finished. Saved to e2e_capture.pcap."
 
-if [ -f e2e_capture.pcap ]; then
+if [ -f /tmp/e2e_capture.pcap ]; then
     sudo chown $(whoami):$(whoami) e2e_capture.pcap || true
 else
     echo "❌ FATAL: e2e_capture.pcap not found."
@@ -71,7 +71,7 @@ fi
 # Reading the capture packets...
 
 # Check 3: Was the ClientHello sent?
-CLIENT_ECH=$(tshark -r e2e_capture.pcap -Y "tls.handshake.type == 1 && tls.handshake.extension.type == 65037" 2>/dev/null)
+CLIENT_ECH=$(tshark -r /tmp/e2e_capture.pcap -Y "tls.handshake.type == 1 && tls.handshake.extension.type == 65037" 2>/dev/null)
 
 if [ -z "$CLIENT_ECH" ]; then
     echo "❌ FAILED: No ClientHello found. The Client did not send the ECH extension."
@@ -81,7 +81,7 @@ else
 fi
 
 # Check 4: Did the packet reached the backend server?
-SERVER_REPLY=$(tshark -r e2e_capture.pcap -Y "tls.handshake.type == 2" 2>/dev/null)
+SERVER_REPLY=$(tshark -r /tmp/e2e_capture.pcap -Y "tls.handshake.type == 2" 2>/dev/null)
 
 if [ -z "$SERVER_REPLY" ]; then
     echo "❌ FAILED: No ServerHello found. The connection was dropped by the proxy or backend."

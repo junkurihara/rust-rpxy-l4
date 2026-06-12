@@ -41,5 +41,5 @@ jobs:
         if: failure() 
         with:
           name: failed-e2e-capture
-          path: e2e_capture.pcap 
+          path: /tmp/e2e_capture.pcap 
           retention-days: 3

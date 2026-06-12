@@ -36,8 +36,7 @@ set -e
 
 
 # Waiting for tshark to finish up
-wait $TSHARK_PID
-sudo chown $USER:$USER e2e_capture.pcap
+wait $TSHARK_PID || true
 echo "Capture timer finished. Saved to e2e_capture.pcap."
 
 # ----------------- Assertions ----------------- 

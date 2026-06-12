@@ -18,7 +18,7 @@ PROXY_PID=$!
 
 sleep 2
 
-tshark -i lo -w e2e_capture.pcap -a duration:6 > /dev/null 2>&1 &
+sudo tshark -i lo -w e2e_capture.pcap -a duration:6 > /dev/null 2>&1 &
 TSHARK_PID=$!
 
 sleep 1
@@ -37,6 +37,7 @@ set -e
 
 # Waiting for tshark to finish up
 wait $TSHARK_PID
+sudo chown $USER:$USER e2e_capture.pcap
 echo "Capture timer finished. Saved to e2e_capture.pcap."
 
 # ----------------- Assertions ----------------- 

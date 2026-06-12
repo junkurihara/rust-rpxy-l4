@@ -39,6 +39,14 @@ set -e
 wait $TSHARK_PID || true
 echo "Capture timer finished. Saved to e2e_capture.pcap."
 
+if [ -f e2e_capture.pcap ]; then
+    sudo chown $(whoami):$(whoami) e2e_capture.pcap || true
+else
+    echo "❌ FATAL: e2e_capture.pcap not found."
+    sudo kill $PROXY_PID $BACKEND_PID
+    exit 1
+fi
+
 # ----------------- Assertions ----------------- 
 echo "Verifying ECH Acceptance..."
 

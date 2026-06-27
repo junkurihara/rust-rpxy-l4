@@ -91,7 +91,7 @@ else
 fi
 
 # Check 2: Did the proxy successfully decrypt the packet?
-if echo "$CLIENT_OUTPUT" | grep -q "Decryption succeeded" /tmp/proxy.log; then
+if grep -q "Decryption succeeded" /tmp/proxy.log; then
     echo "✅ PASSED: ECH Decryption Succeeded."
 else
     echo "❌ FAILED: ECH Decryption Failed."
@@ -102,7 +102,7 @@ fi
 # Reading the capture packets...
 
 # Check 3: Was the ClientHello sent?
-CLIENT_ECH=$(tshark -r /tmp/e2e_capture.pcap -Y "tls.handshake.type == 1 && tls.handshake.extension.type == 65037" 2>/dev/null) || true
+CLIENT_ECH=$(tshark -r /tmp/e2e_capture.pcap -d tcp.port==8448,tls -Y "tcp.port==8448 && tls.handshake.type == 1 && tls.handshake.extension.type == 65037" 2>/dev/null) || true
 
 if [ -z "$CLIENT_ECH" ]; then
     echo "❌ FAILED: No ClientHello found. The Client did not send the ECH extension."
@@ -112,7 +112,7 @@ else
 fi
 
 # Check 4: Did the packet reached the backend server?
-SERVER_REPLY=$(tshark -r /tmp/e2e_capture.pcap -Y "tls.handshake.type == 2" 2>/dev/null) || true
+SERVER_REPLY=$(tshark -r /tmp/e2e_capture.pcap -d tcp.port==8448,tls -Y "tcp.port==8448 && tls.handshake.type == 2" 2>/dev/null) || true
 
 if [ -z "$SERVER_REPLY" ]; then
     echo "❌ FAILED: No ServerHello found. The connection was dropped by the proxy or backend."

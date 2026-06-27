@@ -48,7 +48,8 @@ use rustls::crypto::hpke::Hpke;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, EchConfigListBytes, ServerName};
 
-const ECH_CONFIG: &str = "ADz+DQA4ugAgACA9U8FCH7vKOFXVCCcAdpUUSfu3rzlooRNflhOXyV0uTwAEAAEAAQAJbG9jYWxob3N0AAA";
+//const ECH_CONFIG: &str = "ADz+DQA4ugAgACA9U8FCH7vKOFXVCCcAdpUUSfu3rzlooRNflhOXyV0uTwAEAAEAAQAJbG9jYWxob3N0AAA";
+const ECH_CONFIG: &str = "AEX+DQBBAQAgACA3tzLigJHNu8j9gnUIH1gdiQdAfoh0LbG/hYn19dSNDQAIAAEAAQABAAMADnB1YmxpYy5leGFtcGxlAAA";
 const LOCAL_SOCK: &str = "127.0.0.1:8448";
 
 fn main() {

@@ -460,6 +460,14 @@ impl Deserialize for TlsClientHello {
       error!("Invalid extensions length: {}", extensions_len);
       return Err(TlsClientHelloError::InvalidExtensionLength);
     }
+    if extensions_len > buf.remaining() {
+      error!(
+        "Extensions length {} exceeds remaining ClientHello body length {}",
+        extensions_len,
+        buf.remaining()
+      );
+      return Err(TlsClientHelloError::InvalidExtensionLength);
+    }
     let mut extensions = Vec::new();
 
     let expected_padding_len = buf.remaining() - extensions_len;
@@ -782,6 +790,64 @@ impl Serialize for ProtocolName {
 mod tests {
   use super::*;
   use crate::serialize::parse;
+
+  fn client_hello_body(extensions_len: u16, extensions: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(40 + extensions.len());
+    body.extend_from_slice(&0x0303u16.to_be_bytes());
+    body.extend_from_slice(&[0u8; 32]);
+    body.push(0); // Empty legacy session ID.
+    body.extend_from_slice(&0u16.to_be_bytes()); // Empty cipher suites.
+    body.push(0); // Empty legacy compression methods.
+    body.extend_from_slice(&extensions_len.to_be_bytes());
+    body.extend_from_slice(extensions);
+    body
+  }
+
+  #[test]
+  fn empty_ech_extension_returns_short_input() {
+    let mut extension = &[0xfe, 0x0d, 0x00, 0x00][..];
+
+    let result = TlsClientHelloExtension::deserialize(&mut extension);
+
+    assert!(matches!(
+      result,
+      Err(TlsClientHelloError::SerDeserError(SerDeserError::ShortInput))
+    ));
+  }
+
+  #[test]
+  fn truncated_ech_outer_extension_returns_short_input() {
+    let mut extension = &[0xfe, 0x0d, 0x00, 0x01, 0x00][..];
+
+    let result = TlsClientHelloExtension::deserialize(&mut extension);
+
+    assert!(matches!(
+      result,
+      Err(TlsClientHelloError::SerDeserError(SerDeserError::ShortInput))
+    ));
+  }
+
+  #[test]
+  fn client_hello_with_empty_ech_extension_is_rejected() {
+    let extensions = [
+      0xfe, 0x0d, 0x00, 0x00, // Empty ECH extension.
+      0x12, 0x34, 0x00, 0x00, // Empty unknown extension.
+    ];
+    let body = client_hello_body(extensions.len() as u16, &extensions);
+    let mut input = body.as_slice();
+
+    assert!(probe_tls_client_hello(&mut input).is_none());
+  }
+
+  #[test]
+  fn oversized_extensions_length_is_rejected() {
+    let body = client_hello_body(8, &[]);
+    let mut input = body.as_slice();
+
+    let result = TlsClientHello::deserialize(&mut input);
+
+    assert!(matches!(result, Err(TlsClientHelloError::InvalidExtensionLength)));
+  }
 
   #[test]
   fn test_serdeser() {

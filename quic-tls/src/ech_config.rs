@@ -577,7 +577,7 @@ mod tests {
 
     let serialized = compose(&ech_config_list).unwrap();
     let buf_base64 = BASE64_STANDARD_NO_PAD.encode(&serialized);
-    println!("ech config list (base64): {}", &buf_base64);
+    println!("ech config list (base64): {}", buf_base64);
 
     let record_bytes = BASE64_STANDARD_NO_PAD.decode(&buf_base64).unwrap();
     println!("ech config list (hex): {:x?}", record_bytes);

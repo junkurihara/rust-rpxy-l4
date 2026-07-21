@@ -71,6 +71,10 @@ impl Deserialize for EncryptedClientHello {
   where
     Self: Sized,
   {
+    if buf.remaining() < 1 {
+      error!("Not enough data as EncryptedClientHello");
+      return Err(SerDeserError::ShortInput.into());
+    }
     let ech_client_hello_type = buf.get_u8();
     match ech_client_hello_type {
       0 => {
@@ -219,5 +223,33 @@ impl Serialize for OuterExtensions {
       buf.put_u16(ext);
     }
     Ok(())
+  }
+}
+
+/* ------------------------------------------- */
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn empty_ech_input_returns_short_input() {
+    let mut input = &[][..];
+
+    let result = EncryptedClientHello::deserialize(&mut input);
+
+    assert!(matches!(
+      result,
+      Err(TlsClientHelloError::SerDeserError(SerDeserError::ShortInput))
+    ));
+  }
+
+  #[test]
+  fn ech_inner_type_is_unchanged() {
+    let mut input = &[0x01][..];
+
+    let result = EncryptedClientHello::deserialize(&mut input).unwrap();
+
+    assert_eq!(result, EncryptedClientHello::Inner);
   }
 }

@@ -18,31 +18,31 @@ proxy-protocol = ["rpxy-l4-lib/proxy-protocol"]
 rpxy-l4-lib = { path = "../proxy-l4-lib", default-features = false }
 
 # error handling
-anyhow = { version = "1.0.102" }
+anyhow = { version = "1.0.104" }
 
 # logging
 tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.23" }
 
 # config
-clap = { version = "4.6.1", features = ["std", "cargo", "wrap_help"] }
-toml = { version = "1.1.2", default-features = false, features = [
+clap = { version = "4.6.3", features = ["std", "cargo", "wrap_help"] }
+toml = { version = "1.1.3", default-features = false, features = [
   "parse",
   "serde",
 ] }
 hot_reload = { version = "0.3.6" }
-serde = { version = "1.0.228", default-features = false, features = [
+serde = { version = "1.0.229", default-features = false, features = [
   "derive",
   "std",
 ] }
 serde_ignored = { version = "0.1.14" }
-async-trait = { version = "0.1.89" }
+async-trait = { version = "0.1.91" }
 
 # memory allocator
 mimalloc = { version = "0.1.52", default-features = false }
 
 # async runtime
-tokio = { version = "1.52.3", default-features = false, features = [
+tokio = { version = "1.53.1", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",
@@ -51,4 +51,4 @@ tokio = { version = "1.52.3", default-features = false, features = [
   "io-util",
 ] }
 tokio-util = { version = "0.7.18", default-features = false }
-futures = { version = "0.3.32", default-features = false, features = ["alloc"] }
+futures = { version = "0.3.33", default-features = false, features = ["alloc"] }

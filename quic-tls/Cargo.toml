@@ -28,7 +28,13 @@ hex-literal = { version = "1.1.0" }
 bytes = { version = "1.12.1" }
 rand = { version = "0.10.2" }
 base64 = { version = "0.22.1" }
-hpke = { version = "0.14.0", features = ["aes", "nistp"] }
+hpke = { version = "0.14.0", default-features = false, features = [
+  "aes",
+  "nistp",
+  "x25519",
+  "alloc",
+  "getrandom",
+] }
 
 [dev-dependencies]
 rustls = { version = "0.23.42" }

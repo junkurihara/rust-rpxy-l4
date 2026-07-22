@@ -154,7 +154,7 @@ fn quick_coalesceable_packet_type(first_byte: &u8, version: &QuicVersion) -> Opt
 /// https://www.rfc-editor.org/rfc/rfc9001.html (QUIC-TLS)
 /// https://www.rfc-editor.org/rfc/rfc9369.html (v2)
 /// https://quic.xargs.org
-/// - First checks if the buffer contains QUIC (coalsceable) packets.
+/// - First checks if the buffer contains QUIC (coalesceable) packets.
 /// - Then derive the header protection key and decrypt the packet.
 ///
 /// We also have to consider coalescing packets in a single UDP datagram.
@@ -245,7 +245,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
       break;
     };
 
-    // So far, the buffer is consistent with a QUIC coalseable packet.
+    // So far, the buffer is consistent with a QUIC coalesceable packet.
     // Now, try to decrypt the packet and check if it is a TLS ClientHello.
     let Ok(unprotected_result) = unprotect(&version, packet, &dcid, packet_number_offset, payload_len) else {
       debug!("invalid to unprotect payload, just continue to parse the next packet");

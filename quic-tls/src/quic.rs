@@ -6,6 +6,8 @@ use crate::{
 use anyhow::anyhow;
 
 const QUIC_VERSION_LEN: usize = 4;
+const QUIC_HP_SAMPLE_OFFSET: usize = 4;
+const QUIC_HP_SAMPLE_LEN: usize = 16;
 
 /* ---------------------------------------------------- */
 /// Is QUIC initial packets contained?
@@ -163,19 +165,32 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
 
   while ptr < udp_datagram.len() {
     // header(1), version(4), DCID length(1), SCID length(1)
-    if udp_datagram[ptr..].len() < 7 {
+    let Some(remaining) = udp_datagram.get(ptr..) else {
+      break;
+    };
+    if remaining.len() < 7 {
       break;
     }
 
     // Packet header byte and version
-    let packet_type_byte = udp_datagram[ptr];
-    ptr += 1;
+    let Some(&packet_type_byte) = udp_datagram.get(ptr) else {
+      break;
+    };
+    let Some(version_start) = ptr.checked_add(1) else {
+      break;
+    };
+    let Some(version_end) = version_start.checked_add(QUIC_VERSION_LEN) else {
+      break;
+    };
     // Version
-    let Some(version) = quic_version(&udp_datagram[ptr..ptr + QUIC_VERSION_LEN]) else {
+    let Some(version_bytes) = udp_datagram.get(version_start..version_end) else {
+      break;
+    };
+    let Some(version) = quic_version(version_bytes) else {
       debug!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
       break;
     };
-    ptr += QUIC_VERSION_LEN;
+    ptr = version_end;
     // 0b1100_[0000] (version 1) 0b1101_[0000] (version 2) - Long header for initial packet type
     // with protected packet number field length ([0000])
     // omitting the protected part.
@@ -194,29 +209,36 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
     let Ok(token_len) = variable_length_int(udp_datagram, &mut ptr) else {
       break;
     };
-    ptr += token_len;
-    if ptr >= udp_datagram.len() {
+    let token_start = ptr;
+    let Some(token_end) = token_start.checked_add(token_len) else {
       break;
-    }
-
-    let token = udp_datagram[ptr - token_len..ptr].to_vec();
+    };
+    let Some(token) = udp_datagram.get(token_start..token_end).map(<[u8]>::to_vec) else {
+      break;
+    };
+    ptr = token_end;
     trace!("Token: {:x?}", &token);
     // Payload length
     let Ok(payload_len) = variable_length_int(udp_datagram, &mut ptr) else {
       break;
     };
 
-    if ptr + payload_len > udp_datagram.len() {
+    let payload_start = ptr;
+    let Some(payload_end) = payload_start.checked_add(payload_len) else {
+      debug!("Payload offset overflow");
+      break;
+    };
+    let Some(payload) = udp_datagram.get(payload_start..payload_end) else {
       debug!("Buffer too short for payload");
       break;
-    }
-    trace!("Payload: {:x?}", &udp_datagram[ptr..ptr + payload_len]);
+    };
+    trace!("Payload: {:x?}", payload);
 
     // So far, the buffer is consistent with a QUIC coalseable packet.
     // Now, try to decrypt the packet and check if it is a TLS ClientHello.
-    let Ok(unprotected_result) = unprotect(&version, udp_datagram, &dcid, ptr, payload_len) else {
+    let Ok(unprotected_result) = unprotect(&version, udp_datagram, &dcid, payload_start, payload_len) else {
       debug!("invalid to unprotect payload, just continue to parse the next packet");
-      ptr += payload_len;
+      ptr = payload_end;
       continue;
     };
     trace!(
@@ -236,7 +258,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
     };
     contained_quic_packets.push(quic_packet);
 
-    ptr += payload_len;
+    ptr = payload_end;
   }
 
   contained_quic_packets
@@ -323,8 +345,11 @@ fn reassemble_crypto_frames(crypto_frames: &[CryptoFrame]) -> Result<ReassembleR
     if frame.frame_offset < offset {
       return Err(anyhow!("Overlapping crypto frames! Invalid QUIC packet"));
     }
+    let next_offset = offset
+      .checked_add(frame.crypto_data_len)
+      .ok_or_else(|| anyhow!("Crypto frame offset overflow"))?;
     reassembled.extend_from_slice(frame.crypto_data);
-    offset += frame.crypto_data_len;
+    offset = next_offset;
   }
 
   Ok(ReassembleResult::CompleteFromGivenFrames(reassembled))
@@ -337,8 +362,8 @@ fn extract_quic_crypto_frames(buf: &[u8]) -> Result<Vec<CryptoFrame<'_>>, anyhow
   let mut ptr = 0;
   let mut crypto_frames = Vec::new();
   while ptr < buf.len() {
-    let frame_type = buf[ptr];
-    ptr += 1;
+    let frame_type = *buf.get(ptr).ok_or_else(|| anyhow!("Buffer too short"))?;
+    ptr = ptr.checked_add(1).ok_or_else(|| anyhow!("Frame offset overflow"))?;
     match frame_type {
       0x06 => {
         let crypto_frame = parse_crypto_frame(buf, &mut ptr)?;
@@ -358,11 +383,11 @@ fn extract_quic_crypto_frames(buf: &[u8]) -> Result<Vec<CryptoFrame<'_>>, anyhow
 fn parse_crypto_frame<'a>(buf: &'a [u8], ptr: &mut usize) -> Result<CryptoFrame<'a>, anyhow::Error> {
   let frame_offset = variable_length_int(buf, ptr)?;
   let crypto_data_len = variable_length_int(buf, ptr)?;
-  if *ptr + crypto_data_len > buf.len() {
-    return Err(anyhow!("Buffer too short"));
-  }
-  let crypto_data = &buf[*ptr..*ptr + crypto_data_len];
-  *ptr += crypto_data_len;
+  let crypto_data_end = ptr
+    .checked_add(crypto_data_len)
+    .ok_or_else(|| anyhow!("Crypto data offset overflow"))?;
+  let crypto_data = buf.get(*ptr..crypto_data_end).ok_or_else(|| anyhow!("Buffer too short"))?;
+  *ptr = crypto_data_end;
 
   let crypto_frame = CryptoFrame {
     frame_offset,
@@ -393,17 +418,14 @@ fn parse_ack_frame(ack_type: u8, buf: &[u8], ptr: &mut usize) -> Result<(), anyh
 // parse connection close frame
 fn parse_cc_frame(buf: &[u8], ptr: &mut usize) -> Result<(), anyhow::Error> {
   let _error_code = variable_length_int(buf, ptr)?;
-  if *ptr >= buf.len() {
-    return Err(anyhow!("Buffer too short"));
-  }
-  let _frame_type = buf[*ptr];
-  *ptr += 1;
+  let _frame_type = *buf.get(*ptr).ok_or_else(|| anyhow!("Buffer too short"))?;
+  *ptr = ptr.checked_add(1).ok_or_else(|| anyhow!("Frame offset overflow"))?;
   let reason_phrase_len = variable_length_int(buf, ptr)?;
-  if *ptr + reason_phrase_len > buf.len() {
-    return Err(anyhow!("Buffer too short"));
-  }
-  let _reason_phrase = &buf[*ptr..*ptr + reason_phrase_len];
-  *ptr += reason_phrase_len;
+  let reason_phrase_end = ptr
+    .checked_add(reason_phrase_len)
+    .ok_or_else(|| anyhow!("Reason phrase offset overflow"))?;
+  let _reason_phrase = buf.get(*ptr..reason_phrase_end).ok_or_else(|| anyhow!("Buffer too short"))?;
+  *ptr = reason_phrase_end;
   Ok(())
 }
 
@@ -466,13 +488,33 @@ fn unprotect(
   pn_offset: usize,
   payload_len: usize,
 ) -> Result<UnprotectionResult, anyhow::Error> {
+  let protected_first_byte = *buf.first().ok_or_else(|| anyhow!("Buffer too short for protected header"))?;
+  let packet_end = pn_offset
+    .checked_add(payload_len)
+    .ok_or_else(|| anyhow!("Packet end offset overflow"))?;
+  if buf.get(..packet_end).is_none() {
+    return Err(anyhow!("Buffer too short for declared packet"));
+  }
+
+  let sample_start = pn_offset
+    .checked_add(QUIC_HP_SAMPLE_OFFSET)
+    .ok_or_else(|| anyhow!("Header protection sample offset overflow"))?;
+  let sample_end = sample_start
+    .checked_add(QUIC_HP_SAMPLE_LEN)
+    .ok_or_else(|| anyhow!("Header protection sample end overflow"))?;
+  if sample_end > packet_end {
+    return Err(anyhow!("Declared packet too short for header protection sample"));
+  }
+  let sampled_part = buf
+    .get(sample_start..sample_end)
+    .ok_or_else(|| anyhow!("Buffer too short for header protection sample"))?;
+
   // Try to decrypt the protected fields
   let Ok(protection_values) = derive_initial_protection_values(version, dcid) else {
     return Err(anyhow!("Failed to derive protection values"));
   };
 
   // Generate mask for header protection
-  let sampled_part = &buf[pn_offset + 4..pn_offset + 20];
   let mut mask = Array::try_from(sampled_part).map_err(|e| anyhow!("Failed to create mask ({e})"))?;
   let hp_key = Array::try_from(protection_values.hp.as_slice()).map_err(|e| anyhow!("Failed to create HP key ({e})"))?;
   let cipher = Aes128::new(&hp_key);
@@ -482,28 +524,61 @@ fn unprotect(
   // Unprotect header protection
   // header protected first byte (2 LSBs (reserved fields are always unset, ignored))
   // For the initial packet, AES_128_GCM is used, and hence mask is derived by AES_ECB
-  let plain_first_byte = buf[0] ^ (mask[0] & 0x0f);
-  let pn_length = (plain_first_byte & 0x0f) as usize + 1;
-  if payload_len < pn_length || pn_offset + pn_length > buf.len() {
+  let plain_first_byte = protected_first_byte ^ (mask[0] & 0x0f);
+  let pn_length = usize::from(plain_first_byte & 0x03) + 1;
+  if payload_len < pn_length {
     return Err(anyhow!("Payload length too short"));
   }
+  let pn_end = pn_offset
+    .checked_add(pn_length)
+    .ok_or_else(|| anyhow!("Packet number offset overflow"))?;
+  if pn_end > packet_end {
+    return Err(anyhow!("Packet number exceeds declared packet"));
+  }
+  let protected_packet_number = buf
+    .get(pn_offset..pn_end)
+    .ok_or_else(|| anyhow!("Buffer too short for packet number"))?;
+  let mask_end = 1usize
+    .checked_add(pn_length)
+    .ok_or_else(|| anyhow!("Packet number mask offset overflow"))?;
+  let packet_number_mask = mask
+    .get(1..mask_end)
+    .ok_or_else(|| anyhow!("Header protection mask too short for packet number"))?;
   trace!("Packet number length: {}", pn_length);
-  let packet_number = &buf[pn_offset..pn_offset + pn_length]
+  let packet_number = protected_packet_number
     .iter()
-    .zip(mask[1..pn_length + 1].iter())
+    .zip(packet_number_mask.iter())
     .map(|(a, b)| a ^ b)
     .collect::<Vec<u8>>();
   trace!("Packet number: {:x?}", packet_number);
 
   // Unprotect packet protection part
-  let encrypted_payload_offset = pn_offset + pn_length;
-  let encrypted_payload_length = payload_len - pn_length;
-  let mut unprotected_header = buf[..encrypted_payload_offset].to_vec();
-  unprotected_header[0] = plain_first_byte;
-  unprotected_header[pn_offset..].copy_from_slice(packet_number);
+  let encrypted_payload_offset = pn_end;
+  let encrypted_payload_length = payload_len
+    .checked_sub(pn_length)
+    .ok_or_else(|| anyhow!("Payload length too short for packet number"))?;
+  let encrypted_payload_end = encrypted_payload_offset
+    .checked_add(encrypted_payload_length)
+    .ok_or_else(|| anyhow!("Encrypted payload offset overflow"))?;
+  if encrypted_payload_end != packet_end {
+    return Err(anyhow!("Encrypted payload does not match declared packet"));
+  }
+  let mut unprotected_header = buf
+    .get(..encrypted_payload_offset)
+    .ok_or_else(|| anyhow!("Buffer too short for QUIC header"))?
+    .to_vec();
+  *unprotected_header
+    .first_mut()
+    .ok_or_else(|| anyhow!("Buffer too short for QUIC header"))? = plain_first_byte;
+  unprotected_header
+    .get_mut(pn_offset..pn_end)
+    .ok_or_else(|| anyhow!("Buffer too short for packet number in header"))?
+    .copy_from_slice(&packet_number);
   trace!("unprotected_header: {:x?}", unprotected_header);
 
-  let encrypted_part = &buf[encrypted_payload_offset..encrypted_payload_offset + encrypted_payload_length];
+  let encrypted_part = buf
+    .get(encrypted_payload_offset..encrypted_payload_end)
+    .ok_or_else(|| anyhow!("Buffer too short for encrypted payload"))?;
   trace!("encrypted_part: {:x?}", encrypted_part);
   let payload = Payload {
     aad: unprotected_header.as_ref(),
@@ -511,7 +586,7 @@ fn unprotect(
   };
   let key =
     Key::<Aes128Gcm>::try_from(protection_values.key.as_slice()).map_err(|e| anyhow!("Failed to create GCM key ({e})"))?;
-  let nonce = build_nonce(&protection_values.iv, packet_number);
+  let nonce = build_nonce(&protection_values.iv, &packet_number);
   let nonce = Nonce::try_from(nonce.as_slice()).map_err(|e| anyhow!("Failed to create nonce ({e})"))?;
   // // let nonce = Nonce::try_from(protection_values.iv.as_slice()).map_err(|_| anyhow!("Failed to create nonce"))?;
   let cipher = Aes128Gcm::new(&key);
@@ -533,6 +608,7 @@ fn unprotect(
 /// NOTE: Since we are "stateless" for the quic connection, and the packet number is not tracked,
 /// we have to assume that the largest packet number acknowledged is 0.
 fn build_nonce(iv: &[u8], pn: &[u8]) -> [u8; 12] {
+  debug_assert!((1..=4).contains(&pn.len()));
   let largest_pn: usize = 0;
   let pn_int = pn.iter().fold(0, |acc, &b| (acc << 8) + b as usize);
   let expected_pn = largest_pn + 1;
@@ -557,21 +633,29 @@ fn build_nonce(iv: &[u8], pn: &[u8]) -> [u8; 12] {
 /* ---------------------------------------------------- */
 fn dcid_scid(buf: &[u8], ptr: &mut usize) -> Result<(Vec<u8>, Vec<u8>), anyhow::Error> {
   // DCID length
-  let dcid_len = buf[*ptr] as usize;
-  *ptr += 1 + dcid_len;
-  if *ptr >= buf.len() {
-    return Err(anyhow!("Buffer too short"));
-  }
-  let dcid = buf[*ptr - dcid_len..*ptr].to_vec();
+  let dcid_len = usize::from(*buf.get(*ptr).ok_or_else(|| anyhow!("Buffer too short"))?);
+  let dcid_start = ptr.checked_add(1).ok_or_else(|| anyhow!("DCID offset overflow"))?;
+  let dcid_end = dcid_start
+    .checked_add(dcid_len)
+    .ok_or_else(|| anyhow!("DCID end offset overflow"))?;
+  let dcid = buf
+    .get(dcid_start..dcid_end)
+    .ok_or_else(|| anyhow!("Buffer too short for DCID"))?
+    .to_vec();
+  *ptr = dcid_end;
   trace!("DCID: {:x?}", dcid);
 
   // SCID length
-  let scid_len = buf[*ptr] as usize;
-  *ptr += 1 + scid_len;
-  if *ptr >= buf.len() {
-    return Err(anyhow!("Buffer too short"));
-  }
-  let scid = buf[*ptr - scid_len..*ptr].to_vec();
+  let scid_len = usize::from(*buf.get(*ptr).ok_or_else(|| anyhow!("Buffer too short"))?);
+  let scid_start = ptr.checked_add(1).ok_or_else(|| anyhow!("SCID offset overflow"))?;
+  let scid_end = scid_start
+    .checked_add(scid_len)
+    .ok_or_else(|| anyhow!("SCID end offset overflow"))?;
+  let scid = buf
+    .get(scid_start..scid_end)
+    .ok_or_else(|| anyhow!("Buffer too short for SCID"))?
+    .to_vec();
+  *ptr = scid_end;
   trace!("SCID: {:x?}", scid);
 
   Ok((dcid, scid))
@@ -632,20 +716,24 @@ fn derive_initial_protection_values(version: &QuicVersion, dcid: &[u8]) -> Resul
 /// https://www.rfc-editor.org/rfc/rfc9000.html#integer-encoding
 #[inline]
 fn variable_length_int(buf: &[u8], pos: &mut usize) -> Result<usize, anyhow::Error> {
-  let two_msb = buf[*pos] >> 6;
-  let len = 1 << two_msb;
-  if *pos + len > buf.len() {
+  let start = *pos;
+  let first = *buf.get(start).ok_or_else(|| anyhow!("Buffer too short"))?;
+  let len = 1usize << (first >> 6);
+  let end = start
+    .checked_add(len)
+    .ok_or_else(|| anyhow!("Variable-length integer offset overflow"))?;
+  let encoded = buf.get(start..end).ok_or_else(|| {
     debug!("buffer too short as variable-length integer");
-    return Err(anyhow!("Buffer too short"));
-  }
-  let mut val = (buf[*pos] as usize) & 0x3f;
-  *pos += 1;
-  for _ in 1..len {
-    val = (val << 8) + (buf[*pos] as usize);
-    *pos += 1;
-  }
+    anyhow!("Buffer too short")
+  })?;
+  let value = encoded.iter().enumerate().fold(0u64, |acc, (index, byte)| {
+    let byte = if index == 0 { byte & 0x3f } else { *byte };
+    (acc << 8) | u64::from(byte)
+  });
+  let value = usize::try_from(value).map_err(|_| anyhow!("Variable-length integer does not fit in usize"))?;
+  *pos = end;
 
-  Ok(val)
+  Ok(value)
 }
 
 /* ---------------------------------------------------- */
@@ -715,16 +803,121 @@ mod tests {
     let mut pos = 0;
     let val = variable_length_int(&buf, &mut pos).unwrap();
     assert_eq!(val, 494_878_333);
+    assert_eq!(pos, 4);
 
     let buf = hex_literal::hex!("7bbd");
     let mut pos = 0;
     let val = variable_length_int(&buf, &mut pos).unwrap();
     assert_eq!(val, 15_293);
+    assert_eq!(pos, 2);
 
     let buf = hex_literal::hex!("25");
     let mut pos = 0;
     let val = variable_length_int(&buf, &mut pos).unwrap();
     assert_eq!(val, 37);
+    assert_eq!(pos, 1);
+  }
+
+  #[test]
+  fn test_variable_length_int_rejects_invalid_bounds() {
+    let cases = [
+      (Vec::new(), 0),
+      (vec![0x00], 1),
+      (vec![0x00], 2),
+      (vec![0x40], 0),
+      (vec![0x80, 0x00, 0x00], 0),
+      (vec![0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 0),
+    ];
+
+    for (buf, initial_pos) in cases {
+      let mut pos = initial_pos;
+      assert!(variable_length_int(&buf, &mut pos).is_err());
+      assert_eq!(pos, initial_pos);
+    }
+  }
+
+  #[test]
+  fn test_rejects_short_header_protection_sample_c2() {
+    let packet = hex_literal::hex!("c0000000010000000400000000");
+
+    assert!(probe_quic_packets(&packet).is_empty());
+    assert!(matches!(
+      probe_quic_initial_packets(&[packet.to_vec()]),
+      Err(TlsProbeFailure::Failure)
+    ));
+  }
+
+  #[test]
+  fn test_header_protection_sample_boundaries() {
+    let one_byte_short = vec![0; 20];
+    assert!(unprotect(&QuicVersion::V1, &one_byte_short, &[], 1, 19).is_err());
+
+    let exact_sample = vec![0; 21];
+    assert!(unprotect(&QuicVersion::V1, &exact_sample, &[], 1, 20).is_err());
+
+    let sample_outside_declared_packet = vec![0; 21];
+    assert!(unprotect(&QuicVersion::V1, &sample_outside_declared_packet, &[], 1, 19).is_err());
+  }
+
+  #[test]
+  fn test_packet_number_low_nibble_corpus_c3() {
+    for low_nibble in 0..=0x0f {
+      let mut packet = vec![0; 29];
+      packet[0] = 0xc0 | low_nibble;
+      packet[4] = 0x01;
+      packet[8] = 0x14;
+
+      assert!(probe_quic_packets(&packet).is_empty(), "low nibble {low_nibble:#x}");
+    }
+  }
+
+  #[test]
+  fn test_empty_frame_bodies_h1() {
+    for payload in [[0x06], [0x02], [0x03], [0x1c]] {
+      assert!(extract_quic_crypto_frames(&payload).is_err(), "frame type {:#x}", payload[0]);
+    }
+  }
+
+  #[test]
+  fn test_unprotected_frame_failure_mapping_h1() {
+    let packet = QuicPacket {
+      version: QuicVersion::V1,
+      packet_type: QuicCoalesceablePacketType::Initial,
+      dcid: Vec::new(),
+      scid: Vec::new(),
+      token: Vec::new(),
+      header: Vec::new(),
+      packet_number: vec![0],
+      payload: vec![0x06],
+    };
+
+    assert!(matches!(
+      probe_quic_unprotected_frames(&[packet]),
+      Err(TlsProbeFailure::Failure)
+    ));
+  }
+
+  #[test]
+  fn test_checked_frame_ranges() {
+    assert!(extract_quic_crypto_frames(&[0x06, 0x00, 0x01]).is_err());
+    let crypto_frames = extract_quic_crypto_frames(&[0x06, 0x00, 0x01, 0xaa]).unwrap();
+    assert_eq!(crypto_frames.len(), 1);
+    assert_eq!(crypto_frames[0].crypto_data, &[0xaa]);
+
+    assert!(extract_quic_crypto_frames(&[0x1c, 0x00, 0x00, 0x01]).is_err());
+    assert!(extract_quic_crypto_frames(&[0x1c, 0x00, 0x00, 0x01, 0xaa]).is_ok());
+  }
+
+  #[test]
+  fn test_dcid_scid_checked_ranges() {
+    let mut ptr = 0;
+    let (dcid, scid) = dcid_scid(&[0x01, 0xaa, 0x00], &mut ptr).unwrap();
+    assert_eq!(dcid, [0xaa]);
+    assert!(scid.is_empty());
+    assert_eq!(ptr, 3);
+
+    let mut ptr = 0;
+    assert!(dcid_scid(&[0x01, 0xaa], &mut ptr).is_err());
   }
 
   #[test]

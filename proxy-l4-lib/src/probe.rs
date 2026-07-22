@@ -285,10 +285,13 @@ impl UdpProbedProtocol {
       initial_datagrams
         .probed_as_pollnext
         .iter()
-        .map(|p| match p {
-          UdpProbedProtocol::Wireguard => detect_wireguard,
-          UdpProbedProtocol::Quic(_) => detect_quic_initial,
-          _ => unreachable!(),
+        .filter_map(|p| match p {
+          UdpProbedProtocol::Wireguard => Some(detect_wireguard as fn(&mut UdpInitialDatagrams) -> ProbeResult<_>),
+          UdpProbedProtocol::Quic(_) => Some(detect_quic_initial),
+          UdpProbedProtocol::Any => {
+            warn!("Ignoring unexpected Any protocol in UDP poll-next candidates");
+            None
+          }
         })
         .collect()
     };
@@ -413,5 +416,19 @@ mod tests {
     };
 
     assert_eq!(detect_wireguard(&mut initial_datagrams_invalid), ProbeResult::Failure);
+  }
+
+  #[tokio::test]
+  async fn test_unexpected_any_pollnext_candidate_falls_back_to_any() {
+    let mut initial_datagrams = UdpInitialDatagrams {
+      inner: vec![vec![0]],
+      created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+      probed_as_pollnext: HashSet::from([UdpProbedProtocol::Any]),
+    };
+
+    assert_eq!(
+      UdpProbedProtocol::detect_protocol(&mut initial_datagrams).await.unwrap(),
+      ProbeResult::Success(UdpProbedProtocol::Any)
+    );
   }
 }

@@ -392,6 +392,32 @@ async fn connection_pruner_service(
 /// DashMap type alias, uses ahash::RandomState as hashbuilder
 type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 
+fn apply_udp_probe_result(
+  buffers: &DashMap<UdpFlowKey, UdpInitialDatagrams>,
+  flow_key: UdpFlowKey,
+  initial_datagrams: UdpInitialDatagrams,
+  probe_result: ProbeResult<UdpProbedProtocol>,
+) -> Option<(UdpProbedProtocol, UdpInitialDatagrams)> {
+  match probe_result {
+    ProbeResult::Success(protocol) => {
+      buffers.remove(&flow_key);
+      Some((protocol, initial_datagrams))
+    }
+    ProbeResult::PollNext => {
+      buffers.insert(flow_key, initial_datagrams);
+      None
+    }
+    ProbeResult::Failure => {
+      buffers.remove(&flow_key);
+      warn!(
+        "UDP protocol detector returned unexpected Failure state for {} -> {}; dropping buffered flow",
+        flow_key.src_addr, flow_key.local_ip
+      );
+      None
+    }
+  }
+}
+
 #[derive(Clone)]
 /// Temporary buffer pool of initial UDP datagrams dispatched from each clients.
 /// This is used to buffer the initial datagrams of each client, probe the destination, and then establish a UDP connection.
@@ -499,19 +525,13 @@ impl UdpInitialDatagramsBufferPool {
         }) else {
           continue;
         };
-        let probed_protocol = match probe_result {
-          ProbeResult::Success(protocol) => protocol,
-          ProbeResult::PollNext => {
-            // add the datagram buffer back to the buffer pool
-            self_clone.inner.insert(flow_key, initial_datagrams);
-            continue;
-          }
-          ProbeResult::Failure => unreachable!(),
+        let Some((probed_protocol, initial_datagrams)) =
+          apply_udp_probe_result(&self_clone.inner, flow_key, initial_datagrams, probe_result)
+        else {
+          continue;
         };
 
-        // Delete entry from the buffer pool
         debug!("Release the datagram buffer for {} -> {}", src_addr, local_ip);
-        self_clone.inner.remove(&flow_key);
 
         let Ok(found_dst) = self_clone.destination_mux.find_destination(&probed_protocol).map_err(|e| {
           let contextual_error = e
@@ -571,5 +591,60 @@ impl UdpInitialDatagramsBufferPool {
     });
 
     tx
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn initial_datagrams() -> UdpInitialDatagrams {
+    UdpInitialDatagrams {
+      inner: vec![vec![0]],
+      created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+      probed_as_pollnext: Default::default(),
+    }
+  }
+
+  #[test]
+  fn test_udp_probe_failure_removes_buffered_flow() {
+    let buffers: DashMap<UdpFlowKey, UdpInitialDatagrams> = DashMap::default();
+    let flow_key = UdpFlowKey::new("127.0.0.1:45000".parse().unwrap(), "127.0.0.1".parse().unwrap());
+    buffers.insert(flow_key, initial_datagrams());
+
+    let result = apply_udp_probe_result(&buffers, flow_key, initial_datagrams(), ProbeResult::Failure);
+
+    assert!(result.is_none());
+    assert!(!buffers.contains_key(&flow_key));
+  }
+
+  #[test]
+  fn test_udp_probe_pollnext_preserves_buffered_flow() {
+    let buffers: DashMap<UdpFlowKey, UdpInitialDatagrams> = DashMap::default();
+    let flow_key = UdpFlowKey::new("127.0.0.1:45000".parse().unwrap(), "127.0.0.1".parse().unwrap());
+
+    let result = apply_udp_probe_result(&buffers, flow_key, initial_datagrams(), ProbeResult::PollNext);
+
+    assert!(result.is_none());
+    assert!(buffers.contains_key(&flow_key));
+  }
+
+  #[test]
+  fn test_udp_probe_success_returns_initial_datagrams() {
+    let buffers: DashMap<UdpFlowKey, UdpInitialDatagrams> = DashMap::default();
+    let flow_key = UdpFlowKey::new("127.0.0.1:45000".parse().unwrap(), "127.0.0.1".parse().unwrap());
+    buffers.insert(flow_key, initial_datagrams());
+
+    let (protocol, datagrams) = apply_udp_probe_result(
+      &buffers,
+      flow_key,
+      initial_datagrams(),
+      ProbeResult::Success(UdpProbedProtocol::Any),
+    )
+    .unwrap();
+
+    assert_eq!(protocol, UdpProbedProtocol::Any);
+    assert_eq!(datagrams.inner, vec![vec![0]]);
+    assert!(!buffers.contains_key(&flow_key));
   }
 }

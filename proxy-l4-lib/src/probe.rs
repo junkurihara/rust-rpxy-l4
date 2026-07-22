@@ -1,10 +1,7 @@
 use crate::{constants::TCP_PROTOCOL_DETECTION_BUFFER_SIZE, error::ProxyError, trace::*};
 use bytes::BytesMut;
 use quic_tls::{TlsClientHello, TlsClientHelloBuffer, TlsProbeFailure, probe_quic_initial_packets, probe_tls_handshake};
-use std::{
-  collections::HashSet,
-  sync::{Arc, atomic::AtomicU64},
-};
+use std::collections::HashSet;
 use tokio::{io::AsyncReadExt, net::TcpStream};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -219,13 +216,10 @@ impl std::fmt::Display for UdpProbedProtocol {
   }
 }
 
-#[derive(Clone)]
 /// UDP initial datagrams buffer for protocol detection
 pub(crate) struct UdpInitialDatagrams {
   /// inner buffer of multiple UDP datagram payloads
   pub(crate) inner: Vec<Vec<u8>>,
-  /// created at
-  pub(crate) created_at: Arc<AtomicU64>,
   /// Protocols that were detected as 'poll_next'
   pub(crate) probed_as_pollnext: HashSet<UdpProbedProtocol>,
 }
@@ -317,7 +311,6 @@ impl UdpProbedProtocol {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::time_util::get_monotonic_seconds;
 
   #[test]
   fn test_ssh_detection() {
@@ -398,7 +391,6 @@ mod tests {
 
     let mut initial_datagrams = UdpInitialDatagrams {
       inner: vec![wg_data],
-      created_at: Arc::new(AtomicU64::new(get_monotonic_seconds())),
       probed_as_pollnext: Default::default(),
     };
 
@@ -411,7 +403,6 @@ mod tests {
     let invalid_wg = vec![0u8; 100]; // Wrong length
     let mut initial_datagrams_invalid = UdpInitialDatagrams {
       inner: vec![invalid_wg],
-      created_at: Arc::new(AtomicU64::new(get_monotonic_seconds())),
       probed_as_pollnext: Default::default(),
     };
 
@@ -422,7 +413,6 @@ mod tests {
   async fn test_unexpected_any_pollnext_candidate_falls_back_to_any() {
     let mut initial_datagrams = UdpInitialDatagrams {
       inner: vec![vec![0]],
-      created_at: Arc::new(AtomicU64::new(get_monotonic_seconds())),
       probed_as_pollnext: HashSet::from([UdpProbedProtocol::Any]),
     };
 

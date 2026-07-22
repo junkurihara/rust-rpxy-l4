@@ -76,12 +76,12 @@ async fn entrypoint(
     .get()
     .ok_or(anyhow::anyhow!("Something wrong in config reloader receiver"))?;
 
-  let tcp_connection_count = TcpConnectionCount::default();
-  let udp_admission_count = TcpConnectionCount::default();
+  let tcp_admission_count = AdmissionCount::default();
+  let udp_admission_count = AdmissionCount::default();
   let mut proxy_service = ProxyService::try_new(
     &config_toml,
     runtime_handle.clone(),
-    tcp_connection_count.clone(),
+    tcp_admission_count.clone(),
     udp_admission_count.clone(),
   )?;
 
@@ -107,7 +107,7 @@ async fn entrypoint(
         match ProxyService::try_new(
           &new_config_toml,
           runtime_handle.clone(),
-          tcp_connection_count.clone(),
+          tcp_admission_count.clone(),
           udp_admission_count.clone(),
         ) {
           Ok(new_proxy_service) => {
@@ -136,8 +136,8 @@ struct ProxyService {
   tcp_backlog: Option<u32>,
   tcp_max_connections: Option<u32>,
   udp_max_connections: Option<u32>,
-  tcp_connection_count: TcpConnectionCount,
-  udp_admission_count: TcpConnectionCount,
+  tcp_admission_count: AdmissionCount,
+  udp_admission_count: AdmissionCount,
   #[cfg(feature = "proxy-protocol")]
   tcp_recv_proxy_protocol: bool,
   #[cfg(feature = "proxy-protocol")]
@@ -151,8 +151,8 @@ impl ProxyService {
   fn try_new(
     config_toml: &ConfigToml,
     runtime_handle: tokio::runtime::Handle,
-    tcp_connection_count: TcpConnectionCount,
-    udp_admission_count: TcpConnectionCount,
+    tcp_admission_count: AdmissionCount,
+    udp_admission_count: AdmissionCount,
   ) -> Result<Self, anyhow::Error> {
     let config = Config::try_from(config_toml.clone())?;
     let (tcp_proxy_mux, udp_proxy_mux) = build_multiplexers(&config)?;
@@ -163,7 +163,7 @@ impl ProxyService {
       tcp_backlog: config.tcp_backlog,
       tcp_max_connections: config.tcp_max_connections,
       udp_max_connections: config.udp_max_connections,
-      tcp_connection_count,
+      tcp_admission_count,
       udp_admission_count,
       #[cfg(feature = "proxy-protocol")]
       tcp_recv_proxy_protocol: config.tcp_recv_proxy_protocol,
@@ -253,7 +253,7 @@ impl ProxyService {
     let mut tcp_proxy_builder = TcpProxyBuilder::default();
     tcp_proxy_builder
       .destination_mux(self.tcp_proxy_mux.clone())
-      .connection_count(self.tcp_connection_count.clone())
+      .connection_count(self.tcp_admission_count.clone())
       .runtime_handle(self.runtime_handle.clone());
     if let Some(tcp_backlog) = self.tcp_backlog {
       tcp_proxy_builder.backlog(tcp_backlog);

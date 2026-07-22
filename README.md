@@ -55,7 +55,13 @@ To build without the PROXY protocol feature:
 
 You can find the Jenkins CI/CD build scripts for `rpxy-l4` in the [./.build](./.build) directory.
 
-Prebuilt packages for Linux RPM and DEB are available at [https://rpxy.gamerboy59.dev](https://rpxy.gamerboy59.dev), provided by [@Gamerboy59](https://github.com/Gamerboy59).
+<details>
+<summary> Prebuilt packages </summary>
+
+> [!WARNING]
+> Prebuilt packages for Linux RPM and DEB are available at [https://rpxy.gamerboy59.dev](https://rpxy.gamerboy59.dev), provided by [@Gamerboy59](https://github.com/Gamerboy59).
+> However, these packages are built and distributed by a third party, and they may lag behind the latest release of `rpxy-l4`, sometimes by several versions. Since new releases often include security-related fixes and improvements, please check the packaged version before installation. To always run the latest release, use the prebuilt binaries on the [GitHub Releases page](https://github.com/junkurihara/rust-rpxy-l4/releases) or the docker image (see below).
+</details>
 
 ## Usage
 

@@ -420,8 +420,9 @@ mod tests {
     assert_eq!(public_name2, "different.example.com");
     assert_ne!(public_name1, public_name2);
 
-    // Verify different config IDs (should be random)
-    assert_ne!(config1.config_id(), config2.config_id());
+    // Random config IDs may legitimately collide across independent generations.
+    assert_eq!(config1.config_id(), keys1.first().unwrap().config_id());
+    assert_eq!(config2.config_id(), keys2.first().unwrap().config_id());
 
     // Test that keys can be combined
     let mut combined_keys = keys1;

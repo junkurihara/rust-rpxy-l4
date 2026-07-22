@@ -42,7 +42,7 @@ tokio = { version = "1.53.1", default-features = false, features = [
   "macros",
   "io-util",
 ] }
-tokio-util = { version = "0.7.18", default-features = false }
+tokio-util = { version = "0.7.19", default-features = false }
 
 # network
 socket2 = { version = "0.6.5", features = ["all"] }
@@ -52,7 +52,7 @@ hickory-resolver = { version = "0.26.1" }
 quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }
 
 [target.'cfg(unix)'.dependencies]
-libc = { version = "0.2.186" }
+libc = { version = "0.2.189" }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.23" }

@@ -424,18 +424,19 @@ impl EchProtocolConfig {
       .iter()
       .map(|s| {
         let target_addr = if s.contains(':') {
-          TargetAddr::from_str(s).unwrap_or_else(|_| {
-            panic!("Invalid target address: {s}. It should be in the format of <ip>:<port> or <domain>:<port>")
-          })
+          TargetAddr::from_str(s)
         } else {
-          TargetAddr::from_str(&format!("{s}:{listen_port}")).unwrap_or_else(|_| {
-            panic!("Invalid target address: {s}. It should be in the format of <ip>:<port> or <domain>:<port>")
-          })
-        };
+          TargetAddr::from_str(&format!("{s}:{listen_port}"))
+        }
+        .map_err(|_| {
+          ProxyBuildError::InvalidEchPrivateServerName(format!(
+            "Invalid target address: {s}. It should be in the format of <ip>:<port> or <domain>:<port>"
+          ))
+        })?;
         let domain_or_ip = target_addr.domain_or_ip();
-        (domain_or_ip, target_addr)
+        Ok((domain_or_ip, target_addr))
       })
-      .collect();
+      .collect::<Result<ahash::HashMap<_, _>, ProxyBuildError>>()?;
 
     Ok(Self {
       private_keys,
@@ -448,6 +449,19 @@ impl EchProtocolConfig {
 mod tests {
   use super::*;
   use std::collections::HashMap;
+
+  const TEST_ECH_CONFIG_LIST: &str =
+    "AEX+DQBBAQAgACA3tzLigJHNu8j9gnUIH1gdiQdAfoh0LbG/hYn19dSNDQAIAAEAAQABAAMADnB1YmxpYy5leGFtcGxlAAA";
+  const TEST_ECH_PRIVATE_KEY: &str = "lxBu3rEvZXL5RoCWP8LrXMxx10su+YEyEGdxmpiEnIM";
+
+  fn create_ech_protocol_config(private_server_names: &[&str]) -> Result<EchProtocolConfig, ProxyBuildError> {
+    EchProtocolConfig::try_new(
+      TEST_ECH_CONFIG_LIST,
+      &[TEST_ECH_PRIVATE_KEY.to_string()],
+      &private_server_names.iter().map(|name| name.to_string()).collect::<Vec<_>>(),
+      &8443,
+    )
+  }
 
   #[test]
   fn test_validate_basic_config() {
@@ -680,6 +694,41 @@ mod tests {
       private_server_names: Default::default(),
     };
     assert!(validate_ech_config(&ech_config_empty_names, "test").is_err());
+  }
+
+  #[test]
+  fn test_ech_private_server_name_with_invalid_explicit_port_returns_error() {
+    let error =
+      create_ech_protocol_config(&["private.example:not-a-port"]).expect_err("invalid explicit port must return an error");
+    let message = error.to_string();
+
+    assert!(matches!(error, ProxyBuildError::InvalidEchPrivateServerName(_)));
+    assert!(message.contains("private.example:not-a-port"));
+  }
+
+  #[test]
+  fn test_ech_private_server_name_without_port_returns_error_for_invalid_name() {
+    let error =
+      create_ech_protocol_config(&["invalid private name"]).expect_err("invalid implicit-port name must return an error");
+    let message = error.to_string();
+
+    assert!(matches!(error, ProxyBuildError::InvalidEchPrivateServerName(_)));
+    assert!(message.contains("invalid private name"));
+  }
+
+  #[test]
+  fn test_ech_private_server_names_preserve_explicit_and_default_ports() {
+    let config =
+      create_ech_protocol_config(&["private.example:9443", "127.0.0.1"]).expect("valid private server names must be accepted");
+
+    assert_eq!(
+      config.private_server_names.get("private.example").map(ToString::to_string),
+      Some("private.example:9443".to_string())
+    );
+    assert_eq!(
+      config.private_server_names.get("127.0.0.1").map(ToString::to_string),
+      Some("127.0.0.1:8443".to_string())
+    );
   }
 
   #[cfg(feature = "proxy-protocol")]

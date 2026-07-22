@@ -5,6 +5,7 @@ mod config;
 mod log;
 
 use crate::{config::parse_opts, log::*};
+use anyhow::Context;
 use config::{ConfigToml, ConfigTomlReloader};
 use hot_reload::{ReloaderReceiver, ReloaderService};
 use rpxy_l4_lib::*;
@@ -18,45 +19,50 @@ pub(crate) const ACCESS_LOG_FILE: &str = "access.log";
 pub(crate) const SYSTEM_LOG_FILE: &str = "rpxy-l4.log";
 
 fn main() {
+  if let Err(error) = run() {
+    eprintln!("rpxy-l4 failed: {error:#}");
+    std::process::exit(1);
+  }
+}
+
+fn run() -> Result<(), anyhow::Error> {
   let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
   runtime_builder.enable_all();
   runtime_builder.thread_name("rpxy-l4");
-  let runtime = runtime_builder.build().unwrap();
+  let runtime = runtime_builder.build()?;
 
-  runtime.block_on(async {
-    let Ok(parsed_opts) = parse_opts() else {
-      error!("Invalid toml file");
-      std::process::exit(1);
-    };
-    init_logger(parsed_opts.log_dir_path.as_deref());
+  runtime.block_on(run_service(runtime.handle().clone()))
+}
 
-    info!("Starting rpxy for layer 4");
+async fn run_service(runtime_handle: tokio::runtime::Handle) -> Result<(), anyhow::Error> {
+  let parsed_opts = parse_opts()?;
+  init_logger(parsed_opts.log_dir_path.as_deref())?;
 
-    // config service watches the service config file.
-    // if the base service config file is updated, the  entrypoint will be restarted.
-    let (config_service, config_rx) = ReloaderService::<ConfigTomlReloader, ConfigToml, String>::with_delay(
-      &parsed_opts.config_file_path,
-      CONFIG_WATCH_DELAY_SECS,
-    )
-    .await
-    .unwrap();
+  info!("Starting rpxy for layer 4");
 
-    tokio::select! {
-      config_res = config_service.start() => {
-        if let Err(e) = config_res {
-          error!("config reloader service exited: {e}");
-          std::process::exit(1);
-        }
-      }
-      res = entrypoint(config_rx, runtime.handle().clone()) => {
-        if let Err(e) = res {
-          error!("Service exited: {e}");
-          std::process::exit(1);
-        }
-      }
+  // config service watches the service config file.
+  // if the base service config file is updated, the  entrypoint will be restarted.
+  let (config_service, config_rx) =
+    ReloaderService::<ConfigTomlReloader, ConfigToml, String>::with_delay(&parsed_opts.config_file_path, CONFIG_WATCH_DELAY_SECS)
+      .await
+      .context("Failed to initialize configuration reloader")?;
+
+  tokio::select! {
+    config_res = config_service.start() => {
+      config_res.map_err(|error| {
+        let error = anyhow::Error::new(error).context("Configuration reloader service exited");
+        error!("{error:#}");
+        error
+      })
     }
-    std::process::exit(0);
-  });
+    result = entrypoint(config_rx, runtime_handle) => {
+      result.map_err(|error| {
+        let error = error.context("Service exited");
+        error!("{error:#}");
+        error
+      })
+    }
+  }
 }
 
 /// Entrypoint for the service

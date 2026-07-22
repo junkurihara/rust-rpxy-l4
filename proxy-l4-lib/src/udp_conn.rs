@@ -4,12 +4,12 @@ use crate::{
   error::ProxyError,
   proto::UdpProtocolType,
   socket::{DownstreamUdpSocket, bind_udp_socket},
-  time_util::get_since_the_epoch,
+  time_util::get_monotonic_seconds,
   trace::*,
   udp_proxy::UdpDestinationInner,
 };
 use std::{
-  net::{IpAddr, SocketAddr},
+  net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
   sync::{
     Arc, OnceLock,
     atomic::{AtomicU64, Ordering},
@@ -23,10 +23,12 @@ pub static BASE_ANY_SOCKET_V4: OnceLock<SocketAddr> = OnceLock::new();
 /// Any socket address for IPv6 for auto-binding
 pub static BASE_ANY_SOCKET_V6: OnceLock<SocketAddr> = OnceLock::new();
 
-/// Initialize once lock values
-fn init_once_lock() {
-  let _ = BASE_ANY_SOCKET_V4.get_or_init(|| "0.0.0.0:0".parse().unwrap());
-  let _ = BASE_ANY_SOCKET_V6.get_or_init(|| "[::]:0".parse().unwrap());
+fn base_any_socket_v4() -> &'static SocketAddr {
+  BASE_ANY_SOCKET_V4.get_or_init(|| SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
+}
+
+fn base_any_socket_v6() -> &'static SocketAddr {
+  BASE_ANY_SOCKET_V6.get_or_init(|| SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0))
 }
 
 /// DashMap type alias, uses ahash::RandomState as hashbuilder
@@ -60,8 +62,6 @@ pub(crate) struct UdpConnectionPool {
 impl UdpConnectionPool {
   /// Create a new UdpConnectionManager
   pub(crate) fn new(runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
-    init_once_lock();
-
     let inner: DashMap<UdpFlowKey, UdpConnection> = DashMap::default();
     Self {
       inner,
@@ -137,7 +137,7 @@ impl UdpConnectionPool {
   pub(crate) fn prune_inactive_connections(&self) {
     self.inner.retain(|_, conn| {
       let last_active = conn.inner.last_active.load(Ordering::Acquire);
-      let current = get_since_the_epoch();
+      let current = get_monotonic_seconds();
       let elapsed = current - last_active;
       debug!(
         "UdpConnection from {} to {} is active for {} seconds",
@@ -231,15 +231,15 @@ impl UdpConnectionInner {
     let dst_addr = udp_dst.get_destination(src_addr).await?;
     let idle_lifetime = udp_dst.get_connection_idle_lifetime() as u64;
     let udp_socket_to_upstream = match dst_addr {
-      SocketAddr::V4(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V4.get().unwrap())?),
-      SocketAddr::V6(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V6.get().unwrap())?),
+      SocketAddr::V4(_) => UdpSocket::from_std(bind_udp_socket(base_any_socket_v4())?),
+      SocketAddr::V6(_) => UdpSocket::from_std(bind_udp_socket(base_any_socket_v6())?),
     }
     .map(Arc::new)?;
 
     udp_socket_to_upstream.connect(dst_addr).await?;
     debug!("Connected to the upstream server: {dst_addr}");
 
-    let last_active = Arc::new(AtomicU64::new(get_since_the_epoch()));
+    let last_active = Arc::new(AtomicU64::new(get_monotonic_seconds()));
 
     Ok(Self {
       protocol: protocol.clone(),
@@ -256,7 +256,7 @@ impl UdpConnectionInner {
 
   /// Update the last active time
   fn update_last_active(&self) {
-    self.last_active.store(get_since_the_epoch(), Ordering::Release);
+    self.last_active.store(get_monotonic_seconds(), Ordering::Release);
   }
 
   /// Serve the UdpConnection

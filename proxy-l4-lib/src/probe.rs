@@ -317,7 +317,7 @@ impl UdpProbedProtocol {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::time_util::get_since_the_epoch;
+  use crate::time_util::get_monotonic_seconds;
 
   #[test]
   fn test_ssh_detection() {
@@ -398,7 +398,7 @@ mod tests {
 
     let mut initial_datagrams = UdpInitialDatagrams {
       inner: vec![wg_data],
-      created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+      created_at: Arc::new(AtomicU64::new(get_monotonic_seconds())),
       probed_as_pollnext: Default::default(),
     };
 
@@ -411,7 +411,7 @@ mod tests {
     let invalid_wg = vec![0u8; 100]; // Wrong length
     let mut initial_datagrams_invalid = UdpInitialDatagrams {
       inner: vec![invalid_wg],
-      created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+      created_at: Arc::new(AtomicU64::new(get_monotonic_seconds())),
       probed_as_pollnext: Default::default(),
     };
 
@@ -422,7 +422,7 @@ mod tests {
   async fn test_unexpected_any_pollnext_candidate_falls_back_to_any() {
     let mut initial_datagrams = UdpInitialDatagrams {
       inner: vec![vec![0]],
-      created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+      created_at: Arc::new(AtomicU64::new(get_monotonic_seconds())),
       probed_as_pollnext: HashSet::from([UdpProbedProtocol::Any]),
     };
 

@@ -8,7 +8,7 @@ use crate::{
   proto::UdpProtocolType,
   socket::{DownstreamRecvInfo, DownstreamUdpSocket},
   target::{DnsCache, TargetAddr},
-  time_util::get_since_the_epoch,
+  time_util::get_monotonic_seconds,
   trace::*,
   udp_conn::{UdpConnectionPool, UdpFlowKey},
 };
@@ -475,7 +475,7 @@ impl UdpInitialDatagramsBufferPool {
         let flow_key = UdpFlowKey::new(src_addr, local_ip);
         // Prune expired datagram buffers
         self_clone.inner.retain(|_, v| {
-          let elapsed = get_since_the_epoch() - v.created_at.load(std::sync::atomic::Ordering::Relaxed);
+          let elapsed = get_monotonic_seconds() - v.created_at.load(std::sync::atomic::Ordering::Relaxed);
           if elapsed < crate::constants::UDP_INITIAL_BUFFER_LIFETIME {
             debug!("Pruning expired datagram buffer for {}", src_addr);
           }
@@ -511,7 +511,7 @@ impl UdpInitialDatagramsBufferPool {
             );
             UdpInitialDatagrams {
               inner: vec![udp_datagram],
-              created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+              created_at: Arc::new(AtomicU64::new(get_monotonic_seconds())),
               probed_as_pollnext: Default::default(),
             }
           }
@@ -601,7 +601,7 @@ mod tests {
   fn initial_datagrams() -> UdpInitialDatagrams {
     UdpInitialDatagrams {
       inner: vec![vec![0]],
-      created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
+      created_at: Arc::new(AtomicU64::new(get_monotonic_seconds())),
       probed_as_pollnext: Default::default(),
     }
   }

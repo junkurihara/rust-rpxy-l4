@@ -5,6 +5,7 @@ mod config;
 mod log;
 
 use crate::{config::parse_opts, log::*};
+use anyhow::Context;
 use config::{ConfigToml, ConfigTomlReloader};
 use hot_reload::{ReloaderReceiver, ReloaderService};
 use rpxy_l4_lib::*;
@@ -19,7 +20,7 @@ pub(crate) const SYSTEM_LOG_FILE: &str = "rpxy-l4.log";
 
 fn main() {
   if let Err(error) = run() {
-    eprintln!("rpxy-l4 failed: {error}");
+    eprintln!("rpxy-l4 failed: {error:#}");
     std::process::exit(1);
   }
 }
@@ -44,19 +45,21 @@ async fn run_service(runtime_handle: tokio::runtime::Handle) -> Result<(), anyho
   let (config_service, config_rx) =
     ReloaderService::<ConfigTomlReloader, ConfigToml, String>::with_delay(&parsed_opts.config_file_path, CONFIG_WATCH_DELAY_SECS)
       .await
-      .map_err(|error| anyhow::anyhow!("Failed to initialize configuration reloader: {error}"))?;
+      .context("Failed to initialize configuration reloader")?;
 
   tokio::select! {
     config_res = config_service.start() => {
       config_res.map_err(|error| {
-        error!("Configuration reloader service exited: {error}");
-        anyhow::anyhow!("Configuration reloader service exited: {error}")
+        let error = anyhow::Error::new(error).context("Configuration reloader service exited");
+        error!("{error:#}");
+        error
       })
     }
     result = entrypoint(config_rx, runtime_handle) => {
       result.map_err(|error| {
-        error!("Service exited: {error}");
-        anyhow::anyhow!("Service exited: {error}")
+        let error = error.context("Service exited");
+        error!("{error:#}");
+        error
       })
     }
   }

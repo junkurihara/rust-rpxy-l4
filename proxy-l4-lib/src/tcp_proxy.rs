@@ -7,8 +7,8 @@ use crate::proxy_protocol::InboundProxyProtocolConfig;
 use crate::{
   access_log::{AccessLogProtocolType, access_log_start},
   config::EchProtocolConfig,
-  constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
-  count::ConnectionCount,
+  constants::{TCP_BACKEND_CONNECT_TIMEOUT_MSEC, TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
+  count::{ConnectionCount, ConnectionPermit},
   destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::{ProbeResult, TcpProbedProtocol},
@@ -19,7 +19,7 @@ use crate::{
 };
 use bytes::BytesMut;
 use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer};
-use std::{net::SocketAddr, sync::Arc};
+use std::{future::Future, net::SocketAddr, sync::Arc};
 use tokio::{
   io::{AsyncWriteExt, copy_bidirectional},
   net::TcpStream,
@@ -339,12 +339,10 @@ impl TcpProxy {
           }
           Ok(res) => res,
         };
-        // Connection limit
-        if self.connection_count.current() >= self.max_connections {
-          warn!("TCP connection limit reached: {}", self.max_connections);
+        let Some(connection_permit) = self.connection_count.try_acquire(self.max_connections) else {
+          debug!("TCP connection limit reached: {}", self.max_connections);
           continue;
-        }
-        self.connection_count.increment();
+        };
         debug!(
           "Accepted TCP connection from: {src_addr} (total: {})",
           self.connection_count.current()
@@ -352,13 +350,12 @@ impl TcpProxy {
 
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
-          let connection_count = self.connection_count.clone();
           #[cfg(feature = "proxy-protocol")]
           let recv_proxy_protocol_config = self.recv_proxy_protocol_config.clone();
 
           handle_tcp_connection(
             dst_mux,
-            connection_count,
+            connection_permit,
             incoming_stream,
             src_addr,
             #[cfg(feature = "proxy-protocol")]
@@ -402,11 +399,28 @@ fn contextualize_destination_error(error: ProxyError, src_addr: SocketAddr, prob
     .with_protocol_context(&probed_protocol.to_string())
 }
 
+#[derive(Debug)]
+enum TcpBackendConnectError {
+  Io(std::io::Error),
+  Timeout,
+}
+
+async fn connect_tcp_backend_with_timeout<F>(connect: F, duration: Duration) -> Result<TcpStream, TcpBackendConnectError>
+where
+  F: Future<Output = Result<TcpStream, std::io::Error>>,
+{
+  match timeout(duration, connect).await {
+    Ok(Ok(stream)) => Ok(stream),
+    Ok(Err(error)) => Err(TcpBackendConnectError::Io(error)),
+    Err(_) => Err(TcpBackendConnectError::Timeout),
+  }
+}
+
 /* ---------------------------------------------------------- */
 /// Handle TCP connection
 async fn handle_tcp_connection(
   dst_mux: Arc<TcpDestinationMux>,
-  connection_count: ConnectionCount,
+  _connection_permit: ConnectionPermit,
   mut incoming_stream: TcpStream,
   #[cfg(feature = "proxy-protocol")] mut src_addr: SocketAddr,
   #[cfg(not(feature = "proxy-protocol"))] src_addr: SocketAddr,
@@ -430,7 +444,6 @@ async fn handle_tcp_connection(
       }
       Ok(Err(e)) => {
         error!("Failed to parse inbound PROXY header from {src_addr}: {e}");
-        connection_count.decrement();
         return;
       }
       Err(_) => {
@@ -438,7 +451,6 @@ async fn handle_tcp_connection(
           "Timeout ({}ms) reading PROXY header from {src_addr}",
           crate::constants::TCP_PROXY_HEADER_READ_TIMEOUT_MSEC
         );
-        connection_count.decrement();
         return;
       }
     }
@@ -452,7 +464,6 @@ async fn handle_tcp_connection(
   .await
   else {
     error!("Timeout ({TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC}ms) while probing TCP stream from {src_addr}");
-    connection_count.decrement();
     return;
   };
   let probed_protocol = match probe_result {
@@ -460,14 +471,12 @@ async fn handle_tcp_connection(
       Ok(protocol) => protocol,
       Err(unexpected_state) => {
         error!("TCP protocol detector returned unexpected {unexpected_state:?} state for {src_addr}; closing connection");
-        connection_count.decrement();
         return;
       }
     },
     Err(e) => {
       let contextual_error = e.with_source_context(src_addr).with_protocol_context("TCP");
       error!("Failed to detect protocol from {src_addr}: {contextual_error}");
-      connection_count.decrement();
       return;
     }
   };
@@ -479,7 +488,6 @@ async fn handle_tcp_connection(
         .with_source_context(src_addr)
         .with_protocol_context(&probed_protocol.to_string());
       error!("No route for {probed_protocol} from {src_addr}: {contextual_error}");
-      connection_count.decrement();
       return;
     }
   };
@@ -489,7 +497,6 @@ async fn handle_tcp_connection(
     error!("Failed to resolve destination address for {probed_protocol} from {src_addr}: {contextual_error}");
     contextual_error
   }) else {
-    connection_count.decrement();
     return;
   };
 
@@ -503,7 +510,6 @@ async fn handle_tcp_connection(
         if let Err(e) = send_back_tls_alert(&mut incoming_stream, &illegal_parameter_alert).await {
           error!("Failed to send TLS alert: {e}");
         }
-        connection_count.decrement();
         return;
       };
       client_hello_bytes
@@ -514,15 +520,26 @@ async fn handle_tcp_connection(
     }
   };
 
-  let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await.map_err(|e| {
-    let contextual_error = ProxyError::IoError(e)
-      .with_connection_context(src_addr, dst_addr)
-      .with_protocol_context(&probed_protocol.to_string());
-    error!("Failed to connect to destination {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
-    contextual_error
-  }) else {
-    connection_count.decrement();
-    return;
+  let mut outgoing_stream = match connect_tcp_backend_with_timeout(
+    TcpStream::connect(dst_addr),
+    Duration::from_millis(TCP_BACKEND_CONNECT_TIMEOUT_MSEC),
+  )
+  .await
+  {
+    Ok(stream) => stream,
+    Err(TcpBackendConnectError::Io(error)) => {
+      let contextual_error = ProxyError::IoError(error)
+        .with_connection_context(src_addr, dst_addr)
+        .with_protocol_context(&probed_protocol.to_string());
+      error!("Failed to connect to destination {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
+      return;
+    }
+    Err(TcpBackendConnectError::Timeout) => {
+      error!(
+        "Timeout ({TCP_BACKEND_CONNECT_TIMEOUT_MSEC}ms) connecting to destination {dst_addr} for {probed_protocol} from {src_addr}"
+      );
+      return;
+    }
   };
 
   #[cfg(feature = "proxy-protocol")]
@@ -537,7 +554,6 @@ async fn handle_tcp_connection(
             .with_connection_context(src_addr, dst_addr)
             .with_protocol_context(&probed_protocol.to_string());
           error!("Failed to write PROXY header to {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
-          connection_count.decrement();
           return;
         }
         debug!("Sent PROXY {pp_version:?} header to {dst_addr} for {probed_protocol} from {src_addr}");
@@ -547,7 +563,6 @@ async fn handle_tcp_connection(
           .with_connection_context(src_addr, dst_addr)
           .with_protocol_context(&probed_protocol.to_string());
         error!("Failed to encode PROXY header for {probed_protocol} from {src_addr}: {contextual_error}");
-        connection_count.decrement();
         return;
       }
     }
@@ -558,7 +573,6 @@ async fn handle_tcp_connection(
       .with_connection_context(src_addr, dst_addr)
       .with_protocol_context(&probed_protocol.to_string());
     error!("Failed to write initial buffer to {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
-    connection_count.decrement();
     return;
   }
   // Here we are establishing a bidirectional connection. Logging the connection.
@@ -581,8 +595,7 @@ async fn handle_tcp_connection(
   }
   // finish log
   tcp_access_log_finish(&src_addr, &dst_addr, &probed_protocol);
-  connection_count.decrement();
-  debug!("TCP proxy connection closed (current: {})", connection_count.current());
+  debug!("TCP proxy connection closed");
 }
 
 /// handle tls, especially ECH
@@ -710,6 +723,26 @@ mod tests {
     assert!(error_msg.contains("resolver unavailable"));
     assert!(!error_msg.contains("unknown"));
     assert!(!error_msg.contains("->"));
+  }
+
+  #[tokio::test]
+  async fn test_backend_connect_timeout_is_distinct_from_io_failure() {
+    let timeout_result = connect_tcp_backend_with_timeout(
+      std::future::pending::<Result<TcpStream, std::io::Error>>(),
+      Duration::from_millis(1),
+    )
+    .await;
+    assert!(matches!(timeout_result, Err(TcpBackendConnectError::Timeout)));
+
+    let io_result = connect_tcp_backend_with_timeout(
+      std::future::ready(Err(std::io::Error::new(
+        std::io::ErrorKind::ConnectionRefused,
+        "connection refused",
+      ))),
+      Duration::from_secs(1),
+    )
+    .await;
+    assert!(matches!(io_result, Err(TcpBackendConnectError::Io(_))));
   }
 
   #[tokio::test]

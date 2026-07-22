@@ -76,7 +76,14 @@ async fn entrypoint(
     .get()
     .ok_or(anyhow::anyhow!("Something wrong in config reloader receiver"))?;
 
-  let mut proxy_service = ProxyService::try_new(&config_toml, runtime_handle.clone())?;
+  let tcp_admission_count = AdmissionCount::default();
+  let udp_admission_count = AdmissionCount::default();
+  let mut proxy_service = ProxyService::try_new(
+    &config_toml,
+    runtime_handle.clone(),
+    tcp_admission_count.clone(),
+    udp_admission_count.clone(),
+  )?;
 
   // Continuous monitoring
   loop {
@@ -97,7 +104,12 @@ async fn entrypoint(
           error!("Something wrong in config reloader receiver");
           return Err(anyhow::anyhow!("Something wrong in config reloader receiver"));
         };
-        match ProxyService::try_new(&new_config_toml, runtime_handle.clone()) {
+        match ProxyService::try_new(
+          &new_config_toml,
+          runtime_handle.clone(),
+          tcp_admission_count.clone(),
+          udp_admission_count.clone(),
+        ) {
           Ok(new_proxy_service) => {
             info!("Configuration reloaded");
             proxy_service = new_proxy_service;
@@ -124,6 +136,8 @@ struct ProxyService {
   tcp_backlog: Option<u32>,
   tcp_max_connections: Option<u32>,
   udp_max_connections: Option<u32>,
+  tcp_admission_count: AdmissionCount,
+  udp_admission_count: AdmissionCount,
   #[cfg(feature = "proxy-protocol")]
   tcp_recv_proxy_protocol: bool,
   #[cfg(feature = "proxy-protocol")]
@@ -134,7 +148,12 @@ struct ProxyService {
 
 impl ProxyService {
   /// Create a new proxy service
-  fn try_new(config_toml: &ConfigToml, runtime_handle: tokio::runtime::Handle) -> Result<Self, anyhow::Error> {
+  fn try_new(
+    config_toml: &ConfigToml,
+    runtime_handle: tokio::runtime::Handle,
+    tcp_admission_count: AdmissionCount,
+    udp_admission_count: AdmissionCount,
+  ) -> Result<Self, anyhow::Error> {
     let config = Config::try_from(config_toml.clone())?;
     let (tcp_proxy_mux, udp_proxy_mux) = build_multiplexers(&config)?;
 
@@ -144,6 +163,8 @@ impl ProxyService {
       tcp_backlog: config.tcp_backlog,
       tcp_max_connections: config.tcp_max_connections,
       udp_max_connections: config.udp_max_connections,
+      tcp_admission_count,
+      udp_admission_count,
       #[cfg(feature = "proxy-protocol")]
       tcp_recv_proxy_protocol: config.tcp_recv_proxy_protocol,
       #[cfg(feature = "proxy-protocol")]
@@ -161,14 +182,8 @@ impl ProxyService {
 
     /* -------------------------- Tcp -------------------------- */
     if !self.tcp_proxy_mux.is_empty() {
-      // connection count will be shared among all TCP proxies
-      let tcp_conn_count = TcpConnectionCount::default();
       for &listen_on in &self.listen_sockets {
-        let tcp_proxy = self
-          .tcp_builder()
-          .listen_on(listen_on)
-          .connection_count(tcp_conn_count.clone())
-          .build()?;
+        let tcp_proxy = self.tcp_builder().listen_on(listen_on).build()?;
         let tcp_proxy_handle = self.runtime_handle.spawn({
           let cancel_token = cancel_token.child_token();
           async move {
@@ -238,6 +253,7 @@ impl ProxyService {
     let mut tcp_proxy_builder = TcpProxyBuilder::default();
     tcp_proxy_builder
       .destination_mux(self.tcp_proxy_mux.clone())
+      .connection_count(self.tcp_admission_count.clone())
       .runtime_handle(self.runtime_handle.clone());
     if let Some(tcp_backlog) = self.tcp_backlog {
       tcp_proxy_builder.backlog(tcp_backlog);
@@ -255,6 +271,7 @@ impl ProxyService {
     let mut udp_proxy_builder = UdpProxyBuilder::default();
     udp_proxy_builder
       .destination_mux(self.udp_proxy_mux.clone())
+      .admission_count(self.udp_admission_count.clone())
       .runtime_handle(self.runtime_handle.clone());
     if let Some(udp_max_connections) = self.udp_max_connections {
       udp_proxy_builder.max_connections(udp_max_connections as usize);

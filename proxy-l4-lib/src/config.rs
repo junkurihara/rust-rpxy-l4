@@ -428,9 +428,9 @@ impl EchProtocolConfig {
         } else {
           TargetAddr::from_str(&format!("{s}:{listen_port}"))
         }
-        .map_err(|_| {
+        .map_err(|error| {
           ProxyBuildError::InvalidEchPrivateServerName(format!(
-            "Invalid target address: {s}. It should be in the format of <ip>:<port> or <domain>:<port>"
+            "Invalid target address {s:?}: {error}. Expected a domain or IPv4 address with an optional port, or [IPv6]:port"
           ))
         })?;
         let domain_or_ip = target_addr.domain_or_ip();
@@ -704,6 +704,8 @@ mod tests {
 
     assert!(matches!(error, ProxyBuildError::InvalidEchPrivateServerName(_)));
     assert!(message.contains("private.example:not-a-port"));
+    assert!(message.contains("Invalid port number"));
+    assert!(message.contains("optional port"));
   }
 
   #[test]
@@ -714,6 +716,8 @@ mod tests {
 
     assert!(matches!(error, ProxyBuildError::InvalidEchPrivateServerName(_)));
     assert!(message.contains("invalid private name"));
+    assert!(message.contains("Invalid domain name"));
+    assert!(message.contains("optional port"));
   }
 
   #[test]

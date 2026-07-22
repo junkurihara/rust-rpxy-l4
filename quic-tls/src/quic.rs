@@ -154,7 +154,7 @@ fn quick_coalesceable_packet_type(first_byte: &u8, version: &QuicVersion) -> Opt
 /// https://www.rfc-editor.org/rfc/rfc9001.html (QUIC-TLS)
 /// https://www.rfc-editor.org/rfc/rfc9369.html (v2)
 /// https://quic.xargs.org
-/// - First checks if the buffer contains QUIC (coalsceable) packets.
+/// - First checks if the buffer contains QUIC (coalesceable) packets.
 /// - Then derive the header protection key and decrypt the packet.
 ///
 /// We also have to consider coalescing packets in a single UDP datagram.
@@ -164,6 +164,8 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
   let mut ptr = 0;
 
   while ptr < udp_datagram.len() {
+    let packet_start = ptr;
+
     // header(1), version(4), DCID length(1), SCID length(1)
     let Some(remaining) = udp_datagram.get(ptr..) else {
       break;
@@ -234,9 +236,18 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
     };
     trace!("Payload: {:x?}", payload);
 
-    // So far, the buffer is consistent with a QUIC coalseable packet.
+    let Some(packet) = udp_datagram.get(packet_start..payload_end) else {
+      debug!("Invalid QUIC packet range");
+      break;
+    };
+    let Some(packet_number_offset) = payload_start.checked_sub(packet_start) else {
+      debug!("Invalid QUIC packet number offset");
+      break;
+    };
+
+    // So far, the buffer is consistent with a QUIC coalesceable packet.
     // Now, try to decrypt the packet and check if it is a TLS ClientHello.
-    let Ok(unprotected_result) = unprotect(&version, udp_datagram, &dcid, payload_start, payload_len) else {
+    let Ok(unprotected_result) = unprotect(&version, packet, &dcid, packet_number_offset, payload_len) else {
       debug!("invalid to unprotect payload, just continue to parse the next packet");
       ptr = payload_end;
       continue;
@@ -1041,6 +1052,24 @@ mod tests {
     let res = probe_quic_packets(&quic_packet);
     assert_eq!(res[0].version, QuicVersion::V1);
     assert_eq!(res[0].packet_type, QuicCoalesceablePacketType::Initial);
+    assert_eq!(res[0].header, unprotected_header);
+    assert_eq!(res[0].packet_number, hex_literal::hex!("00000002"));
+    assert!(res[0].payload.starts_with(&unprotected_payload));
+
+    let coalesced = [quic_packet.as_slice(), quic_packet.as_slice()].concat();
+    let res = probe_quic_packets(&coalesced);
+    assert_eq!(res.len(), 2);
+    assert_eq!(res[1].version, QuicVersion::V1);
+    assert_eq!(res[1].packet_type, QuicCoalesceablePacketType::Initial);
+    assert_eq!(res[1].header, unprotected_header);
+    assert_eq!(res[1].packet_number, hex_literal::hex!("00000002"));
+    assert!(res[1].payload.starts_with(&unprotected_payload));
+
+    let mut invalid_first_packet = quic_packet.to_vec();
+    invalid_first_packet[0] ^= 0x01;
+    let coalesced = [invalid_first_packet.as_slice(), quic_packet.as_slice()].concat();
+    let res = probe_quic_packets(&coalesced);
+    assert_eq!(res.len(), 1);
     assert_eq!(res[0].header, unprotected_header);
     assert_eq!(res[0].packet_number, hex_literal::hex!("00000002"));
     assert!(res[0].payload.starts_with(&unprotected_payload));

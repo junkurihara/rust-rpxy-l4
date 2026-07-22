@@ -7,7 +7,7 @@ use crate::{
     UDP_PROBE_MAX_ENTRIES, UDP_PROBE_MAX_ENTRIES_PER_IP, UDP_PROBE_MAX_ENTRIES_PER_IPV6_PREFIX, UDP_PROBE_MAX_PAYLOAD_BYTES,
     UDP_PROBE_OVERLOAD_WARNING_INTERVAL,
   },
-  count::ConnectionCountSum,
+  count::{ConnectionCount, ConnectionCountSum},
   destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::{ProbeResult, UdpInitialDatagrams, UdpProbedProtocol},
@@ -259,6 +259,10 @@ pub struct UdpProxy {
   /// Connection counter, set shared counter if #connections of all TCP proxies are needed
   #[builder(default = "ConnectionCountSum::default()")]
   connection_count: ConnectionCountSum<SocketAddr>,
+
+  /// Authoritative connection admission counter shared across listeners and reload generations
+  #[builder(default = "ConnectionCount::default()")]
+  admission_count: ConnectionCount,
 
   /// Max UDP concurrent connections
   #[builder(default = "crate::constants::MAX_UDP_CONCURRENT_CONNECTIONS")]
@@ -989,10 +993,6 @@ fn expire_due(entries: &mut ProbeEntries, expiry_index: &mut ProbeExpiryIndex, n
   expired
 }
 
-fn connection_limit_reached(max_connections: usize, connection_count: usize) -> bool {
-  max_connections > 0 && connection_count >= max_connections
-}
-
 #[derive(Clone)]
 /// Temporary buffer pool of initial UDP datagrams dispatched from each clients.
 /// This is used to buffer the initial datagrams of each client, probe the destination, and then establish a UDP connection.
@@ -1014,6 +1014,9 @@ struct UdpInitialDatagramsBufferPool {
 
   /// Connection counter, set shared counter if #connections of all TCP proxies are needed
   connection_count: ConnectionCountSum<SocketAddr>,
+
+  /// Authoritative connection admission counter
+  admission_count: ConnectionCount,
 
   /// Max UDP concurrent connections
   max_connections: usize,
@@ -1037,6 +1040,7 @@ impl UdpInitialDatagramsBufferPool {
       destination_mux: udp_proxy.destination_mux.clone(),
       runtime_handle: udp_proxy.runtime_handle.clone(),
       connection_count: udp_proxy.connection_count.clone(),
+      admission_count: udp_proxy.admission_count.clone(),
       max_connections: udp_proxy.max_connections,
       budget,
       stats,
@@ -1126,10 +1130,10 @@ impl UdpInitialDatagramsBufferPool {
     };
 
     // UdpConnectionPool deliberately relies on its caller to enforce this cap.
-    if connection_limit_reached(self.max_connections, self.connection_count.current()) {
+    let Some(connection_permit) = self.admission_count.try_acquire(self.max_connections) else {
       self.record_drop(ProbeDropReason::ConnectionLimit);
       return;
-    }
+    };
 
     let connection = match self
       .udp_connection_pool
@@ -1139,6 +1143,7 @@ impl UdpInitialDatagramsBufferPool {
         &probed_protocol.proto_type(),
         self.udp_socket_tx.clone(),
         local_ip,
+        connection_permit,
       )
       .await
     {
@@ -1634,13 +1639,5 @@ mod tests {
       Err(ProbeDropReason::AccountingUnavailable)
     ));
     assert_eq!(budget.snapshot().payload_bytes, 0);
-  }
-
-  #[test]
-  fn test_connection_limit_semantics() {
-    assert!(!connection_limit_reached(0, usize::MAX));
-    assert!(!connection_limit_reached(2, 1));
-    assert!(connection_limit_reached(2, 2));
-    assert!(connection_limit_reached(2, 3));
   }
 }

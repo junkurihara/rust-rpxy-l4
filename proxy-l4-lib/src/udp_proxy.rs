@@ -131,7 +131,7 @@ impl UdpDestinationMuxBuilder {
         } else {
           QuicDestinations::new()
         };
-        current_quic.add(&[], &[], udp_dest_inner, None, &dns_cache);
+        current_quic.add(&[], &[], udp_dest_inner, None, dns_cache);
         inner.insert(proto_type, UdpDestination::Quic(current_quic));
       }
       _ => {
@@ -143,6 +143,10 @@ impl UdpDestinationMuxBuilder {
   }
 
   /// Set Quic destinations, use this if alpn and server names are needed for protocol detection or ech is need to be configured
+  #[allow(
+    clippy::too_many_arguments,
+    reason = "The builder method mirrors the existing QUIC route configuration fields"
+  )]
   pub(crate) fn set_quic(
     &mut self,
     addrs: &[TargetAddr],
@@ -169,7 +173,7 @@ impl UdpDestinationMuxBuilder {
       alpn.unwrap_or_default(),
       udp_dest_inner,
       None, // TODO: currently NONE for ech
-      &dns_cache,
+      dns_cache,
     );
 
     inner.insert(UdpProtocolType::Quic, UdpDestination::Quic(current_quic));
@@ -552,7 +556,7 @@ impl UdpInitialDatagramsBufferPool {
           .create_new_connection(
             &src_addr,
             udp_dst_inner,
-            &&probed_protocol.proto_type(),
+            &probed_protocol.proto_type(),
             self_clone.udp_socket_tx.clone(),
             local_ip,
           )

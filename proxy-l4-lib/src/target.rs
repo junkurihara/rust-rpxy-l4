@@ -103,8 +103,7 @@ impl DnsCache {
     let mut opts = ResolverOpts::default();
     opts.cache_size = 0; // Disable internal cache since we implement our own
     let resolver = TokioResolver::builder_tokio()
-      .map(|builder| builder.with_options(opts).build())
-      .flatten()
+      .and_then(|builder| builder.with_options(opts).build())
       .map_err(|e| ProxyError::DnsResolutionError(format!("Failed to build resolver: {e}")))?;
 
     trace!("domain: {}", domain);
@@ -134,7 +133,7 @@ impl DnsCache {
     trace!("Addresses: {:?}", addresses);
 
     // Get minimum TTL from DNS response (or use default)
-    let expired_at = self.clamp_ttl(response.valid_until().clone());
+    let expired_at = self.clamp_ttl(response.valid_until());
 
     trace!("Expired at: {:?}", expired_at);
 

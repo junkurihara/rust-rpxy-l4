@@ -210,7 +210,7 @@ impl ProxyService {
       return Err(anyhow::anyhow!("No proxy service is configured"));
     }
 
-    let (result, _, _) = futures::future::select_all(join_handles.into_iter()).await;
+    let (result, _, _) = futures::future::select_all(join_handles).await;
     cancel_token.cancel();
     match result {
       Ok(Ok(())) => Ok(()),

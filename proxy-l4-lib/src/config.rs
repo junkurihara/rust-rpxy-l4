@@ -172,30 +172,30 @@ pub fn validate_basic_config(config: &Config) -> Result<(), ProxyBuildError> {
   }
 
   // Validate TCP configuration consistency
-  if let Some(ref tcp_target) = config.tcp_target {
-    if tcp_target.is_empty() {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "Default TCP target addresses cannot be empty when specified".to_string(),
-      ));
-    }
+  if let Some(ref tcp_target) = config.tcp_target
+    && tcp_target.is_empty()
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "Default TCP target addresses cannot be empty when specified".to_string(),
+    ));
   }
 
   // Validate UDP configuration consistency
-  if let Some(ref udp_target) = config.udp_target {
-    if udp_target.is_empty() {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "Default UDP target addresses cannot be empty when specified".to_string(),
-      ));
-    }
+  if let Some(ref udp_target) = config.udp_target
+    && udp_target.is_empty()
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "Default UDP target addresses cannot be empty when specified".to_string(),
+    ));
   }
 
   // Validate DNS cache TTL values
-  if let (Some(min_ttl), Some(max_ttl)) = (&config.dns_cache_min_ttl, &config.dns_cache_max_ttl) {
-    if min_ttl > max_ttl {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "DNS cache minimum TTL cannot be greater than maximum TTL".to_string(),
-      ));
-    }
+  if let (Some(min_ttl), Some(max_ttl)) = (&config.dns_cache_min_ttl, &config.dns_cache_max_ttl)
+    && min_ttl > max_ttl
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "DNS cache minimum TTL cannot be greater than maximum TTL".to_string(),
+    ));
   }
 
   // Validate inbound PROXY protocol configuration
@@ -217,20 +217,20 @@ pub fn validate_basic_config(config: &Config) -> Result<(), ProxyBuildError> {
   }
 
   // Validate connection limits are reasonable
-  if let Some(max_tcp) = config.tcp_max_connections {
-    if max_tcp == 0 {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "TCP max connections cannot be 0 when specified".to_string(),
-      ));
-    }
+  if let Some(max_tcp) = config.tcp_max_connections
+    && max_tcp == 0
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "TCP max connections cannot be 0 when specified".to_string(),
+    ));
   }
 
-  if let Some(max_udp) = config.udp_max_connections {
-    if max_udp == 0 {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "UDP max connections cannot be 0 when specified".to_string(),
-      ));
-    }
+  if let Some(max_udp) = config.udp_max_connections
+    && max_udp == 0
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "UDP max connections cannot be 0 when specified".to_string(),
+    ));
   }
 
   Ok(())
@@ -381,6 +381,7 @@ pub struct ProtocolConfig {
   /// - `Inherit` (default): use global `tcp_send_proxy_protocol`.
   /// - `Disable`: explicitly disable, even if the global setting is enabled.
   /// - `Version(v)`: use the specified version, overriding the global setting.
+  ///
   /// Note: only relevant for TCP-based protocols; ignored for UDP-based protocols.
   pub send_proxy_protocol: SendProxyProtocol,
 }

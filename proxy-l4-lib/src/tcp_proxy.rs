@@ -164,7 +164,7 @@ impl TcpDestinationMuxBuilder {
         } else {
           TlsDestinations::new()
         };
-        current_tls.add(&[], &[], tcp_dest_inner, None, &dns_cache);
+        current_tls.add(&[], &[], tcp_dest_inner, None, dns_cache);
         inner.insert(proto_type, TcpDestination::Tls(current_tls));
       }
       _ => {
@@ -176,6 +176,10 @@ impl TcpDestinationMuxBuilder {
   }
 
   /// Set TLS destinations, use this if alpn and server names are needed for protocol detection or ech is need to be configured
+  #[allow(
+    clippy::too_many_arguments,
+    reason = "The builder method mirrors the existing TLS route configuration fields"
+  )]
   pub(crate) fn set_tls(
     &mut self,
     addrs: &[TargetAddr],
@@ -206,7 +210,7 @@ impl TcpDestinationMuxBuilder {
       alpn.unwrap_or_default(),
       tcp_dest_inner,
       ech.cloned(),
-      &dns_cache,
+      dns_cache,
     );
 
     inner.insert(TcpProtocolType::Tls, TcpDestination::Tls(current_tls));
@@ -492,7 +496,7 @@ async fn handle_tcp_connection(
   let to_be_written = match (&found_dst, &probed_protocol) {
     (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) => {
       // Handle tls, especially ECH
-      let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination, &mut dst_addr).await else {
+      let Ok(client_hello_bytes) = handle_tls_client_hello(client_hello_buf, tls_destination, &mut dst_addr).await else {
         // Error means that illegal parameter must be sent back when error
         error!("Failed to handle TLS client hello, sending illegal_parameter alert back to the client");
         let illegal_parameter_alert = TlsAlertBuffer::default();
@@ -599,7 +603,7 @@ async fn handle_tls_client_hello<T>(
     trace!("Decrypted ClientHello Inner: {decrypted_ch:#?}");
 
     let sni = decrypted_ch.sni();
-    let Some(private_server_name) = sni.iter().next() else {
+    let Some(private_server_name) = sni.first() else {
       error!("No SNI in decrypted ClientHello");
       return Err(ProxyError::TlsError(
         quic_tls::TlsClientHelloError::NoSniInDecryptedClientHello,
@@ -611,7 +615,7 @@ async fn handle_tls_client_hello<T>(
     };
     // Replace the destination address with the one in the decrypted ClientHello Inner
     let dns_cache = tls_destination.dns_cache();
-    let resolved = private_target_addr.resolve_cached(&dns_cache).await?;
+    let resolved = private_target_addr.resolve_cached(dns_cache).await?;
     if resolved.is_empty() {
       error!("No destination address found for {private_server_name}");
       return Err(ProxyError::NoDestinationAddress(String::new()));
@@ -654,6 +658,20 @@ async fn send_back_tls_alert(incoming_stream: &mut TcpStream, alert_buf: &TlsAle
 
   Ok(())
 }
+/* ---------------------------------------------------------- */
+
+/// Handle TCP access log, when establishing a connection
+fn tcp_access_log_start(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
+  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
+  access_log_start(&proto, src_addr, dst_addr);
+}
+
+/// Handle TCP access log, when closing a connection
+fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
+  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
+  crate::access_log::access_log_finish(&proto, src_addr, dst_addr);
+}
+
 /* ---------------------------------------------------------- */
 
 #[cfg(test)]
@@ -808,16 +826,4 @@ mod tests {
       .contains(&destination)
     );
   }
-}
-
-/* ---------------------------------------------------------- */
-/// Handle TCP access log, when establishing a connection
-fn tcp_access_log_start(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
-  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
-  access_log_start(&proto, src_addr, dst_addr);
-}
-/// Handle TCP access log, when closing a connection
-fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
-  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
-  crate::access_log::access_log_finish(&proto, src_addr, dst_addr);
 }

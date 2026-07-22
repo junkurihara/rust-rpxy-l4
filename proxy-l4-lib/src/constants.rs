@@ -53,6 +53,33 @@ pub const UDP_CONNECTION_PRUNE_INTERVAL: u64 = 10;
 /// UDP initial buffer packet lifetime in seconds
 pub const UDP_INITIAL_BUFFER_LIFETIME: u64 = 1;
 
+/// Maximum number of datagrams waiting for UDP protocol probing per listener.
+pub const UDP_PROBE_CHANNEL_CAPACITY: usize = 1024;
+/// Maximum number of active UDP flows waiting for additional probe datagrams per listener.
+pub const UDP_PROBE_MAX_ENTRIES: usize = 2048;
+/// Maximum payload bytes held by UDP probing per listener, including queued and in-handoff payloads.
+pub const UDP_PROBE_MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum number of datagrams held for one UDP probing flow.
+pub const UDP_PROBE_MAX_DATAGRAMS_PER_FLOW: usize = 8;
+/// Maximum payload bytes held for one UDP probing flow.
+pub const UDP_PROBE_MAX_BYTES_PER_FLOW: usize = 64 * 1024;
+/// Maximum in-flight probing datagrams for one canonical source IP.
+pub const UDP_PROBE_MAX_DATAGRAMS_PER_IP: usize = 64;
+/// Maximum probing payload bytes for one canonical source IP.
+pub const UDP_PROBE_MAX_BYTES_PER_IP: usize = 512 * 1024;
+/// Maximum active probing entries for one canonical source IP.
+pub const UDP_PROBE_MAX_ENTRIES_PER_IP: usize = 32;
+/// Maximum in-flight probing datagrams for one native IPv6 /64 prefix.
+pub const UDP_PROBE_MAX_DATAGRAMS_PER_IPV6_PREFIX: usize = 256;
+/// Maximum probing payload bytes for one native IPv6 /64 prefix.
+pub const UDP_PROBE_MAX_BYTES_PER_IPV6_PREFIX: usize = 2 * 1024 * 1024;
+/// Maximum active probing entries for one native IPv6 /64 prefix.
+pub const UDP_PROBE_MAX_ENTRIES_PER_IPV6_PREFIX: usize = 128;
+/// Interval for checking expired UDP probing entries.
+pub const UDP_PROBE_EXPIRY_INTERVAL_MILLIS: u64 = 100;
+/// Minimum interval between aggregate UDP probing overload warnings.
+pub const UDP_PROBE_OVERLOAD_WARNING_INTERVAL: u64 = 10;
+
 /// Logging event name TODO: Other separated logs?
 pub mod log_event_names {
   /// access log

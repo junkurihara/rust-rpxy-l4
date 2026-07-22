@@ -400,6 +400,10 @@ fn parse_duration(s: &str) -> Result<Duration, anyhow::Error> {
 mod tests {
   use super::*;
 
+  const TEST_ECH_CONFIG_LIST: &str =
+    "AEX+DQBBAQAgACA3tzLigJHNu8j9gnUIH1gdiQdAfoh0LbG/hYn19dSNDQAIAAEAAQABAAMADnB1YmxpYy5leGFtcGxlAAA";
+  const TEST_ECH_PRIVATE_KEY: &str = "lxBu3rEvZXL5RoCWP8LrXMxx10su+YEyEGdxmpiEnIM";
+
   fn parse_config_toml(toml_str: &str) -> ConfigToml {
     toml::from_str::<ConfigToml>(toml_str).expect("failed to parse ConfigToml")
   }
@@ -440,6 +444,30 @@ tcp_target = ["127.0.0.1:80"]
     let config_toml = parse_config_toml(toml_str);
     assert_eq!(config_toml.listen_port, Some(8448));
     assert_eq!(config_toml.tcp_target, Some(vec!["127.0.0.1:80".to_string()]));
+  }
+
+  #[test]
+  fn test_invalid_ech_private_server_name_propagates_from_config_conversion() {
+    let toml_str = format!(
+      r#"
+listen_port = 8443
+
+[protocols.tls_main]
+protocol = "tls"
+target = ["127.0.0.1:443"]
+
+[protocols.tls_main.ech]
+ech_config_list = "{TEST_ECH_CONFIG_LIST}"
+private_keys = ["{TEST_ECH_PRIVATE_KEY}"]
+private_server_names = ["invalid private name"]
+"#
+    );
+    let config_toml = parse_config_toml(&toml_str);
+    let error = Config::try_from(config_toml).expect_err("invalid ECH private server name must propagate");
+    let message = error.to_string();
+
+    assert!(message.contains("Invalid ECH private server name"));
+    assert!(message.contains("invalid private name"));
   }
 
   #[cfg(feature = "proxy-protocol")]

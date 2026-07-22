@@ -1,5 +1,5 @@
-//! TLS Encrypted ClientHello Config based on Draft 24
-//! [IETF ECH Draft-24](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html)
+//! TLS Encrypted ClientHello Config based on RFC 9849
+//! [RFC 9849](https://datatracker.ietf.org/doc/html/rfc9849)
 
 /* ------------------------------------------- */
 use crate::{
@@ -132,7 +132,7 @@ impl EchConfigList {
       extensions: vec![],
     };
     let ech_config = EchConfig {
-      version: ECH_CONFIG_VERSION_DRAFT_24,
+      version: ECH_CONFIG_VERSION_RFC9849,
       contents,
     };
     let ech_config_list = EchConfigList::from(vec![ech_config.clone()]);
@@ -254,7 +254,7 @@ impl EchPrivateKey {
 }
 
 /* ------------------------------------------- */
-const ECH_CONFIG_VERSION_DRAFT_24: u16 = 0xfe0d;
+const ECH_CONFIG_VERSION_RFC9849: u16 = 0xfe0d;
 #[derive(Debug, Clone)]
 /// ECH Configuration
 pub struct EchConfig {
@@ -269,7 +269,7 @@ impl Serialize for &EchConfig {
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), EchConfigError> {
     buf.put_u16(self.version);
     match self.version {
-      ECH_CONFIG_VERSION_DRAFT_24 => {
+      ECH_CONFIG_VERSION_RFC9849 => {
         let contents = compose(&self.contents)?;
         buf.put_u16(contents.len() as u16);
         buf.put_slice(&contents);

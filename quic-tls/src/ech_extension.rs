@@ -1,5 +1,5 @@
-//! TLS Encrypted ClientHello (ECH) extension based on Draft 24
-//! [IETF ECH Draft-24](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html)
+//! TLS Encrypted ClientHello (ECH) extension based on RFC 9849
+//! [RFC 9849](https://datatracker.ietf.org/doc/html/rfc9849)
 
 use bytes::Bytes;
 

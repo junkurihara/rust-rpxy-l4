@@ -6,7 +6,7 @@
 cargo run --package rpxy-l4-examples --bin tlsserver-mio -- --certs ./examples/server.crt --key ./examples/server.key --verbose http
 ```
 
-This simply hosts a TLS server working as the backend server in the context of [ECH Split Mode](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-3).
+This simply hosts a TLS server working as the backend server in the context of [ECH Split Mode](https://datatracker.ietf.org/doc/html/rfc9849#section-3).
 
 > [!NOTE]
 > The above server certificate and key are self-signed for the common name `localhost`. This means that you will get an error as `untrusted certificate` or `unknown CA` when you try to connect to it without `--cafile server.crt` option in the client.

@@ -22,11 +22,11 @@
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
 - **TLS/QUIC forwarder**: `rpxy-l4` can forward TLS/IETF QUIC streams to appropriate backend servers based on the ServerName Indication (SNI) and Application Layer Protocol Negotiation (ALPN) values.
 - **HAProxy PROXY protocol support**: `rpxy-l4` supports outbound PROXY protocol (prepend header to backend connections, global/per-protocol) and inbound PROXY protocol (parse header from trusted upstream proxies) for TCP. (Requires the `proxy-protocol` Cargo feature, enabled by default.)
-- **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with IETF-Draft Encrypted Client Hello. In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
+- **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with Encrypted Client Hello ([RFC9849](https://datatracker.ietf.org/doc/html/rfc9849)). In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
 
 [^quic]: Not Google QUIC. Both QUIC v1 ([RFC9000](https://datatracker.ietf.org/doc/html/rfc9000), [RFC9001](https://datatracker.ietf.org/doc/html/rfc9001)) and QUIC v2 ([RFC9369](https://datatracker.ietf.org/doc/html/rfc9369)) are supported.
 
-[^ech_proxy]: Client facing server in the context of [ECH Split Mode](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-3)
+[^ech_proxy]: Client facing server in the context of [ECH Split Mode](https://datatracker.ietf.org/doc/html/rfc9849#section-3)
 
 ## Installation
 
@@ -356,7 +356,7 @@ As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from 
 
 #### Reduced functionality
 
-*Currently we do not fully implement the function of client facing server described in the [IETF draft](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1).* It works as the following *simplified and reduced* manner, which is different from the draft:
+*Currently we do not fully implement the function of client facing server described in [RFC9849](https://datatracker.ietf.org/doc/html/rfc9849#section-7.1).* It works as the following *simplified and reduced* manner, which is different from the RFC:
 
 - If no matching configuration with the given ECH is found, it just forwards the client hello to the backend server as it is.
 - `rpxy-l4` does not support the retry mechanisms of client facing server, i.e., it currently has no state about ECH request, and doesn't handle, forward or emit the `HelloRetryRequest` message to the client.

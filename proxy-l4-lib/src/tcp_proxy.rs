@@ -378,6 +378,27 @@ impl TcpProxy {
 }
 
 /* ---------------------------------------------------------- */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnexpectedTcpProbeState {
+  PollNext,
+  Failure,
+}
+
+fn completed_tcp_probe(probe_result: ProbeResult<TcpProbedProtocol>) -> Result<TcpProbedProtocol, UnexpectedTcpProbeState> {
+  match probe_result {
+    ProbeResult::Success(protocol) => Ok(protocol),
+    ProbeResult::PollNext => Err(UnexpectedTcpProbeState::PollNext),
+    ProbeResult::Failure => Err(UnexpectedTcpProbeState::Failure),
+  }
+}
+
+fn contextualize_destination_error(error: ProxyError, src_addr: SocketAddr, probed_protocol: &TcpProbedProtocol) -> ProxyError {
+  error
+    .with_source_context(src_addr)
+    .with_protocol_context(&probed_protocol.to_string())
+}
+
+/* ---------------------------------------------------------- */
 /// Handle TCP connection
 async fn handle_tcp_connection(
   dst_mux: Arc<TcpDestinationMux>,
@@ -431,8 +452,14 @@ async fn handle_tcp_connection(
     return;
   };
   let probed_protocol = match probe_result {
-    Ok(ProbeResult::Success(p)) => p,
-    Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
+    Ok(result) => match completed_tcp_probe(result) {
+      Ok(protocol) => protocol,
+      Err(unexpected_state) => {
+        error!("TCP protocol detector returned unexpected {unexpected_state:?} state for {src_addr}; closing connection");
+        connection_count.decrement();
+        return;
+      }
+    },
     Err(e) => {
       let contextual_error = e.with_source_context(src_addr).with_protocol_context("TCP");
       error!("Failed to detect protocol from {src_addr}: {contextual_error}");
@@ -454,9 +481,7 @@ async fn handle_tcp_connection(
   };
 
   let Ok(mut dst_addr) = found_dst.get_destination(&src_addr).await.map_err(|e| {
-    let contextual_error = e
-      .with_connection_context(src_addr, "unknown:0".parse().unwrap())
-      .with_protocol_context(&probed_protocol.to_string());
+    let contextual_error = contextualize_destination_error(e, src_addr, &probed_protocol);
     error!("Failed to resolve destination address for {probed_protocol} from {src_addr}: {contextual_error}");
     contextual_error
   }) else {
@@ -635,6 +660,39 @@ async fn send_back_tls_alert(incoming_stream: &mut TcpStream, alert_buf: &TlsAle
 mod tests {
   use super::*;
   use quic_tls::extension::ServerNameIndication;
+
+  #[test]
+  fn test_unexpected_tcp_probe_states_are_rejected() {
+    assert_eq!(
+      completed_tcp_probe(ProbeResult::Success(TcpProbedProtocol::Any)),
+      Ok(TcpProbedProtocol::Any)
+    );
+    assert_eq!(
+      completed_tcp_probe(ProbeResult::PollNext),
+      Err(UnexpectedTcpProbeState::PollNext)
+    );
+    assert_eq!(
+      completed_tcp_probe(ProbeResult::Failure),
+      Err(UnexpectedTcpProbeState::Failure)
+    );
+  }
+
+  #[test]
+  fn test_destination_resolution_error_uses_source_only_context() {
+    let src_addr = "192.168.1.100:45000".parse().unwrap();
+    let contextual_error = contextualize_destination_error(
+      ProxyError::DnsResolutionError("resolver unavailable".to_string()),
+      src_addr,
+      &TcpProbedProtocol::Any,
+    );
+    let error_msg = contextual_error.to_string();
+
+    assert!(error_msg.contains("192.168.1.100:45000"));
+    assert!(error_msg.contains("Any protocol"));
+    assert!(error_msg.contains("resolver unavailable"));
+    assert!(!error_msg.contains("unknown"));
+    assert!(!error_msg.contains("->"));
+  }
 
   #[tokio::test]
   async fn test_tcp_proxy() {

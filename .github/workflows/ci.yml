@@ -9,7 +9,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
+  quality:
+    name: Quality
     permissions:
       contents: read
 
@@ -19,6 +20,86 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - name: Run unit tests
-        run: |
-          cargo test --verbose
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: >-
+          cargo clippy --locked --workspace --exclude rpxy-l4-examples
+          --all-targets --all-features -- -D warnings
+
+  test:
+    name: Tests (${{ matrix.name }})
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            feature_args: ""
+          - name: no-default-features
+            feature_args: --no-default-features
+          - name: all-features
+            feature_args: --all-features
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Run tests
+        run: >-
+          cargo test --locked --workspace --exclude rpxy-l4-examples
+          ${{ matrix.feature_args }}
+
+  parser-regressions:
+    name: Parser regressions (${{ matrix.name }})
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debug
+            profile_args: ""
+          - name: release
+            profile_args: --release
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Run QUIC and TLS parser regressions
+        run: >-
+          cargo test --locked ${{ matrix.profile_args }}
+          -p rpxy-l4-quic-tls
+
+      - name: Run PROXY protocol parser regressions
+        run: >-
+          cargo test --locked ${{ matrix.profile_args }}
+          -p rpxy-l4-lib --features proxy-protocol proxy_protocol::tests::
+
+  examples:
+    name: Examples (advisory)
+    continue-on-error: true
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Run examples Clippy
+        run: >-
+          cargo clippy --locked -p rpxy-l4-examples
+          --all-targets --all-features

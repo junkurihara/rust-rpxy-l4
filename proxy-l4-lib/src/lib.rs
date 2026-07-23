@@ -23,9 +23,6 @@ use target::DnsCache;
 
 pub use config::{Config, EchProtocolConfig, ProtocolConfig};
 pub use constants::{DEFAULT_LISTEN_ADDRESS_V4, DEFAULT_LISTEN_ADDRESS_V6, log_event_names};
-// TODO: Remove this compatibility alias in the next breaking release.
-#[deprecated(note = "use `AdmissionCount` instead; `TcpConnectionCount` will be removed in a future breaking release")]
-pub use count::ConnectionCount as TcpConnectionCount;
 pub use count::{ConnectionCount as AdmissionCount, ConnectionCountSum as UdpConnectionCount};
 pub use destination::LoadBalance;
 pub use error::{ProxyBuildError, ProxyError};

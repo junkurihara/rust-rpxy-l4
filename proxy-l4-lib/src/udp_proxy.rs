@@ -7,7 +7,7 @@ use crate::{
     UDP_PROBE_MAX_ENTRIES, UDP_PROBE_MAX_ENTRIES_PER_IP, UDP_PROBE_MAX_ENTRIES_PER_IPV6_PREFIX, UDP_PROBE_MAX_PAYLOAD_BYTES,
     UDP_PROBE_OVERLOAD_WARNING_INTERVAL,
   },
-  count::{ConnectionCount, ConnectionCountSum},
+  count::ConnectionCount,
   destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::{ProbeResult, UdpInitialDatagrams, UdpProbedProtocol},
@@ -256,10 +256,6 @@ pub struct UdpProxy {
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
 
-  /// Connection counter, set shared counter if #connections of all TCP proxies are needed
-  #[builder(default = "ConnectionCountSum::default()")]
-  connection_count: ConnectionCountSum<SocketAddr>,
-
   /// Authoritative connection admission counter shared across listeners and reload generations
   #[builder(default = "ConnectionCount::default()")]
   admission_count: ConnectionCount,
@@ -286,9 +282,6 @@ impl UdpProxy {
     // Build the UDP connection pool
     let udp_connection_pool = Arc::new(UdpConnectionPool::new(self.runtime_handle.clone(), cancel_token.clone()));
 
-    // Set the initial connection count
-    self.connection_count.set(self.listen_on, 0);
-
     // Setup buffer
     let mut udp_buf = vec![0u8; UDP_BUFFER_SIZE];
 
@@ -302,8 +295,8 @@ impl UdpProxy {
     self.runtime_handle.spawn({
       let udp_connection_pool = udp_connection_pool.clone();
       let cancel_token = cancel_token.clone();
-      let connection_count = self.connection_count.clone();
-      connection_pruner_service(self.listen_on, connection_count, udp_connection_pool, cancel_token)
+      let admission_count = self.admission_count.clone();
+      connection_pruner_service(self.listen_on, admission_count, udp_connection_pool, cancel_token)
     });
 
     /* ----------------- */
@@ -378,7 +371,7 @@ impl UdpProxy {
 /// Connection pruner service to prune inactive connections periodically
 async fn connection_pruner_service(
   listen_on: SocketAddr,
-  connection_count: ConnectionCountSum<SocketAddr>,
+  admission_count: ConnectionCount,
   udp_connection_pool: Arc<UdpConnectionPool>,
   cancel_token: CancellationToken,
 ) {
@@ -389,11 +382,10 @@ async fn connection_pruner_service(
       ))
       .await;
       udp_connection_pool.prune_inactive_connections();
-      connection_count.set(listen_on, udp_connection_pool.local_pool_size());
       debug!(
         "Current connection: (local: {}, global: {}) @{}",
         udp_connection_pool.local_pool_size(),
-        connection_count.current(),
+        admission_count.current(),
         listen_on,
       );
     }
@@ -1012,9 +1004,6 @@ struct UdpInitialDatagramsBufferPool {
   /// Tokio runtime handle
   runtime_handle: tokio::runtime::Handle,
 
-  /// Connection counter, set shared counter if #connections of all TCP proxies are needed
-  connection_count: ConnectionCountSum<SocketAddr>,
-
   /// Authoritative connection admission counter
   admission_count: ConnectionCount,
 
@@ -1039,7 +1028,6 @@ impl UdpInitialDatagramsBufferPool {
       udp_connection_pool: udp_conn_pool.clone(),
       destination_mux: udp_proxy.destination_mux.clone(),
       runtime_handle: udp_proxy.runtime_handle.clone(),
-      connection_count: udp_proxy.connection_count.clone(),
       admission_count: udp_proxy.admission_count.clone(),
       max_connections: udp_proxy.max_connections,
       budget,
@@ -1158,13 +1146,10 @@ impl UdpInitialDatagramsBufferPool {
       debug!("Failed to send initial datagrams to a detected UDP connection: {error}");
     }
     // state retains the payload permits until the initial send completes or fails.
-    self
-      .connection_count
-      .set(self.listen_on, self.udp_connection_pool.local_pool_size());
     debug!(
       "Current connection: (local: {}, global: {}) @{}",
       self.udp_connection_pool.local_pool_size(),
-      self.connection_count.current(),
+      self.admission_count.current(),
       self.listen_on,
     );
   }

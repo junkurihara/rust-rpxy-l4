@@ -199,14 +199,8 @@ impl ProxyService {
 
     /* -------------------------- Udp -------------------------- */
     if !self.udp_proxy_mux.is_empty() {
-      // connection count will be shared among all UDP proxies
-      let udp_conn_count = UdpConnectionCount::<SocketAddr>::default();
       for &listen_on in &self.listen_sockets {
-        let udp_proxy = self
-          .udp_builder()
-          .listen_on(listen_on)
-          .connection_count(udp_conn_count.clone())
-          .build()?;
+        let udp_proxy = self.udp_builder().listen_on(listen_on).build()?;
         let udp_proxy_handle = self.runtime_handle.spawn({
           let cancel_token = cancel_token.child_token();
           async move {

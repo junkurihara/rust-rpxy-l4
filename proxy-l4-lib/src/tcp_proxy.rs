@@ -347,6 +347,8 @@ impl TcpProxy {
           "Accepted TCP connection from: {src_addr} (total: {})",
           self.connection_count.current()
         );
+        // Enable keepalive so a dead/half-open downstream peer is eventually reclaimed by the kernel.
+        enable_tcp_keepalive(&incoming_stream, "downstream");
 
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
@@ -413,6 +415,19 @@ where
     Ok(Ok(stream)) => Ok(stream),
     Ok(Err(error)) => Err(TcpBackendConnectError::Io(error)),
     Err(_) => Err(TcpBackendConnectError::Timeout),
+  }
+}
+
+/// Enable SO_KEEPALIVE (OS-default timing) on a TCP stream so the kernel can
+/// reclaim a dead/half-open peer that vanished without a FIN/RST.
+///
+/// Best-effort: a failure is logged and the connection continues. Keepalive is a
+/// hygiene safety-net; failing to set it must not drop an otherwise-healthy
+/// proxied connection. It reclaims only unresponsive peers, not a live client
+/// deliberately holding a connection.
+fn enable_tcp_keepalive(stream: &TcpStream, leg: &str) {
+  if let Err(e) = socket2::SockRef::from(stream).set_keepalive(true) {
+    warn!("Failed to enable TCP keepalive on the {leg} stream: {e}");
   }
 }
 
@@ -541,6 +556,8 @@ async fn handle_tcp_connection(
       return;
     }
   };
+  // Enable keepalive so a dead/half-open backend peer is eventually reclaimed by the kernel.
+  enable_tcp_keepalive(&outgoing_stream, "upstream");
 
   #[cfg(feature = "proxy-protocol")]
   // Write PROXY protocol header before any application data
@@ -743,6 +760,30 @@ mod tests {
     )
     .await;
     assert!(matches!(io_result, Err(TcpBackendConnectError::Io(_))));
+  }
+
+  #[tokio::test]
+  async fn test_enable_tcp_keepalive_sets_option() {
+    // A loopback listener + client yields an accepted (downstream-like) stream
+    // and a connected (upstream-like) stream. Assert enable_tcp_keepalive turns
+    // SO_KEEPALIVE on for each, verified by reading the socket option back
+    // without waiting for any keepalive probe to fire. The two production call
+    // sites (after accept, after backend connect) are covered by review and the
+    // residual search, not by this helper-level test.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let client = TcpStream::connect(addr).await.unwrap();
+    let (accepted, _) = listener.accept().await.unwrap();
+
+    // Default is keepalive off, so enabling it is an observable change.
+    assert!(!socket2::SockRef::from(&client).keepalive().unwrap());
+    assert!(!socket2::SockRef::from(&accepted).keepalive().unwrap());
+
+    enable_tcp_keepalive(&accepted, "downstream");
+    enable_tcp_keepalive(&client, "upstream");
+
+    assert!(socket2::SockRef::from(&accepted).keepalive().unwrap());
+    assert!(socket2::SockRef::from(&client).keepalive().unwrap());
   }
 
   #[tokio::test]

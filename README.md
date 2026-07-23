@@ -350,6 +350,12 @@ The detailed configuration of the container can be found at [./docker](./docker)
 
 ## Caveats
 
+### `TCP` dead-peer reclamation (keepalive)
+
+`rpxy-l4` enables TCP keepalive (using the operating system's default keepalive timing) on both the client-facing and the backend TCP connections. This lets the kernel probe an idle connection and close it if the peer has vanished without a proper `FIN`/`RST` (a crash, a network partition, a NAT/firewall silently dropping state), so a dead or half-open connection does not hold its resources indefinitely.
+
+This is a hygiene measure that reclaims only *unresponsive* peers. It does **not** defend against a live client that deliberately holds a connection open (such a client answers the keepalive probes and keeps the connection alive); enforce that kind of policy at your network/L4 edge (firewall, load balancer). The detection timing follows the host keepalive policy (e.g. a common Linux default is ~2 hours of idle before the first probe), which you can tune via the operating system if faster reclamation is required.
+
 ### `UDP` pseudo connection management
 
 As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from each clients based on the socket address. Also, `rpxy-l4` identifies specific protocols by probing their initial/handshake packets. These means that if the idle lifetime of pseudo connections is too short and the client sends packets in a long interval, the pseudo connection would be removed even during the communication. Then, the subsequent packets from the client, i.e., NOT the initial/handshake packets, are *routed not to the protocol-specific target but to the default target (or dropped if there is no default target)*. To avoid this, you should set the `idle_lifetime` value of UDP-based protocol multiplexer to be longer than the interval of the client's packet sending.

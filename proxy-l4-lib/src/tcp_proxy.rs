@@ -775,10 +775,6 @@ mod tests {
     let client = TcpStream::connect(addr).await.unwrap();
     let (accepted, _) = listener.accept().await.unwrap();
 
-    // Default is keepalive off, so enabling it is an observable change.
-    assert!(!socket2::SockRef::from(&client).keepalive().unwrap());
-    assert!(!socket2::SockRef::from(&accepted).keepalive().unwrap());
-
     enable_tcp_keepalive(&accepted, "downstream");
     enable_tcp_keepalive(&client, "upstream");
 

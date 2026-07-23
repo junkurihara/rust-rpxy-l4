@@ -71,7 +71,10 @@ udp_target = ["192.168.122.4:53"] # ip:port or domain:port
 # (Optional) Load balancing method for default targets [default: none]
 udp_load_balance = "source_ip"
 
-# (Optional) Udp connection idle lifetime in seconds [default: 30]
+# (Optional) UDP connection idle lifetime in seconds [default: 30]
+# Set to 0 to disable idle expiry. Unlimited pseudo-connections retain their
+# resources and admission slots, and remain in the per-datagram pool scan until
+# service completion/error, replacement, cancellation, reload, or shutdown.
 udp_idle_lifetime = 30
 
 # (Optional) DNS cache minimum TTL in duration format (e.g., "30s", "1m", "1h") [default: 30s]
@@ -184,7 +187,9 @@ target = ["192.168.122.4:443"]
 # Load balancing method for QUIC connections [default: none]
 load_balance = "source_ip"
 
-# (Optional) Idle lifetime for QUIC connections in seconds [default: 30]
+# (Optional) Idle lifetime for UDP-based protocol connections in seconds [default: 30]
+# Set to 0 to disable idle expiry, with the same resource-retention behavior as
+# udp_idle_lifetime.
 idle_lifetime = 30
 
 # server_names = ["example.com", "example.org"]

@@ -446,6 +446,51 @@ tcp_target = ["127.0.0.1:80"]
   }
 
   #[test]
+  fn test_zero_udp_idle_lifetime_is_accepted_from_toml() {
+    let cases = [
+      (
+        "global",
+        r#"
+listen_port = 8448
+udp_target = ["127.0.0.1:53"]
+udp_idle_lifetime = 0
+"#,
+        None,
+      ),
+      (
+        "quic",
+        r#"
+listen_port = 8448
+
+[protocols.quic]
+protocol = "quic"
+target = ["127.0.0.1:443"]
+idle_lifetime = 0
+"#,
+        Some("quic"),
+      ),
+      (
+        "wireguard",
+        r#"
+listen_port = 8448
+
+[protocols.wireguard]
+protocol = "wireguard"
+target = ["127.0.0.1:51820"]
+idle_lifetime = 0
+"#,
+        Some("wireguard"),
+      ),
+    ];
+
+    for (case, toml_str, protocol_key) in cases {
+      let config = Config::try_from(parse_config_toml(toml_str)).unwrap();
+      let idle_lifetime = protocol_key.map_or(config.udp_idle_lifetime, |key| config.protocols[key].idle_lifetime);
+      assert_eq!(idle_lifetime, Some(0), "{case}");
+    }
+  }
+
+  #[test]
   fn test_invalid_ech_private_server_name_propagates_from_config_conversion() {
     let toml_str = format!(
       r#"

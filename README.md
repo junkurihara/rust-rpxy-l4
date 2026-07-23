@@ -123,8 +123,10 @@ The above configuration works as the following manner.
 > [!IMPORTANT]
 > For the UDP reverse proxy, `rpxy-l4` manages the pseudo connection for each client based on its socket address (IP address + port number) to save the memory usage and preserve the connection state for protocol multiplexing. The pseudo connection is automatically removed after the idle lifetime (default: 30 seconds) since the last packet received from the client. We recommend setting the `udp_idle_lifetime` value in the configuration file to adjust the idle lifetime according to your use case.
 >
+> Setting `udp_idle_lifetime = 0` disables idle expiry. An unlimited pseudo-connection retains its socket, tasks, and global UDP admission slot, and remains in the existing per-datagram pool scan until service completion or error, replacement, cancellation, configuration reload, or shutdown ends it.
+>
 > ```toml
-> # Udp connection idle lifetime in seconds [default: 30]
+> # UDP connection idle lifetime in seconds; 0 disables idle expiry [default: 30]
 > udp_idle_lifetime = 30
 > ```
 
@@ -208,12 +210,12 @@ target = ["192.168.0.6:443"]
 # Load balancing method for QUIC connections [default: none]
 load_balance = "source_socket"
 
-# Idle lifetime for QUIC connections in seconds [default: 30]
+# Idle lifetime for QUIC connections in seconds; 0 disables idle expiry [default: 30]
 idle_lifetime = 30
 ```
 
 > [!NOTE]
-> Since IETF-QUIC is a UDP-based protocol, the `idle_lifetime` field is available for `protocol="quic"` to adjust the idle lifetime of the pseudo connection only valid for QUIC streams.
+> Since IETF-QUIC is a UDP-based protocol, the `idle_lifetime` field is available for `protocol="quic"` to adjust the idle lifetime of the pseudo connection only valid for QUIC streams. Setting it to `0` disables idle expiry with the same resource-retention behavior described for `udp_idle_lifetime`.
 
 Additionally, you can set the `tls_alpn` and `tls_sni` fields for the case where `protocol="tls"` or `protocol="quic"`. These are additional filters for the TLS/QUIC multiplexer to route the stream to the appropriate backend server based on the Application Layer Protocol Negotiation (ALPN) and Server Name Indication (SNI) values. This means that only streams with the specified ALPN and SNI values are forwarded to the target.
 
@@ -252,7 +254,7 @@ idle_lifetime = 30
 ```
 
 > [!NOTE]
-> As well as QUIC, WireGuard is a UDP-based protocol. The `idle_lifetime` field is available for `protocol="wireguard"`. You should adjust the value according to your WireGuard configuration, especially the keep-alive interval.
+> As well as QUIC, WireGuard is a UDP-based protocol. The `idle_lifetime` field is available for `protocol="wireguard"`. Setting it to `0` disables idle expiry with the same resource-retention behavior described for `udp_idle_lifetime`. Otherwise, you should set it longer than the keep-alive interval.
 
 #### 3.3. Passing through only the expected protocols (protocol sanitization)
 

@@ -338,7 +338,11 @@ pub struct Config {
   pub udp_target: Option<Vec<TargetAddr>>,
   /// Load balance for UDP
   pub udp_load_balance: Option<LoadBalance>,
-  /// UDP connection lifetime in seconds
+  /// UDP pseudo-connection idle lifetime in seconds.
+  /// `None` uses the default; `Some(0)` disables idle expiry.
+  /// Unlimited connections retain their resources and admission slots and
+  /// remain in the per-datagram pool scan until service completion/error,
+  /// replacement, cancellation, reload, or shutdown ends them.
   pub udp_idle_lifetime: Option<u32>,
   /// DNS cache minimum TTL (default: 30 seconds)
   pub dns_cache_min_ttl: Option<Duration>,
@@ -368,7 +372,11 @@ pub struct ProtocolConfig {
   pub target: Vec<TargetAddr>,
   /// Common for specific protocols
   pub load_balance: Option<LoadBalance>,
-  /// Only UDP based protocol
+  /// Idle lifetime in seconds for UDP-based protocols.
+  /// `None` uses the default; `Some(0)` disables idle expiry.
+  /// Unlimited connections retain their resources and admission slots and
+  /// remain in the per-datagram pool scan until service completion/error,
+  /// replacement, cancellation, reload, or shutdown ends them.
   pub idle_lifetime: Option<u32>,
   /// Only TLS
   pub alpn: Option<Vec<String>>,
@@ -499,6 +507,42 @@ mod tests {
     let mut invalid_config = config.clone();
     invalid_config.udp_max_connections = Some(0);
     assert!(validate_basic_config(&invalid_config).is_err());
+  }
+
+  #[test]
+  fn test_zero_udp_idle_lifetime_is_valid() {
+    let mut global = create_test_udp_config(5353, "127.0.0.1:53");
+    global.udp_idle_lifetime = Some(0);
+
+    let protocol_cases = [
+      ("quic", ProtocolType::Quic, "127.0.0.1:443"),
+      ("wireguard", ProtocolType::Wireguard, "127.0.0.1:51820"),
+    ];
+    let mut cases = vec![("global", global)];
+
+    for (name, protocol, target) in protocol_cases {
+      let mut config = create_test_udp_config(5353, "127.0.0.1:53");
+      config.udp_target = None;
+      config.protocols.insert(
+        name.to_string(),
+        ProtocolConfig {
+          protocol,
+          target: vec![target.parse().unwrap()],
+          load_balance: None,
+          idle_lifetime: Some(0),
+          alpn: None,
+          server_names: None,
+          ech: None,
+          #[cfg(feature = "proxy-protocol")]
+          send_proxy_protocol: SendProxyProtocol::default(),
+        },
+      );
+      cases.push((name, config));
+    }
+
+    for (case, config) in cases {
+      assert!(validate_config(&config).is_ok(), "{case}");
+    }
   }
 
   #[test]

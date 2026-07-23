@@ -35,6 +35,10 @@ fn base_any_socket_v6() -> &'static SocketAddr {
 /// DashMap type alias, uses ahash::RandomState as hashbuilder
 type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 
+fn should_retain_udp_connection(idle_lifetime: u64, last_active: u64, current: u64) -> bool {
+  idle_lifetime == 0 || current.saturating_sub(last_active) < idle_lifetime
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 /// Key for UDP pseudo-connections scoped by downstream source socket and local destination IP.
 pub(crate) struct UdpFlowKey {
@@ -142,12 +146,12 @@ impl UdpConnectionPool {
     self.inner.retain(|_, conn| {
       let last_active = conn.inner.last_active.load(Ordering::Acquire);
       let current = get_monotonic_seconds();
-      let elapsed = current - last_active;
+      let elapsed = current.saturating_sub(last_active);
       debug!(
         "UdpConnection from {} to {} is active for {} seconds",
         conn.inner.src_addr, conn.inner.dst_addr, elapsed
       );
-      if elapsed < conn.inner.idle_lifetime {
+      if should_retain_udp_connection(conn.inner.idle_lifetime, last_active, current) {
         return true;
       }
       debug!("UdpConnection from {} is pruned due to inactivity", conn.inner.src_addr);
@@ -442,6 +446,26 @@ mod tests {
     .unwrap();
   }
 
+  #[test]
+  fn test_should_retain_udp_connection() {
+    let cases = [
+      ("zero lifetime at creation", 0, 100, 100, true),
+      ("zero lifetime after long idle", 0, 100, u64::MAX, true),
+      ("below nonzero boundary", 30, 100, 129, true),
+      ("at nonzero boundary", 30, 100, 130, false),
+      ("above nonzero boundary", 30, 100, 131, false),
+      ("defensive clock regression", 30, 101, 100, true),
+    ];
+
+    for (case, idle_lifetime, last_active, current, expected) in cases {
+      assert_eq!(
+        should_retain_udp_connection(idle_lifetime, last_active, current),
+        expected,
+        "{case}"
+      );
+    }
+  }
+
   #[tokio::test]
   async fn test_udp_connection_pool() {
     init_logger();
@@ -482,6 +506,49 @@ mod tests {
     cancel_token.cancel();
     wait_for_connection_count(&admission_count, 0).await;
     assert_eq!(admission_count.current(), 0);
+  }
+
+  #[tokio::test]
+  async fn test_zero_idle_lifetime_disables_pruning_and_retains_permit() {
+    let runtime_handle = tokio::runtime::Handle::current();
+    let cancel_token = CancellationToken::new();
+    let pool = Arc::new(UdpConnectionPool::new(runtime_handle, cancel_token.clone()));
+    let src_addr: SocketAddr = "127.0.0.1:12347".parse().unwrap();
+    let local_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let dns_cache = Arc::new(DnsCache::default());
+    let udp_dst = UdpDestinationInner::try_from((
+      ["127.0.0.1:54323".parse::<TargetAddr>().unwrap()].as_slice(),
+      None,
+      &dns_cache,
+      Some(0),
+    ))
+    .unwrap();
+    let downstream = Arc::new(DownstreamUdpSocket::bind(&"127.0.0.1:0".parse().unwrap()).unwrap());
+    let admission_count = ConnectionCount::default();
+
+    let connection = pool
+      .create_new_connection(
+        &src_addr,
+        &udp_dst,
+        &UdpProtocolType::Any,
+        downstream,
+        local_ip,
+        admission_count.try_acquire(1).unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(pool.local_pool_size(), 1);
+    assert_eq!(admission_count.current(), 1);
+
+    pool.prune_inactive_connections();
+
+    assert!(pool.get(&UdpFlowKey::new(src_addr, local_ip)).is_some());
+    assert_eq!(pool.local_pool_size(), 1);
+    assert_eq!(admission_count.current(), 1);
+
+    drop(connection);
+    cancel_token.cancel();
+    wait_for_connection_count(&admission_count, 0).await;
   }
 
   #[test]

@@ -3,9 +3,6 @@ use std::sync::{
   atomic::{AtomicUsize, Ordering},
 };
 
-/// DashMap type alias, uses ahash::RandomState as hashbuilder
-type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
-
 #[derive(Debug, Clone, Default)]
 /// Counter for serving connections
 pub struct ConnectionCount(Arc<AtomicUsize>);
@@ -41,34 +38,6 @@ impl Drop for ConnectionPermit {
   fn drop(&mut self) {
     let previous = self.owner.0.fetch_sub(1, Ordering::Relaxed);
     debug_assert!(previous > 0, "connection permit released an empty counter");
-  }
-}
-
-#[derive(Debug, Clone)]
-/// Counter for serving connections that must be counted as the sum of integer values given from multiple threads
-pub struct ConnectionCountSum<T>(Arc<DashMap<T, usize>>)
-where
-  T: Eq + std::hash::Hash;
-
-impl<T> ConnectionCountSum<T>
-where
-  T: Eq + std::hash::Hash,
-{
-  pub(crate) fn current(&self) -> usize {
-    self.0.iter().map(|v| *v.value()).sum()
-  }
-  /// Set or update the value for the key, returning the previous value for the key
-  pub(crate) fn set(&self, key: T, value: usize) -> usize {
-    self.0.insert(key, value).unwrap_or(0)
-  }
-}
-
-impl<T> Default for ConnectionCountSum<T>
-where
-  T: Eq + std::hash::Hash,
-{
-  fn default() -> Self {
-    Self(Arc::new(DashMap::default()))
   }
 }
 
@@ -195,36 +164,5 @@ mod tests {
     drop((tcp_permit, udp_permit));
     assert_eq!(tcp.current(), 0);
     assert_eq!(udp.current(), 0);
-  }
-
-  #[test]
-  fn test_connection_count_sum_basic() {
-    let count = ConnectionCountSum::<&str>::default();
-
-    assert_eq!(count.current(), 0);
-
-    count.set("addr1", 3);
-    assert_eq!(count.current(), 3);
-
-    count.set("addr2", 2);
-    assert_eq!(count.current(), 5);
-
-    // Reducing connections
-    count.set("addr1", 1);
-    assert_eq!(count.current(), 3);
-  }
-
-  #[test]
-  fn test_connection_count_sum_operations() {
-    let count = ConnectionCountSum::<&str>::default();
-
-    // Test setting and updating values
-    let old = count.set("addr1", 5);
-    assert_eq!(old, 0);
-    assert_eq!(count.current(), 5);
-
-    let old = count.set("addr1", 8);
-    assert_eq!(old, 5);
-    assert_eq!(count.current(), 8);
   }
 }

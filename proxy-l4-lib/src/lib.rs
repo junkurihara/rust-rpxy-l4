@@ -23,7 +23,7 @@ use target::DnsCache;
 
 pub use config::{Config, EchProtocolConfig, ProtocolConfig};
 pub use constants::{DEFAULT_LISTEN_ADDRESS_V4, DEFAULT_LISTEN_ADDRESS_V6, log_event_names};
-pub use count::{ConnectionCount as AdmissionCount, ConnectionCountSum as UdpConnectionCount};
+pub use count::ConnectionCount as AdmissionCount;
 pub use destination::LoadBalance;
 pub use error::{ProxyBuildError, ProxyError};
 pub use proto::ProtocolType;

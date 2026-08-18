@@ -25,8 +25,8 @@ tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.23" }
 
 # config
-clap = { version = "4.6.4", features = ["std", "cargo", "wrap_help"] }
-toml = { version = "1.1.3", default-features = false, features = [
+clap = { version = "4.6.6", features = ["std", "cargo", "wrap_help"] }
+toml = { version = "1.1.4", default-features = false, features = [
   "parse",
   "serde",
 ] }
@@ -36,7 +36,7 @@ serde = { version = "1.0.229", default-features = false, features = [
   "std",
 ] }
 serde_ignored = { version = "0.1.14" }
-async-trait = { version = "0.1.91" }
+async-trait = { version = "0.1.92" }
 
 # memory allocator
 mimalloc = { version = "0.1.52", default-features = false }
@@ -51,4 +51,4 @@ tokio = { version = "1.53.1", default-features = false, features = [
   "io-util",
 ] }
 tokio-util = { version = "0.7.19", default-features = false }
-futures = { version = "0.3.33", default-features = false, features = ["alloc"] }
+futures = { version = "0.3.34", default-features = false, features = ["alloc"] }

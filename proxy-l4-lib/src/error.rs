@@ -27,6 +27,12 @@ pub enum ProxyError {
   #[error("No data received from TCP stream{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
   NoDataReceivedTcpStream(String),
 
+  #[error("TCP protocol probe exceeded its per-connection byte limit")]
+  TcpProbeLimitExceeded,
+
+  #[error("TCP protocol probe rejected malformed or oversized TLS input")]
+  TcpProbeRejected,
+
   #[error("Too many UDP connections{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
   TooManyUdpConnections(String),
 

@@ -1,13 +1,17 @@
 use crate::{
   SUPPORTED_TLS_VERSIONS,
-  client_hello::{TlsClientHello, TlsHandshakeMessageHeader, probe_tls_client_hello, probe_tls_handshake_message},
-  error::{TlsClientHelloError, TlsProbeFailure},
+  client_hello::{
+    TLS_HANDSHAKE_MESSAGE_HEADER_LEN, TlsClientHello, TlsHandshakeMessageHeader, probe_tls_client_hello,
+    probe_tls_handshake_message,
+  },
+  error::{TlsClientHelloError, TlsProbeFailure, TlsProbeRejection},
   serialize::{Deserialize, SerDeserError, Serialize, compose},
   trace::*,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 const TLS_RECORD_HEADER_LEN: usize = 5;
+const TLS_PLAINTEXT_MAX_LEN: usize = 1 << 14;
 const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
 const TLS_ALERT_CONTENT_TYPE: u8 = 0x15;
 
@@ -130,7 +134,27 @@ impl Deserialize for TlsClientHelloBuffer {
 /// Check if the buffer is a TLSPlaintext record
 /// This is inspired by https://github.com/yrutschle/sslh/blob/master/tls.c
 /// Support TLS Record layer fragmentation https://datatracker.ietf.org/doc/html/rfc8446#section-5.1
+///
+/// This entry point enforces TLS record limits but does not apply a caller-specific
+/// cumulative wire-byte budget. TCP protocol detection must use
+/// [`probe_tls_handshake_with_max_probe_bytes`].
 pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloBuffer, TlsProbeFailure> {
+  probe_tls_handshake_inner(buf, None)
+}
+
+/// Probe a TLS ClientHello while rejecting declarations that cannot fit within
+/// `max_probe_bytes` of TLS records on the wire.
+pub fn probe_tls_handshake_with_max_probe_bytes<B: Buf>(
+  buf: &mut B,
+  max_probe_bytes: usize,
+) -> Result<TlsClientHelloBuffer, TlsProbeFailure> {
+  probe_tls_handshake_inner(buf, Some(max_probe_bytes))
+}
+
+fn probe_tls_handshake_inner<B: Buf>(
+  buf: &mut B,
+  max_probe_bytes: Option<usize>,
+) -> Result<TlsClientHelloBuffer, TlsProbeFailure> {
   let mut tls_plaintext = BytesMut::new();
   let mut record_headers = Vec::new();
 
@@ -156,6 +180,10 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloBuffer, 
       return Err(TlsProbeFailure::Failure);
     }
     let payload_len = buf.get_u16() as usize;
+    if payload_len > TLS_PLAINTEXT_MAX_LEN {
+      debug!("TLSPlaintext payload exceeds the protocol length limit");
+      return Err(TlsProbeFailure::Rejected(TlsProbeRejection::RecordOverflow));
+    }
     if buf.remaining() < payload_len {
       debug!("Read buffer for TLS handshake detection is not enough");
       return Err(TlsProbeFailure::PollNext);
@@ -184,7 +212,8 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloBuffer, 
   }
 
   // Check if the buffer is a TLS handshake
-  let handshake_message_header = probe_tls_handshake_message(&mut tls_plaintext)?;
+  let max_client_hello_body_len = max_probe_bytes.map(max_client_hello_body_len_for_wire_budget);
+  let handshake_message_header = probe_tls_handshake_message(&mut tls_plaintext, max_client_hello_body_len)?;
 
   // Check if the buffer is a TLS ClientHello
   match probe_tls_client_hello(&mut tls_plaintext) {
@@ -195,6 +224,19 @@ pub fn probe_tls_handshake<B: Buf>(buf: &mut B) -> Result<TlsClientHelloBuffer, 
     }),
     None => Err(TlsProbeFailure::Failure),
   }
+}
+
+fn max_client_hello_body_len_for_wire_budget(max_probe_bytes: usize) -> usize {
+  const MAX_RECORD_WIRE_LEN: usize = TLS_RECORD_HEADER_LEN + TLS_PLAINTEXT_MAX_LEN;
+
+  let full_records = max_probe_bytes / MAX_RECORD_WIRE_LEN;
+  let remaining_wire_bytes = max_probe_bytes % MAX_RECORD_WIRE_LEN;
+  let final_record_payload = remaining_wire_bytes
+    .saturating_sub(TLS_RECORD_HEADER_LEN)
+    .min(TLS_PLAINTEXT_MAX_LEN);
+  let max_plaintext = full_records * TLS_PLAINTEXT_MAX_LEN + final_record_payload;
+
+  max_plaintext.saturating_sub(TLS_HANDSHAKE_MESSAGE_HEADER_LEN)
 }
 
 /* ---------------------------------------------------------- */
@@ -305,6 +347,47 @@ mod tests {
   use super::*;
   use crate::serialize::parse;
 
+  fn tls_record_header(payload_len: usize) -> Vec<u8> {
+    vec![
+      TLS_HANDSHAKE_CONTENT_TYPE,
+      (SUPPORTED_TLS_VERSIONS[0] >> 8) as u8,
+      SUPPORTED_TLS_VERSIONS[0] as u8,
+      (payload_len >> 8) as u8,
+      payload_len as u8,
+    ]
+  }
+
+  fn client_hello_header(body_len: usize) -> [u8; TLS_HANDSHAKE_MESSAGE_HEADER_LEN] {
+    [0x01, (body_len >> 16) as u8, (body_len >> 8) as u8, body_len as u8]
+  }
+
+  fn valid_client_hello_record() -> Vec<u8> {
+    let mut sni_extension = Vec::new();
+    sni_extension.extend_from_slice(&0x0000u16.to_be_bytes());
+    sni_extension.extend_from_slice(&16u16.to_be_bytes());
+    sni_extension.extend_from_slice(&14u16.to_be_bytes());
+    sni_extension.push(0);
+    sni_extension.extend_from_slice(&11u16.to_be_bytes());
+    sni_extension.extend_from_slice(b"example.com");
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&0x0303u16.to_be_bytes());
+    body.extend_from_slice(&[0u8; 32]);
+    body.push(0);
+    body.extend_from_slice(&2u16.to_be_bytes());
+    body.extend_from_slice(&0xc02fu16.to_be_bytes());
+    body.push(1);
+    body.push(0);
+    body.extend_from_slice(&(sni_extension.len() as u16).to_be_bytes());
+    body.extend_from_slice(&sni_extension);
+
+    let mut handshake = client_hello_header(body.len()).to_vec();
+    handshake.extend_from_slice(&body);
+    let mut record = tls_record_header(handshake.len());
+    record.extend_from_slice(&handshake);
+    record
+  }
+
   #[test]
   fn test_tls_record_header_serdeser() {
     let header = TlsRecordHeader {
@@ -325,5 +408,55 @@ mod tests {
     let mut serialized = compose(alert.clone()).unwrap();
     let deserialized: TlsAlertBuffer = parse(&mut serialized).unwrap();
     assert_eq!(alert, deserialized);
+  }
+
+  #[test]
+  fn maximum_tls_plaintext_length_is_not_rejected_for_length() {
+    let input = tls_record_header(TLS_PLAINTEXT_MAX_LEN);
+    let mut input = input.as_slice();
+
+    assert_eq!(probe_tls_handshake(&mut input), Err(TlsProbeFailure::PollNext));
+  }
+
+  #[test]
+  fn oversized_tls_plaintext_length_is_rejected_before_payload() {
+    let input = tls_record_header(TLS_PLAINTEXT_MAX_LEN + 1);
+    let mut input = input.as_slice();
+
+    assert_eq!(
+      probe_tls_handshake(&mut input),
+      Err(TlsProbeFailure::Rejected(TlsProbeRejection::RecordOverflow))
+    );
+  }
+
+  #[test]
+  fn client_hello_declared_length_respects_probe_wire_budget() {
+    const PROBE_BUDGET: usize = 128 * 1024;
+    let max_body_len = max_client_hello_body_len_for_wire_budget(PROBE_BUDGET);
+    assert_eq!(max_body_len, 131_028);
+
+    let mut at_limit = tls_record_header(TLS_HANDSHAKE_MESSAGE_HEADER_LEN);
+    at_limit.extend_from_slice(&client_hello_header(max_body_len));
+    let mut at_limit = at_limit.as_slice();
+    assert_eq!(
+      probe_tls_handshake_with_max_probe_bytes(&mut at_limit, PROBE_BUDGET),
+      Err(TlsProbeFailure::PollNext)
+    );
+
+    let mut over_limit = tls_record_header(TLS_HANDSHAKE_MESSAGE_HEADER_LEN);
+    over_limit.extend_from_slice(&client_hello_header(max_body_len + 1));
+    let mut over_limit = over_limit.as_slice();
+    assert_eq!(
+      probe_tls_handshake_with_max_probe_bytes(&mut over_limit, PROBE_BUDGET),
+      Err(TlsProbeFailure::Rejected(TlsProbeRejection::ClientHelloTooLarge))
+    );
+  }
+
+  #[test]
+  fn structurally_valid_client_hello_is_probeable() {
+    let encoded = valid_client_hello_record();
+    let mut encoded = encoded.as_ref();
+
+    assert!(probe_tls_handshake(&mut encoded).is_ok());
   }
 }

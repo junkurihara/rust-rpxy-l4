@@ -1090,11 +1090,11 @@ impl UdpInitialDatagramsBufferPool {
         drop(state.entry_permit.take());
         self.forward_detected(flow_key, probed_protocol, state).await;
       }
-      ProbeResult::Failure => {
+      ProbeResult::Failure | ProbeResult::Rejected => {
         if let Some(expires_at) = state.expires_at {
           remove_expiry(expiry_index, flow_key, expires_at);
         }
-        debug!("UDP protocol detector returned Failure; dropping buffered flow");
+        debug!("UDP protocol detector rejected the buffered flow");
       }
     }
   }

@@ -17,12 +17,13 @@ pub const TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC: u64 = 100;
 /// Maximum time to establish a TCP connection to a backend.
 pub const TCP_BACKEND_CONNECT_TIMEOUT_MSEC: u64 = 10_000;
 
-/// TCP buffer size for protocol detection
-/// The maximum size of the TLS record is 64KB = 2^14 bytes.
-/// But considering the hybrid post-quantum key exchange (key_share extension is > 1KB in X25519MLKEM768),
-/// the buffer size should be large, at least 2KB, to parse the Client Hello message.
+/// Maximum bytes requested by one TCP protocol-detection read.
+/// The maximum TLSPlaintext payload is 16 KiB = 2^14 bytes.
 /// https://datatracker.ietf.org/doc/html/rfc8446#section-5.1
-pub const TCP_PROTOCOL_DETECTION_BUFFER_SIZE: usize = 16384;
+pub const TCP_PROTOCOL_DETECTION_READ_CHUNK_SIZE: usize = 16 * 1024;
+
+/// Maximum cumulative bytes retained while detecting one TCP connection's protocol.
+pub const TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION: usize = 128 * 1024;
 
 #[cfg(feature = "proxy-protocol")]
 /// Timeout for reading the inbound PROXY protocol header in milliseconds.

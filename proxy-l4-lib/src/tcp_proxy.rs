@@ -7,7 +7,7 @@ use crate::proxy_protocol::InboundProxyProtocolConfig;
 use crate::{
   access_log::{AccessLogProtocolType, access_log_start},
   config::EchProtocolConfig,
-  constants::{TCP_BACKEND_CONNECT_TIMEOUT_MSEC, TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
+  constants::{TCP_BACKEND_CONNECT_TIMEOUT_MSEC, TCP_PROTOCOL_DETECTION_READ_CHUNK_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
   count::{ConnectionCount, ConnectionPermit},
   destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
@@ -385,6 +385,7 @@ impl TcpProxy {
 enum UnexpectedTcpProbeState {
   PollNext,
   Failure,
+  Rejected,
 }
 
 fn completed_tcp_probe(probe_result: ProbeResult<TcpProbedProtocol>) -> Result<TcpProbedProtocol, UnexpectedTcpProbeState> {
@@ -392,6 +393,7 @@ fn completed_tcp_probe(probe_result: ProbeResult<TcpProbedProtocol>) -> Result<T
     ProbeResult::Success(protocol) => Ok(protocol),
     ProbeResult::PollNext => Err(UnexpectedTcpProbeState::PollNext),
     ProbeResult::Failure => Err(UnexpectedTcpProbeState::Failure),
+    ProbeResult::Rejected => Err(UnexpectedTcpProbeState::Rejected),
   }
 }
 
@@ -471,7 +473,7 @@ async fn handle_tcp_connection(
     }
   }
 
-  let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+  let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_READ_CHUNK_SIZE);
   let Ok(probe_result) = timeout(
     Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
     TcpProbedProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
@@ -489,6 +491,10 @@ async fn handle_tcp_connection(
         return;
       }
     },
+    Err(error @ (ProxyError::TcpProbeLimitExceeded | ProxyError::TcpProbeRejected | ProxyError::NoDataReceivedTcpStream(_))) => {
+      debug!("TCP protocol probe ended for {src_addr}: {error}");
+      return;
+    }
     Err(e) => {
       let contextual_error = e.with_source_context(src_addr).with_protocol_context("TCP");
       error!("Failed to detect protocol from {src_addr}: {contextual_error}");
@@ -708,6 +714,7 @@ fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_pr
 mod tests {
   use super::*;
   use quic_tls::extension::ServerNameIndication;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
   #[test]
   fn test_unexpected_tcp_probe_states_are_rejected() {
@@ -722,6 +729,10 @@ mod tests {
     assert_eq!(
       completed_tcp_probe(ProbeResult::Failure),
       Err(UnexpectedTcpProbeState::Failure)
+    );
+    assert_eq!(
+      completed_tcp_probe(ProbeResult::Rejected),
+      Err(UnexpectedTcpProbeState::Rejected)
     );
   }
 
@@ -780,6 +791,32 @@ mod tests {
 
     assert!(socket2::SockRef::from(&accepted).keepalive().unwrap());
     assert!(socket2::SockRef::from(&client).keepalive().unwrap());
+  }
+
+  #[tokio::test]
+  async fn test_rejected_tcp_probes_release_admission_permits() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listen_on = listener.local_addr().unwrap();
+    let connection_count = ConnectionCount::default();
+    let destination_mux = Arc::new(TcpDestinationMuxBuilder::default().build().unwrap());
+
+    for _ in 0..3 {
+      let mut client = TcpStream::connect(listen_on).await.unwrap();
+      let (server, src_addr) = listener.accept().await.unwrap();
+      client.write_all(&[0x16, 0x03, 0x01, 0xff, 0xff]).await.unwrap();
+
+      let permit = connection_count.try_acquire(1).unwrap();
+      assert_eq!(connection_count.current(), 1);
+
+      #[cfg(feature = "proxy-protocol")]
+      handle_tcp_connection(destination_mux.clone(), permit, server, src_addr, listen_on, None).await;
+      #[cfg(not(feature = "proxy-protocol"))]
+      handle_tcp_connection(destination_mux.clone(), permit, server, src_addr).await;
+
+      assert_eq!(connection_count.current(), 0);
+      let mut closed = [0u8; 1];
+      assert_eq!(client.read(&mut closed).await.unwrap(), 0);
+    }
   }
 
   #[tokio::test]

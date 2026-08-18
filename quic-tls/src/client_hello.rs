@@ -8,7 +8,7 @@ use crate::{
 use bytes::{Buf, BufMut, Bytes};
 
 /* ---------------------------------------------------------- */
-const TLS_HANDSHAKE_MESSAGE_HEADER_LEN: usize = 4;
+pub(crate) const TLS_HANDSHAKE_MESSAGE_HEADER_LEN: usize = 4;
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
 /// Supported TLS ClientHello extension types
@@ -73,7 +73,10 @@ impl Deserialize for TlsHandshakeMessageHeader {
 ///  - 1 Handshake Type msg_type
 ///  - 3 Length
 ///  - <var> Handshake message body
-pub(crate) fn probe_tls_handshake_message<B: Buf>(buf: &mut B) -> Result<TlsHandshakeMessageHeader, TlsProbeFailure> {
+pub(crate) fn probe_tls_handshake_message<B: Buf>(
+  buf: &mut B,
+  max_client_hello_body_len: Option<usize>,
+) -> Result<TlsHandshakeMessageHeader, TlsProbeFailure> {
   if buf.remaining() < TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
     debug!("TLS ClientHello header is not fully received");
     return Err(TlsProbeFailure::PollNext);
@@ -85,6 +88,13 @@ pub(crate) fn probe_tls_handshake_message<B: Buf>(buf: &mut B) -> Result<TlsHand
 
   let length = ((buf.get_u16() as usize) << 8) + buf.get_u8() as usize;
   debug!("TLS ClientHello body length: {}", length);
+
+  if max_client_hello_body_len.is_some_and(|max_len| length > max_len) {
+    debug!("TLS ClientHello body exceeds the probe budget");
+    return Err(TlsProbeFailure::Rejected(
+      crate::error::TlsProbeRejection::ClientHelloTooLarge,
+    ));
+  }
 
   if buf.remaining() < length {
     debug!("TLS ClientHello body is not fully received");

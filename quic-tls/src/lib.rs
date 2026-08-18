@@ -21,6 +21,9 @@ pub mod extension {
   pub use crate::client_hello::{ApplicationLayerProtocolNegotiation, OtherTlsClientHelloExtension, ServerNameIndication};
 }
 pub use ech_config::{EchConfigError, EchConfigList, EchPrivateKey};
-pub use error::{TlsClientHelloError, TlsProbeFailure};
+pub use error::{TlsClientHelloError, TlsProbeFailure, TlsProbeRejection};
 pub use quic::probe_quic_initial_packets;
-pub use tls::{TlsAlertBuffer, TlsAlertDescription, TlsAlertLevel, TlsClientHelloBuffer, probe_tls_handshake};
+pub use tls::{
+  TlsAlertBuffer, TlsAlertDescription, TlsAlertLevel, TlsClientHelloBuffer, probe_tls_handshake,
+  probe_tls_handshake_with_max_probe_bytes,
+};

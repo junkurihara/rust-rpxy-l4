@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ "feature/e2e-test", "develop", "main" ]
 
+permissions:
+  contents: read
+
 jobs:
   test-e2e:
     name: Run E2E Testing

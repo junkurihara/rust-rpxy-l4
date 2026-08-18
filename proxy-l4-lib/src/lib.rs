@@ -23,7 +23,7 @@ use target::DnsCache;
 
 pub use config::{Config, EchProtocolConfig, ProtocolConfig};
 pub use constants::{DEFAULT_LISTEN_ADDRESS_V4, DEFAULT_LISTEN_ADDRESS_V6, log_event_names};
-pub use count::{ConnectionCount as TcpConnectionCount, ConnectionCountSum as UdpConnectionCount};
+pub use count::ConnectionCount as AdmissionCount;
 pub use destination::LoadBalance;
 pub use error::{ProxyBuildError, ProxyError};
 pub use proto::ProtocolType;
@@ -52,7 +52,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
   // Generate DNS cache
   let dns_cache = Arc::new(DnsCache::new(
     config.dns_cache_min_ttl.unwrap_or(DNS_CACHE_MIN_TTL),
-    config.dns_cache_max_ttl.unwrap_or_else(|| DNS_CACHE_MAX_TTL),
+    config.dns_cache_max_ttl.unwrap_or(DNS_CACHE_MAX_TTL),
   ));
 
   // For default targets
@@ -77,7 +77,7 @@ pub fn build_multiplexers(config: &Config) -> Result<(TcpDestinationMux, UdpDest
   }
 
   // Implement protocol specific routers
-  for (_key, spec) in config.protocols.iter() {
+  for spec in config.protocols.values() {
     let target: &[_] = spec.target.as_ref();
     // No need to check if target is empty - already validated in validate_config()
 

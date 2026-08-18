@@ -232,11 +232,10 @@ impl TryFrom<ConfigToml> for Config {
     let tcp_send_proxy_protocol = config_toml
       .tcp_send_proxy_protocol
       .as_ref()
-      .map(|v| match v.to_ascii_lowercase().as_str() {
+      .and_then(|v| match v.to_ascii_lowercase().as_str() {
         "none" => None,
         other => Some(other.to_string()),
       })
-      .flatten()
       .map(|v| {
         warn!("PROXY protocol is enabled for TCP connections by default with version: {v}");
         v.parse::<ProxyProtocolVersion>()
@@ -400,6 +399,10 @@ fn parse_duration(s: &str) -> Result<Duration, anyhow::Error> {
 mod tests {
   use super::*;
 
+  const TEST_ECH_CONFIG_LIST: &str =
+    "AEX+DQBBAQAgACA3tzLigJHNu8j9gnUIH1gdiQdAfoh0LbG/hYn19dSNDQAIAAEAAQABAAMADnB1YmxpYy5leGFtcGxlAAA";
+  const TEST_ECH_PRIVATE_KEY: &str = "lxBu3rEvZXL5RoCWP8LrXMxx10su+YEyEGdxmpiEnIM";
+
   fn parse_config_toml(toml_str: &str) -> ConfigToml {
     toml::from_str::<ConfigToml>(toml_str).expect("failed to parse ConfigToml")
   }
@@ -440,6 +443,75 @@ tcp_target = ["127.0.0.1:80"]
     let config_toml = parse_config_toml(toml_str);
     assert_eq!(config_toml.listen_port, Some(8448));
     assert_eq!(config_toml.tcp_target, Some(vec!["127.0.0.1:80".to_string()]));
+  }
+
+  #[test]
+  fn test_zero_udp_idle_lifetime_is_accepted_from_toml() {
+    let cases = [
+      (
+        "global",
+        r#"
+listen_port = 8448
+udp_target = ["127.0.0.1:53"]
+udp_idle_lifetime = 0
+"#,
+        None,
+      ),
+      (
+        "quic",
+        r#"
+listen_port = 8448
+
+[protocols.quic]
+protocol = "quic"
+target = ["127.0.0.1:443"]
+idle_lifetime = 0
+"#,
+        Some("quic"),
+      ),
+      (
+        "wireguard",
+        r#"
+listen_port = 8448
+
+[protocols.wireguard]
+protocol = "wireguard"
+target = ["127.0.0.1:51820"]
+idle_lifetime = 0
+"#,
+        Some("wireguard"),
+      ),
+    ];
+
+    for (case, toml_str, protocol_key) in cases {
+      let config = Config::try_from(parse_config_toml(toml_str)).unwrap();
+      let idle_lifetime = protocol_key.map_or(config.udp_idle_lifetime, |key| config.protocols[key].idle_lifetime);
+      assert_eq!(idle_lifetime, Some(0), "{case}");
+    }
+  }
+
+  #[test]
+  fn test_invalid_ech_private_server_name_propagates_from_config_conversion() {
+    let toml_str = format!(
+      r#"
+listen_port = 8443
+
+[protocols.tls_main]
+protocol = "tls"
+target = ["127.0.0.1:443"]
+
+[protocols.tls_main.ech]
+ech_config_list = "{TEST_ECH_CONFIG_LIST}"
+private_keys = ["{TEST_ECH_PRIVATE_KEY}"]
+private_server_names = ["invalid private name"]
+"#
+    );
+    let config_toml = parse_config_toml(&toml_str);
+    let error = Config::try_from(config_toml).expect_err("invalid ECH private server name must propagate");
+    let message = error.to_string();
+
+    assert!(message.contains("Invalid ECH private server name"));
+    assert!(message.contains("invalid private name"));
   }
 
   #[cfg(feature = "proxy-protocol")]

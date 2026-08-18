@@ -44,6 +44,7 @@ udp_target = [
   "8.8.8.8:53",    # Direct IP
 ]
 udp_load_balance = "source_ip"
+# Set to 0 to disable idle expiry; unlimited flows retain resources until another lifecycle event ends them.
 udp_idle_lifetime = 30
 
 [protocols]
@@ -90,6 +91,7 @@ target = [
   "127.0.0.1:4433",      # Direct IP as fallback
 ]
 load_balance = "source_ip"
+# Set to 0 to disable idle expiry; unlimited flows retain resources until another lifecycle event ends them.
 idle_lifetime = 30
 alpn = ["h3"]
 server_names = ["localhost"]
@@ -102,4 +104,5 @@ target = [
   "192.168.1.2:51820",    # Direct IP as fallback
 ]
 load_balance = "source_ip" # Consistent hashing for domain targets
+# Set to 0 to disable idle expiry; unlimited flows retain resources until another lifecycle event ends them.
 idle_lifetime = 30 # Longer than the keepalive interval

@@ -1,6 +1,6 @@
 use crate::config::ProxyProtocolVersion;
 use ipnet::IpNet;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use tokio::{io::AsyncReadExt, net::TcpStream};
 use tracing::{debug, trace};
 
@@ -245,20 +245,20 @@ async fn parse_v2_inbound(
   // PROXY command - extract source address
   match header.addresses {
     ppp::v2::Addresses::IPv4(ipv4) => {
-      let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::from(ipv4.source_address)), ipv4.source_port);
+      let src = SocketAddr::new(IpAddr::V4(ipv4.source_address), ipv4.source_port);
       trace!(
         "Parsed PROXY v2 IPv4 header: src={}, dst={}",
         src,
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::from(ipv4.destination_address)), ipv4.destination_port)
+        SocketAddr::new(IpAddr::V4(ipv4.destination_address), ipv4.destination_port)
       );
       Ok(Some(src))
     }
     ppp::v2::Addresses::IPv6(ipv6) => {
-      let src = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ipv6.source_address)), ipv6.source_port);
+      let src = SocketAddr::new(IpAddr::V6(ipv6.source_address), ipv6.source_port);
       trace!(
         "Parsed PROXY v2 IPv6 header: src={}, dst={}",
         src,
-        SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ipv6.destination_address)), ipv6.destination_port)
+        SocketAddr::new(IpAddr::V6(ipv6.destination_address), ipv6.destination_port)
       );
       Ok(Some(src))
     }
@@ -336,6 +336,8 @@ async fn parse_v1_inbound(stream: &mut TcpStream) -> Result<Option<SocketAddr>, 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::{constants::TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION, error::ProxyError, probe::TcpProbedProtocol};
+  use bytes::BytesMut;
   use std::net::Ipv4Addr;
 
   #[test]
@@ -475,6 +477,14 @@ mod tests {
     (server, client)
   }
 
+  fn tls_record(payload: &[u8]) -> Vec<u8> {
+    let mut record = Vec::with_capacity(5 + payload.len());
+    record.extend_from_slice(&[0x16, 0x03, 0x01]);
+    record.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    record.extend_from_slice(payload);
+    record
+  }
+
   fn trusted_config(cidrs: &[&str]) -> InboundProxyProtocolConfig {
     InboundProxyProtocolConfig {
       trusted_proxies: cidrs.iter().map(|c| c.parse::<IpNet>().unwrap()).collect(),
@@ -578,6 +588,38 @@ mod tests {
     let mut remaining = vec![0u8; app_data.len()];
     server.read_exact(&mut remaining).await.unwrap();
     assert_eq!(&remaining, app_data);
+  }
+
+  #[tokio::test]
+  async fn test_inbound_v1_tcp_probe_limit_applies_after_header() {
+    const DECLARED_CLIENT_HELLO_BODY_LEN: usize = 0xff_ffff;
+    let mut first_payload = vec![0; 16 * 1024];
+    first_payload[..4].copy_from_slice(&[
+      0x01,
+      (DECLARED_CLIENT_HELLO_BODY_LEN >> 16) as u8,
+      (DECLARED_CLIENT_HELLO_BODY_LEN >> 8) as u8,
+      DECLARED_CLIENT_HELLO_BODY_LEN as u8,
+    ]);
+    let mut app_data = tls_record(&first_payload);
+    let zero_payload = vec![0; 16 * 1024];
+    for _ in 1..8 {
+      app_data.extend_from_slice(&tls_record(&zero_payload));
+    }
+
+    let mut full_data = b"PROXY TCP4 1.2.3.4 5.6.7.8 1234 80\r\n".to_vec();
+    full_data.extend_from_slice(&app_data);
+    let (mut server, _client) = setup_stream_with_data(&full_data).await;
+    let peer: SocketAddr = "10.0.0.2:9999".parse().unwrap();
+    let config = trusted_config(&["10.0.0.0/8"]);
+
+    assert!(parse_inbound_proxy_header(&mut server, &peer, &config).await.is_ok());
+
+    let mut initial_buf = BytesMut::new();
+    assert!(matches!(
+      TcpProbedProtocol::detect_protocol(&mut server, &mut initial_buf).await,
+      Err(ProxyError::TcpProbeLimitExceeded)
+    ));
+    assert_eq!(initial_buf.len(), TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION);
   }
 
   // --- v2 parsing tests ---

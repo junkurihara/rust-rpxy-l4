@@ -27,6 +27,12 @@ pub enum ProxyError {
   #[error("No data received from TCP stream{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
   NoDataReceivedTcpStream(String),
 
+  #[error("TCP protocol probe exceeded its per-connection byte limit")]
+  TcpProbeLimitExceeded,
+
+  #[error("TCP protocol probe rejected malformed or oversized TLS input")]
+  TcpProbeRejected,
+
   #[error("Too many UDP connections{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
   TooManyUdpConnections(String),
 
@@ -109,6 +115,11 @@ impl ProxyError {
   pub fn with_source_context(self, src_addr: SocketAddr) -> Self {
     let context = format!("from {src_addr}");
     match self {
+      Self::NoDestinationAddress(msg) => Self::NoDestinationAddress(if msg.is_empty() {
+        context
+      } else {
+        format!("{context}: {msg}")
+      }),
       Self::NoDestinationAddressForProtocol(msg) => Self::NoDestinationAddressForProtocol(if msg.is_empty() {
         format!("no destination address for protocol requested {context}")
       } else {
@@ -134,6 +145,8 @@ impl ProxyError {
       } else {
         format!("{context}: {msg}")
       }),
+      Self::DnsResolutionError(msg) => Self::DnsResolutionError(format!("{context}: {msg}")),
+      Self::InvalidAddress(addr) => Self::InvalidAddress(format!("{addr} {context}")),
       _ => self,
     }
   }
@@ -212,5 +225,22 @@ mod tests {
     let error_msg = format!("{contextual_error}");
     assert!(error_msg.contains("192.168.1.100:45000"));
     assert!(error_msg.contains("protocol"));
+
+    let dns_error = ProxyError::DnsResolutionError("resolver unavailable".to_string());
+    let contextual_error = dns_error.with_source_context(src_addr).with_protocol_context("TLS");
+    let error_msg = format!("{contextual_error}");
+    assert!(error_msg.contains("192.168.1.100:45000"));
+    assert!(error_msg.contains("TLS protocol"));
+    assert!(error_msg.contains("resolver unavailable"));
+    assert!(!error_msg.contains("unknown"));
+    assert!(!error_msg.contains("->"));
+
+    let no_dest_error = ProxyError::NoDestinationAddress(String::new()).with_source_context(src_addr);
+    assert!(format!("{no_dest_error}").contains("192.168.1.100:45000"));
+
+    let invalid_address = ProxyError::InvalidAddress("invalid target".to_string()).with_source_context(src_addr);
+    let error_msg = format!("{invalid_address}");
+    assert!(error_msg.contains("invalid target"));
+    assert!(error_msg.contains("192.168.1.100:45000"));
   }
 }

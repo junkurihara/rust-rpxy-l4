@@ -172,30 +172,30 @@ pub fn validate_basic_config(config: &Config) -> Result<(), ProxyBuildError> {
   }
 
   // Validate TCP configuration consistency
-  if let Some(ref tcp_target) = config.tcp_target {
-    if tcp_target.is_empty() {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "Default TCP target addresses cannot be empty when specified".to_string(),
-      ));
-    }
+  if let Some(ref tcp_target) = config.tcp_target
+    && tcp_target.is_empty()
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "Default TCP target addresses cannot be empty when specified".to_string(),
+    ));
   }
 
   // Validate UDP configuration consistency
-  if let Some(ref udp_target) = config.udp_target {
-    if udp_target.is_empty() {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "Default UDP target addresses cannot be empty when specified".to_string(),
-      ));
-    }
+  if let Some(ref udp_target) = config.udp_target
+    && udp_target.is_empty()
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "Default UDP target addresses cannot be empty when specified".to_string(),
+    ));
   }
 
   // Validate DNS cache TTL values
-  if let (Some(min_ttl), Some(max_ttl)) = (&config.dns_cache_min_ttl, &config.dns_cache_max_ttl) {
-    if min_ttl > max_ttl {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "DNS cache minimum TTL cannot be greater than maximum TTL".to_string(),
-      ));
-    }
+  if let (Some(min_ttl), Some(max_ttl)) = (&config.dns_cache_min_ttl, &config.dns_cache_max_ttl)
+    && min_ttl > max_ttl
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "DNS cache minimum TTL cannot be greater than maximum TTL".to_string(),
+    ));
   }
 
   // Validate inbound PROXY protocol configuration
@@ -217,20 +217,20 @@ pub fn validate_basic_config(config: &Config) -> Result<(), ProxyBuildError> {
   }
 
   // Validate connection limits are reasonable
-  if let Some(max_tcp) = config.tcp_max_connections {
-    if max_tcp == 0 {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "TCP max connections cannot be 0 when specified".to_string(),
-      ));
-    }
+  if let Some(max_tcp) = config.tcp_max_connections
+    && max_tcp == 0
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "TCP max connections cannot be 0 when specified".to_string(),
+    ));
   }
 
-  if let Some(max_udp) = config.udp_max_connections {
-    if max_udp == 0 {
-      return Err(ProxyBuildError::BuildMultiplexersError(
-        "UDP max connections cannot be 0 when specified".to_string(),
-      ));
-    }
+  if let Some(max_udp) = config.udp_max_connections
+    && max_udp == 0
+  {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "UDP max connections cannot be 0 when specified".to_string(),
+    ));
   }
 
   Ok(())
@@ -338,7 +338,11 @@ pub struct Config {
   pub udp_target: Option<Vec<TargetAddr>>,
   /// Load balance for UDP
   pub udp_load_balance: Option<LoadBalance>,
-  /// UDP connection lifetime in seconds
+  /// UDP pseudo-connection idle lifetime in seconds.
+  /// `None` uses the default; `Some(0)` disables idle expiry.
+  /// Unlimited connections retain their resources and admission slots and
+  /// remain in the per-datagram pool scan until service completion/error,
+  /// replacement, cancellation, reload, or shutdown ends them.
   pub udp_idle_lifetime: Option<u32>,
   /// DNS cache minimum TTL (default: 30 seconds)
   pub dns_cache_min_ttl: Option<Duration>,
@@ -368,7 +372,11 @@ pub struct ProtocolConfig {
   pub target: Vec<TargetAddr>,
   /// Common for specific protocols
   pub load_balance: Option<LoadBalance>,
-  /// Only UDP based protocol
+  /// Idle lifetime in seconds for UDP-based protocols.
+  /// `None` uses the default; `Some(0)` disables idle expiry.
+  /// Unlimited connections retain their resources and admission slots and
+  /// remain in the per-datagram pool scan until service completion/error,
+  /// replacement, cancellation, reload, or shutdown ends them.
   pub idle_lifetime: Option<u32>,
   /// Only TLS
   pub alpn: Option<Vec<String>>,
@@ -381,6 +389,7 @@ pub struct ProtocolConfig {
   /// - `Inherit` (default): use global `tcp_send_proxy_protocol`.
   /// - `Disable`: explicitly disable, even if the global setting is enabled.
   /// - `Version(v)`: use the specified version, overriding the global setting.
+  ///
   /// Note: only relevant for TCP-based protocols; ignored for UDP-based protocols.
   pub send_proxy_protocol: SendProxyProtocol,
 }
@@ -424,18 +433,19 @@ impl EchProtocolConfig {
       .iter()
       .map(|s| {
         let target_addr = if s.contains(':') {
-          TargetAddr::from_str(s).unwrap_or_else(|_| {
-            panic!("Invalid target address: {s}. It should be in the format of <ip>:<port> or <domain>:<port>")
-          })
+          TargetAddr::from_str(s)
         } else {
-          TargetAddr::from_str(&format!("{s}:{listen_port}")).unwrap_or_else(|_| {
-            panic!("Invalid target address: {s}. It should be in the format of <ip>:<port> or <domain>:<port>")
-          })
-        };
+          TargetAddr::from_str(&format!("{s}:{listen_port}"))
+        }
+        .map_err(|error| {
+          ProxyBuildError::InvalidEchPrivateServerName(format!(
+            "Invalid target address {s:?}: {error}. Expected a domain or IPv4 address with an optional port, or [IPv6]:port"
+          ))
+        })?;
         let domain_or_ip = target_addr.domain_or_ip();
-        (domain_or_ip, target_addr)
+        Ok((domain_or_ip, target_addr))
       })
-      .collect();
+      .collect::<Result<ahash::HashMap<_, _>, ProxyBuildError>>()?;
 
     Ok(Self {
       private_keys,
@@ -448,6 +458,19 @@ impl EchProtocolConfig {
 mod tests {
   use super::*;
   use std::collections::HashMap;
+
+  const TEST_ECH_CONFIG_LIST: &str =
+    "AEX+DQBBAQAgACA3tzLigJHNu8j9gnUIH1gdiQdAfoh0LbG/hYn19dSNDQAIAAEAAQABAAMADnB1YmxpYy5leGFtcGxlAAA";
+  const TEST_ECH_PRIVATE_KEY: &str = "lxBu3rEvZXL5RoCWP8LrXMxx10su+YEyEGdxmpiEnIM";
+
+  fn create_ech_protocol_config(private_server_names: &[&str]) -> Result<EchProtocolConfig, ProxyBuildError> {
+    EchProtocolConfig::try_new(
+      TEST_ECH_CONFIG_LIST,
+      &[TEST_ECH_PRIVATE_KEY.to_string()],
+      &private_server_names.iter().map(|name| name.to_string()).collect::<Vec<_>>(),
+      &8443,
+    )
+  }
 
   #[test]
   fn test_validate_basic_config() {
@@ -484,6 +507,42 @@ mod tests {
     let mut invalid_config = config.clone();
     invalid_config.udp_max_connections = Some(0);
     assert!(validate_basic_config(&invalid_config).is_err());
+  }
+
+  #[test]
+  fn test_zero_udp_idle_lifetime_is_valid() {
+    let mut global = create_test_udp_config(5353, "127.0.0.1:53");
+    global.udp_idle_lifetime = Some(0);
+
+    let protocol_cases = [
+      ("quic", ProtocolType::Quic, "127.0.0.1:443"),
+      ("wireguard", ProtocolType::Wireguard, "127.0.0.1:51820"),
+    ];
+    let mut cases = vec![("global", global)];
+
+    for (name, protocol, target) in protocol_cases {
+      let mut config = create_test_udp_config(5353, "127.0.0.1:53");
+      config.udp_target = None;
+      config.protocols.insert(
+        name.to_string(),
+        ProtocolConfig {
+          protocol,
+          target: vec![target.parse().unwrap()],
+          load_balance: None,
+          idle_lifetime: Some(0),
+          alpn: None,
+          server_names: None,
+          ech: None,
+          #[cfg(feature = "proxy-protocol")]
+          send_proxy_protocol: SendProxyProtocol::default(),
+        },
+      );
+      cases.push((name, config));
+    }
+
+    for (case, config) in cases {
+      assert!(validate_config(&config).is_ok(), "{case}");
+    }
   }
 
   #[test]
@@ -680,6 +739,45 @@ mod tests {
       private_server_names: Default::default(),
     };
     assert!(validate_ech_config(&ech_config_empty_names, "test").is_err());
+  }
+
+  #[test]
+  fn test_ech_private_server_name_with_invalid_explicit_port_returns_error() {
+    let error =
+      create_ech_protocol_config(&["private.example:not-a-port"]).expect_err("invalid explicit port must return an error");
+    let message = error.to_string();
+
+    assert!(matches!(error, ProxyBuildError::InvalidEchPrivateServerName(_)));
+    assert!(message.contains("private.example:not-a-port"));
+    assert!(message.contains("Invalid port number"));
+    assert!(message.contains("optional port"));
+  }
+
+  #[test]
+  fn test_ech_private_server_name_without_port_returns_error_for_invalid_name() {
+    let error =
+      create_ech_protocol_config(&["invalid private name"]).expect_err("invalid implicit-port name must return an error");
+    let message = error.to_string();
+
+    assert!(matches!(error, ProxyBuildError::InvalidEchPrivateServerName(_)));
+    assert!(message.contains("invalid private name"));
+    assert!(message.contains("Invalid domain name"));
+    assert!(message.contains("optional port"));
+  }
+
+  #[test]
+  fn test_ech_private_server_names_preserve_explicit_and_default_ports() {
+    let config =
+      create_ech_protocol_config(&["private.example:9443", "127.0.0.1"]).expect("valid private server names must be accepted");
+
+    assert_eq!(
+      config.private_server_names.get("private.example").map(ToString::to_string),
+      Some("private.example:9443".to_string())
+    );
+    assert_eq!(
+      config.private_server_names.get("127.0.0.1").map(ToString::to_string),
+      Some("127.0.0.1:8443".to_string())
+    );
   }
 
   #[cfg(feature = "proxy-protocol")]

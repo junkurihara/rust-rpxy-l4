@@ -48,7 +48,7 @@ impl TlsClientHello {
       else {
         warn!("No matching ECH private key found for config_id ({config_id}) and cipher_suite, possibly GREASE");
         warn!("Currently, we do no support replying with retry_configs, and just forward the ClientHelloOuter to the backend");
-        // TODO: As per https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1
+        // TODO: As per https://datatracker.ietf.org/doc/html/rfc9849#section-7.1
         // we should do:
         // > - If sending a HelloRetryRequest, the server MAY include an "encrypted_client_hello" extension
         // >   with a payload of 8 random bytes; see Section 10.10.4 for details.
@@ -66,7 +66,7 @@ impl TlsClientHello {
     let matched_config_public_name = String::from_utf8_lossy(&config.public_name()).to_ascii_lowercase();
     if !public_server_names.contains(&matched_config_public_name) {
       warn!("Public name mismatch: {matched_config_public_name} not in {public_server_names:?}");
-      // https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1
+      // https://datatracker.ietf.org/doc/html/rfc9849#section-7.1
       // Dispatch illegal_parameter alert
       return Err(TlsClientHelloError::PublicNameMismatch);
     }
@@ -164,7 +164,7 @@ impl TlsClientHello {
   }
 
   /// Build aad from incoming TLS ClientHello for ECH decryption
-  /// As indicated in https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-5.2,
+  /// As indicated in https://datatracker.ietf.org/doc/html/rfc9849#section-5.2,
   /// the aad is serialized TLS ClientHello which matches the ClientHelloOuter except that the payload field of the "encrypted_client_hello" is replaced with a byte string of the same length but whose contents are zeros.
   fn build_aad(&self) -> Result<Bytes, TlsClientHelloError> {
     let mut cloned = self.clone();
@@ -420,8 +420,9 @@ mod tests {
     assert_eq!(public_name2, "different.example.com");
     assert_ne!(public_name1, public_name2);
 
-    // Verify different config IDs (should be random)
-    assert_ne!(config1.config_id(), config2.config_id());
+    // Random config IDs may legitimately collide across independent generations.
+    assert_eq!(config1.config_id(), keys1.first().unwrap().config_id());
+    assert_eq!(config2.config_id(), keys2.first().unwrap().config_id());
 
     // Test that keys can be combined
     let mut combined_keys = keys1;

@@ -1,5 +1,5 @@
-//! TLS Encrypted ClientHello Config based on Draft 24
-//! [IETF ECH Draft-24](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html)
+//! TLS Encrypted ClientHello Config based on RFC 9849
+//! [RFC 9849](https://datatracker.ietf.org/doc/html/rfc9849)
 
 /* ------------------------------------------- */
 use crate::{
@@ -132,7 +132,7 @@ impl EchConfigList {
       extensions: vec![],
     };
     let ech_config = EchConfig {
-      version: ECH_CONFIG_VERSION_DRAFT_24,
+      version: ECH_CONFIG_VERSION_RFC9849,
       contents,
     };
     let ech_config_list = EchConfigList::from(vec![ech_config.clone()]);
@@ -254,7 +254,7 @@ impl EchPrivateKey {
 }
 
 /* ------------------------------------------- */
-const ECH_CONFIG_VERSION_DRAFT_24: u16 = 0xfe0d;
+const ECH_CONFIG_VERSION_RFC9849: u16 = 0xfe0d;
 #[derive(Debug, Clone)]
 /// ECH Configuration
 pub struct EchConfig {
@@ -269,7 +269,7 @@ impl Serialize for &EchConfig {
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), EchConfigError> {
     buf.put_u16(self.version);
     match self.version {
-      ECH_CONFIG_VERSION_DRAFT_24 => {
+      ECH_CONFIG_VERSION_RFC9849 => {
         let contents = compose(&self.contents)?;
         buf.put_u16(contents.len() as u16);
         buf.put_slice(&contents);
@@ -353,11 +353,16 @@ impl Serialize for &EchConfigContents {
     buf.put_u8(self.maximum_name_length);
     buf.put_u8(self.public_name.len() as u8);
     buf.put_slice(&self.public_name);
-    let extensions_len = self.extensions.iter().fold(0, |acc, ext| acc + ext.data.len() as u16);
-    buf.put_u16(extensions_len);
+    // Each extension serializes as type(2) + length(2) + data, so the length
+    // prefix must count the full serialized size of every extension, not just
+    // the data bytes. Serializing into a temporary buffer keeps the wire format
+    // in a single place (mirrors EchConfigList::serialize above).
+    let mut ext_buf = BytesMut::new();
     for ext in self.extensions.iter() {
-      ext.serialize(buf)?;
+      ext.serialize(&mut ext_buf)?;
     }
+    buf.put_u16(ext_buf.len() as u16);
+    buf.put_slice(&ext_buf);
     Ok(())
   }
 }
@@ -572,7 +577,7 @@ mod tests {
 
     let serialized = compose(&ech_config_list).unwrap();
     let buf_base64 = BASE64_STANDARD_NO_PAD.encode(&serialized);
-    println!("ech config list (base64): {}", &buf_base64);
+    println!("ech config list (base64): {}", buf_base64);
 
     let record_bytes = BASE64_STANDARD_NO_PAD.decode(&buf_base64).unwrap();
     println!("ech config list (hex): {:x?}", record_bytes);
@@ -594,5 +599,43 @@ mod tests {
     let bytes = EchConfigListBytes::from(svcb_hex.as_slice());
     let ech_config = client::EchConfig::new(bytes, ALL_SUPPORTED_SUITES).unwrap();
     println!("{:#?}", ech_config);
+  }
+
+  #[test]
+  fn test_echconfig_contents_extensions_length_prefix() {
+    // Regression test: the `extensions` length prefix in EchConfigContents must
+    // count each extension's full serialized size (type + length + data), not
+    // only the data length. Otherwise the re-serialized ECHConfig (used to build
+    // the HPKE `info` during ECH decryption) is malformed for non-empty
+    // extensions and decryption against a spec-compliant client fails.
+    let (config_list, _) = EchConfigList::generate("public.test.example.com").unwrap();
+    let mut contents = config_list.iter().next().unwrap().contents.clone();
+
+    let ext = EchConfigExtension {
+      ext_type: 0x0a0a,
+      data: Bytes::from_static(&[0xde, 0xad, 0xbe, 0xef]),
+    };
+    let serialized_ext = compose(&ext).unwrap(); // type(2) + length(2) + data(4) = 8
+    assert_eq!(serialized_ext.len(), 8);
+
+    contents.extensions = vec![ext];
+    let serialized = compose(&contents).unwrap();
+
+    // Round-trips back to the same extension.
+    let parsed: EchConfigContents = parse(&mut &serialized[..]).unwrap();
+    assert_eq!(parsed.extensions.len(), 1);
+    assert_eq!(parsed.extensions[0].ext_type, 0x0a0a);
+    assert_eq!(&parsed.extensions[0].data[..], &[0xde, 0xad, 0xbe, 0xef]);
+
+    // The serialized contents end with [ext_len: u16][serialized extension].
+    // The declared length must equal the full serialized extension length (8),
+    // not the data length (4).
+    let ext_len_offset = serialized.len() - serialized_ext.len() - 2;
+    let declared = u16::from_be_bytes([serialized[ext_len_offset], serialized[ext_len_offset + 1]]);
+    assert_eq!(
+      declared as usize,
+      serialized_ext.len(),
+      "extensions length prefix must include the 4-byte type+length header per extension"
+    );
   }
 }

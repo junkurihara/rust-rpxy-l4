@@ -7,8 +7,8 @@ use crate::proxy_protocol::InboundProxyProtocolConfig;
 use crate::{
   access_log::{AccessLogProtocolType, access_log_start},
   config::EchProtocolConfig,
-  constants::{TCP_PROTOCOL_DETECTION_BUFFER_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
-  count::ConnectionCount,
+  constants::{TCP_BACKEND_CONNECT_TIMEOUT_MSEC, TCP_PROTOCOL_DETECTION_READ_CHUNK_SIZE, TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC},
+  count::{ConnectionCount, ConnectionPermit},
   destination::{LoadBalance, TargetDestination, TlsDestinationItem},
   error::{ProxyBuildError, ProxyError},
   probe::{ProbeResult, TcpProbedProtocol},
@@ -19,7 +19,7 @@ use crate::{
 };
 use bytes::BytesMut;
 use quic_tls::{TlsAlertBuffer, TlsClientHelloBuffer};
-use std::{net::SocketAddr, sync::Arc};
+use std::{future::Future, net::SocketAddr, sync::Arc};
 use tokio::{
   io::{AsyncWriteExt, copy_bidirectional},
   net::TcpStream,
@@ -164,7 +164,7 @@ impl TcpDestinationMuxBuilder {
         } else {
           TlsDestinations::new()
         };
-        current_tls.add(&[], &[], tcp_dest_inner, None, &dns_cache);
+        current_tls.add(&[], &[], tcp_dest_inner, None, dns_cache);
         inner.insert(proto_type, TcpDestination::Tls(current_tls));
       }
       _ => {
@@ -176,6 +176,10 @@ impl TcpDestinationMuxBuilder {
   }
 
   /// Set TLS destinations, use this if alpn and server names are needed for protocol detection or ech is need to be configured
+  #[allow(
+    clippy::too_many_arguments,
+    reason = "The builder method mirrors the existing TLS route configuration fields"
+  )]
   pub(crate) fn set_tls(
     &mut self,
     addrs: &[TargetAddr],
@@ -206,7 +210,7 @@ impl TcpDestinationMuxBuilder {
       alpn.unwrap_or_default(),
       tcp_dest_inner,
       ech.cloned(),
-      &dns_cache,
+      dns_cache,
     );
 
     inner.insert(TcpProtocolType::Tls, TcpDestination::Tls(current_tls));
@@ -335,26 +339,25 @@ impl TcpProxy {
           }
           Ok(res) => res,
         };
-        // Connection limit
-        if self.connection_count.current() >= self.max_connections {
-          warn!("TCP connection limit reached: {}", self.max_connections);
+        let Some(connection_permit) = self.connection_count.try_acquire(self.max_connections) else {
+          debug!("TCP connection limit reached: {}", self.max_connections);
           continue;
-        }
-        self.connection_count.increment();
+        };
         debug!(
           "Accepted TCP connection from: {src_addr} (total: {})",
           self.connection_count.current()
         );
+        // Enable keepalive so a dead/half-open downstream peer is eventually reclaimed by the kernel.
+        enable_tcp_keepalive(&incoming_stream, "downstream");
 
         self.runtime_handle.spawn({
           let dst_mux = Arc::clone(&self.destination_mux);
-          let connection_count = self.connection_count.clone();
           #[cfg(feature = "proxy-protocol")]
           let recv_proxy_protocol_config = self.recv_proxy_protocol_config.clone();
 
           handle_tcp_connection(
             dst_mux,
-            connection_count,
+            connection_permit,
             incoming_stream,
             src_addr,
             #[cfg(feature = "proxy-protocol")]
@@ -378,10 +381,63 @@ impl TcpProxy {
 }
 
 /* ---------------------------------------------------------- */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnexpectedTcpProbeState {
+  PollNext,
+  Failure,
+  Rejected,
+}
+
+fn completed_tcp_probe(probe_result: ProbeResult<TcpProbedProtocol>) -> Result<TcpProbedProtocol, UnexpectedTcpProbeState> {
+  match probe_result {
+    ProbeResult::Success(protocol) => Ok(protocol),
+    ProbeResult::PollNext => Err(UnexpectedTcpProbeState::PollNext),
+    ProbeResult::Failure => Err(UnexpectedTcpProbeState::Failure),
+    ProbeResult::Rejected => Err(UnexpectedTcpProbeState::Rejected),
+  }
+}
+
+fn contextualize_destination_error(error: ProxyError, src_addr: SocketAddr, probed_protocol: &TcpProbedProtocol) -> ProxyError {
+  error
+    .with_source_context(src_addr)
+    .with_protocol_context(&probed_protocol.to_string())
+}
+
+#[derive(Debug)]
+enum TcpBackendConnectError {
+  Io(std::io::Error),
+  Timeout,
+}
+
+async fn connect_tcp_backend_with_timeout<F>(connect: F, duration: Duration) -> Result<TcpStream, TcpBackendConnectError>
+where
+  F: Future<Output = Result<TcpStream, std::io::Error>>,
+{
+  match timeout(duration, connect).await {
+    Ok(Ok(stream)) => Ok(stream),
+    Ok(Err(error)) => Err(TcpBackendConnectError::Io(error)),
+    Err(_) => Err(TcpBackendConnectError::Timeout),
+  }
+}
+
+/// Enable SO_KEEPALIVE (OS-default timing) on a TCP stream so the kernel can
+/// reclaim a dead/half-open peer that vanished without a FIN/RST.
+///
+/// Best-effort: a failure is logged and the connection continues. Keepalive is a
+/// hygiene safety-net; failing to set it must not drop an otherwise-healthy
+/// proxied connection. It reclaims only unresponsive peers, not a live client
+/// deliberately holding a connection.
+fn enable_tcp_keepalive(stream: &TcpStream, leg: &str) {
+  if let Err(e) = socket2::SockRef::from(stream).set_keepalive(true) {
+    warn!("Failed to enable TCP keepalive on the {leg} stream: {e}");
+  }
+}
+
+/* ---------------------------------------------------------- */
 /// Handle TCP connection
 async fn handle_tcp_connection(
   dst_mux: Arc<TcpDestinationMux>,
-  connection_count: ConnectionCount,
+  _connection_permit: ConnectionPermit,
   mut incoming_stream: TcpStream,
   #[cfg(feature = "proxy-protocol")] mut src_addr: SocketAddr,
   #[cfg(not(feature = "proxy-protocol"))] src_addr: SocketAddr,
@@ -405,7 +461,6 @@ async fn handle_tcp_connection(
       }
       Ok(Err(e)) => {
         error!("Failed to parse inbound PROXY header from {src_addr}: {e}");
-        connection_count.decrement();
         return;
       }
       Err(_) => {
@@ -413,13 +468,12 @@ async fn handle_tcp_connection(
           "Timeout ({}ms) reading PROXY header from {src_addr}",
           crate::constants::TCP_PROXY_HEADER_READ_TIMEOUT_MSEC
         );
-        connection_count.decrement();
         return;
       }
     }
   }
 
-  let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
+  let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_READ_CHUNK_SIZE);
   let Ok(probe_result) = timeout(
     Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
     TcpProbedProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
@@ -427,16 +481,23 @@ async fn handle_tcp_connection(
   .await
   else {
     error!("Timeout ({TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC}ms) while probing TCP stream from {src_addr}");
-    connection_count.decrement();
     return;
   };
   let probed_protocol = match probe_result {
-    Ok(ProbeResult::Success(p)) => p,
-    Ok(_) => unreachable!(), // unreachable since PollNext is processed in detect_protocol
+    Ok(result) => match completed_tcp_probe(result) {
+      Ok(protocol) => protocol,
+      Err(unexpected_state) => {
+        error!("TCP protocol detector returned unexpected {unexpected_state:?} state for {src_addr}; closing connection");
+        return;
+      }
+    },
+    Err(error @ (ProxyError::TcpProbeLimitExceeded | ProxyError::TcpProbeRejected | ProxyError::NoDataReceivedTcpStream(_))) => {
+      debug!("TCP protocol probe ended for {src_addr}: {error}");
+      return;
+    }
     Err(e) => {
       let contextual_error = e.with_source_context(src_addr).with_protocol_context("TCP");
       error!("Failed to detect protocol from {src_addr}: {contextual_error}");
-      connection_count.decrement();
       return;
     }
   };
@@ -448,33 +509,28 @@ async fn handle_tcp_connection(
         .with_source_context(src_addr)
         .with_protocol_context(&probed_protocol.to_string());
       error!("No route for {probed_protocol} from {src_addr}: {contextual_error}");
-      connection_count.decrement();
       return;
     }
   };
 
   let Ok(mut dst_addr) = found_dst.get_destination(&src_addr).await.map_err(|e| {
-    let contextual_error = e
-      .with_connection_context(src_addr, "unknown:0".parse().unwrap())
-      .with_protocol_context(&probed_protocol.to_string());
+    let contextual_error = contextualize_destination_error(e, src_addr, &probed_protocol);
     error!("Failed to resolve destination address for {probed_protocol} from {src_addr}: {contextual_error}");
     contextual_error
   }) else {
-    connection_count.decrement();
     return;
   };
 
   let to_be_written = match (&found_dst, &probed_protocol) {
     (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) => {
       // Handle tls, especially ECH
-      let Ok(client_hello_bytes) = handle_tls_client_hello(&client_hello_buf, &tls_destination, &mut dst_addr).await else {
+      let Ok(client_hello_bytes) = handle_tls_client_hello(client_hello_buf, tls_destination, &mut dst_addr).await else {
         // Error means that illegal parameter must be sent back when error
         error!("Failed to handle TLS client hello, sending illegal_parameter alert back to the client");
         let illegal_parameter_alert = TlsAlertBuffer::default();
         if let Err(e) = send_back_tls_alert(&mut incoming_stream, &illegal_parameter_alert).await {
           error!("Failed to send TLS alert: {e}");
         }
-        connection_count.decrement();
         return;
       };
       client_hello_bytes
@@ -485,16 +541,29 @@ async fn handle_tcp_connection(
     }
   };
 
-  let Ok(mut outgoing_stream) = TcpStream::connect(dst_addr).await.map_err(|e| {
-    let contextual_error = ProxyError::IoError(e)
-      .with_connection_context(src_addr, dst_addr)
-      .with_protocol_context(&probed_protocol.to_string());
-    error!("Failed to connect to destination {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
-    contextual_error
-  }) else {
-    connection_count.decrement();
-    return;
+  let mut outgoing_stream = match connect_tcp_backend_with_timeout(
+    TcpStream::connect(dst_addr),
+    Duration::from_millis(TCP_BACKEND_CONNECT_TIMEOUT_MSEC),
+  )
+  .await
+  {
+    Ok(stream) => stream,
+    Err(TcpBackendConnectError::Io(error)) => {
+      let contextual_error = ProxyError::IoError(error)
+        .with_connection_context(src_addr, dst_addr)
+        .with_protocol_context(&probed_protocol.to_string());
+      error!("Failed to connect to destination {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
+      return;
+    }
+    Err(TcpBackendConnectError::Timeout) => {
+      error!(
+        "Timeout ({TCP_BACKEND_CONNECT_TIMEOUT_MSEC}ms) connecting to destination {dst_addr} for {probed_protocol} from {src_addr}"
+      );
+      return;
+    }
   };
+  // Enable keepalive so a dead/half-open backend peer is eventually reclaimed by the kernel.
+  enable_tcp_keepalive(&outgoing_stream, "upstream");
 
   #[cfg(feature = "proxy-protocol")]
   // Write PROXY protocol header before any application data
@@ -508,7 +577,6 @@ async fn handle_tcp_connection(
             .with_connection_context(src_addr, dst_addr)
             .with_protocol_context(&probed_protocol.to_string());
           error!("Failed to write PROXY header to {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
-          connection_count.decrement();
           return;
         }
         debug!("Sent PROXY {pp_version:?} header to {dst_addr} for {probed_protocol} from {src_addr}");
@@ -518,7 +586,6 @@ async fn handle_tcp_connection(
           .with_connection_context(src_addr, dst_addr)
           .with_protocol_context(&probed_protocol.to_string());
         error!("Failed to encode PROXY header for {probed_protocol} from {src_addr}: {contextual_error}");
-        connection_count.decrement();
         return;
       }
     }
@@ -529,7 +596,6 @@ async fn handle_tcp_connection(
       .with_connection_context(src_addr, dst_addr)
       .with_protocol_context(&probed_protocol.to_string());
     error!("Failed to write initial buffer to {dst_addr} for {probed_protocol} from {src_addr}: {contextual_error}");
-    connection_count.decrement();
     return;
   }
   // Here we are establishing a bidirectional connection. Logging the connection.
@@ -552,8 +618,7 @@ async fn handle_tcp_connection(
   }
   // finish log
   tcp_access_log_finish(&src_addr, &dst_addr, &probed_protocol);
-  connection_count.decrement();
-  debug!("TCP proxy connection closed (current: {})", connection_count.current());
+  debug!("TCP proxy connection closed");
 }
 
 /// handle tls, especially ECH
@@ -574,7 +639,7 @@ async fn handle_tls_client_hello<T>(
     trace!("Decrypted ClientHello Inner: {decrypted_ch:#?}");
 
     let sni = decrypted_ch.sni();
-    let Some(private_server_name) = sni.iter().next() else {
+    let Some(private_server_name) = sni.first() else {
       error!("No SNI in decrypted ClientHello");
       return Err(ProxyError::TlsError(
         quic_tls::TlsClientHelloError::NoSniInDecryptedClientHello,
@@ -586,7 +651,7 @@ async fn handle_tls_client_hello<T>(
     };
     // Replace the destination address with the one in the decrypted ClientHello Inner
     let dns_cache = tls_destination.dns_cache();
-    let resolved = private_target_addr.resolve_cached(&dns_cache).await?;
+    let resolved = private_target_addr.resolve_cached(dns_cache).await?;
     if resolved.is_empty() {
       error!("No destination address found for {private_server_name}");
       return Err(ProxyError::NoDestinationAddress(String::new()));
@@ -631,10 +696,128 @@ async fn send_back_tls_alert(incoming_stream: &mut TcpStream, alert_buf: &TlsAle
 }
 /* ---------------------------------------------------------- */
 
+/// Handle TCP access log, when establishing a connection
+fn tcp_access_log_start(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
+  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
+  access_log_start(&proto, src_addr, dst_addr);
+}
+
+/// Handle TCP access log, when closing a connection
+fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
+  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
+  crate::access_log::access_log_finish(&proto, src_addr, dst_addr);
+}
+
+/* ---------------------------------------------------------- */
+
 #[cfg(test)]
 mod tests {
   use super::*;
   use quic_tls::extension::ServerNameIndication;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+  #[test]
+  fn test_unexpected_tcp_probe_states_are_rejected() {
+    assert_eq!(
+      completed_tcp_probe(ProbeResult::Success(TcpProbedProtocol::Any)),
+      Ok(TcpProbedProtocol::Any)
+    );
+    assert_eq!(
+      completed_tcp_probe(ProbeResult::PollNext),
+      Err(UnexpectedTcpProbeState::PollNext)
+    );
+    assert_eq!(
+      completed_tcp_probe(ProbeResult::Failure),
+      Err(UnexpectedTcpProbeState::Failure)
+    );
+    assert_eq!(
+      completed_tcp_probe(ProbeResult::Rejected),
+      Err(UnexpectedTcpProbeState::Rejected)
+    );
+  }
+
+  #[test]
+  fn test_destination_resolution_error_uses_source_only_context() {
+    let src_addr = "192.168.1.100:45000".parse().unwrap();
+    let contextual_error = contextualize_destination_error(
+      ProxyError::DnsResolutionError("resolver unavailable".to_string()),
+      src_addr,
+      &TcpProbedProtocol::Any,
+    );
+    let error_msg = contextual_error.to_string();
+
+    assert!(error_msg.contains("192.168.1.100:45000"));
+    assert!(error_msg.contains("Any protocol"));
+    assert!(error_msg.contains("resolver unavailable"));
+    assert!(!error_msg.contains("unknown"));
+    assert!(!error_msg.contains("->"));
+  }
+
+  #[tokio::test]
+  async fn test_backend_connect_timeout_is_distinct_from_io_failure() {
+    let timeout_result = connect_tcp_backend_with_timeout(
+      std::future::pending::<Result<TcpStream, std::io::Error>>(),
+      Duration::from_millis(1),
+    )
+    .await;
+    assert!(matches!(timeout_result, Err(TcpBackendConnectError::Timeout)));
+
+    let io_result = connect_tcp_backend_with_timeout(
+      std::future::ready(Err(std::io::Error::new(
+        std::io::ErrorKind::ConnectionRefused,
+        "connection refused",
+      ))),
+      Duration::from_secs(1),
+    )
+    .await;
+    assert!(matches!(io_result, Err(TcpBackendConnectError::Io(_))));
+  }
+
+  #[tokio::test]
+  async fn test_enable_tcp_keepalive_sets_option() {
+    // A loopback listener + client yields an accepted (downstream-like) stream
+    // and a connected (upstream-like) stream. Assert enable_tcp_keepalive turns
+    // SO_KEEPALIVE on for each, verified by reading the socket option back
+    // without waiting for any keepalive probe to fire. The two production call
+    // sites (after accept, after backend connect) are covered by review and the
+    // residual search, not by this helper-level test.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let client = TcpStream::connect(addr).await.unwrap();
+    let (accepted, _) = listener.accept().await.unwrap();
+
+    enable_tcp_keepalive(&accepted, "downstream");
+    enable_tcp_keepalive(&client, "upstream");
+
+    assert!(socket2::SockRef::from(&accepted).keepalive().unwrap());
+    assert!(socket2::SockRef::from(&client).keepalive().unwrap());
+  }
+
+  #[tokio::test]
+  async fn test_rejected_tcp_probes_release_admission_permits() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listen_on = listener.local_addr().unwrap();
+    let connection_count = ConnectionCount::default();
+    let destination_mux = Arc::new(TcpDestinationMuxBuilder::default().build().unwrap());
+
+    for _ in 0..3 {
+      let mut client = TcpStream::connect(listen_on).await.unwrap();
+      let (server, src_addr) = listener.accept().await.unwrap();
+      client.write_all(&[0x16, 0x03, 0x01, 0xff, 0xff]).await.unwrap();
+
+      let permit = connection_count.try_acquire(1).unwrap();
+      assert_eq!(connection_count.current(), 1);
+
+      #[cfg(feature = "proxy-protocol")]
+      handle_tcp_connection(destination_mux.clone(), permit, server, src_addr, listen_on, None).await;
+      #[cfg(not(feature = "proxy-protocol"))]
+      handle_tcp_connection(destination_mux.clone(), permit, server, src_addr).await;
+
+      assert_eq!(connection_count.current(), 0);
+      let mut closed = [0u8; 1];
+      assert_eq!(client.read(&mut closed).await.unwrap(), 0);
+    }
+  }
 
   #[tokio::test]
   async fn test_tcp_proxy() {
@@ -740,18 +923,14 @@ mod tests {
 
     let found = dst_mux.find_destination(&TcpProbedProtocol::Any).unwrap();
     let destination = found.get_destination(&"127.0.0.1:60000".parse().unwrap()).await.unwrap();
-    assert!(["1.1.1.1:53".parse().unwrap(), "1.0.0.1:53".parse().unwrap()].contains(&destination));
+    assert!(
+      [
+        "[2606:4700:4700::1111]:53".parse().unwrap(),
+        "[2606:4700:4700::1001]:53".parse().unwrap(),
+        "1.1.1.1:53".parse().unwrap(),
+        "1.0.0.1:53".parse().unwrap()
+      ]
+      .contains(&destination)
+    );
   }
-}
-
-/* ---------------------------------------------------------- */
-/// Handle TCP access log, when establishing a connection
-fn tcp_access_log_start(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
-  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
-  access_log_start(&proto, src_addr, dst_addr);
-}
-/// Handle TCP access log, when closing a connection
-fn tcp_access_log_finish(src_addr: &SocketAddr, dst_addr: &SocketAddr, probed_protocol: &TcpProbedProtocol) {
-  let proto = AccessLogProtocolType::Tcp(probed_protocol.proto_type());
-  crate::access_log::access_log_finish(&proto, src_addr, dst_addr);
 }

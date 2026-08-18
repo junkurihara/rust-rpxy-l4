@@ -22,11 +22,11 @@
 - **Protocol sanitization**: `rpxy-l4` can sanitize the incoming packets to prevent protocol over TCP/UDP mismatching between the client and the backend server by leveraging the protocol multiplexer feature. (Simply drops packets that do not match the expected protocol by disallowing the default route.)
 - **TLS/QUIC forwarder**: `rpxy-l4` can forward TLS/IETF QUIC streams to appropriate backend servers based on the ServerName Indication (SNI) and Application Layer Protocol Negotiation (ALPN) values.
 - **HAProxy PROXY protocol support**: `rpxy-l4` supports outbound PROXY protocol (prepend header to backend connections, global/per-protocol) and inbound PROXY protocol (parse header from trusted upstream proxies) for TCP. (Requires the `proxy-protocol` Cargo feature, enabled by default.)
-- **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with IETF-Draft Encrypted Client Hello. In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
+- **[Experimental] TLS Encrypted Client Hello (ECH) proxy**: `rpxy-l4` works as a proxy[^ech_proxy] to serve TLS/QUIC streams with Encrypted Client Hello ([RFC9849](https://datatracker.ietf.org/doc/html/rfc9849)). In other words, `rpxy-l4` hosts ECH private keys and decrypts the ECH-encrypted Client Hello to route the stream to the appropriate backend server.
 
 [^quic]: Not Google QUIC. Both QUIC v1 ([RFC9000](https://datatracker.ietf.org/doc/html/rfc9000), [RFC9001](https://datatracker.ietf.org/doc/html/rfc9001)) and QUIC v2 ([RFC9369](https://datatracker.ietf.org/doc/html/rfc9369)) are supported.
 
-[^ech_proxy]: Client facing server in the context of [ECH Split Mode](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-3)
+[^ech_proxy]: Client facing server in the context of [ECH Split Mode](https://datatracker.ietf.org/doc/html/rfc9849#section-3)
 
 ## Installation
 
@@ -55,7 +55,13 @@ To build without the PROXY protocol feature:
 
 You can find the Jenkins CI/CD build scripts for `rpxy-l4` in the [./.build](./.build) directory.
 
-Prebuilt packages for Linux RPM and DEB are available at [https://rpxy.gamerboy59.dev](https://rpxy.gamerboy59.dev), provided by [@Gamerboy59](https://github.com/Gamerboy59).
+<details>
+<summary> Prebuilt packages </summary>
+
+> [!WARNING]
+> Prebuilt packages for Linux RPM and DEB are available at [https://rpxy.gamerboy59.dev](https://rpxy.gamerboy59.dev), provided by [@Gamerboy59](https://github.com/Gamerboy59).
+> However, these packages are built and distributed by a third party, and they may lag behind the latest release of `rpxy-l4`, sometimes by several versions. Since new releases often include security-related fixes and improvements, please check the packaged version before installation. To always run the latest release, use the prebuilt binaries on the [GitHub Releases page](https://github.com/junkurihara/rust-rpxy-l4/releases) or the docker image (see below).
+</details>
 
 ## Usage
 
@@ -117,8 +123,10 @@ The above configuration works as the following manner.
 > [!IMPORTANT]
 > For the UDP reverse proxy, `rpxy-l4` manages the pseudo connection for each client based on its socket address (IP address + port number) to save the memory usage and preserve the connection state for protocol multiplexing. The pseudo connection is automatically removed after the idle lifetime (default: 30 seconds) since the last packet received from the client. We recommend setting the `udp_idle_lifetime` value in the configuration file to adjust the idle lifetime according to your use case.
 >
+> Setting `udp_idle_lifetime = 0` disables idle expiry. An unlimited pseudo-connection retains its socket, tasks, and global UDP admission slot, and remains in the existing per-datagram pool scan until service completion or error, replacement, cancellation, configuration reload, or shutdown ends it.
+>
 > ```toml
-> # Udp connection idle lifetime in seconds [default: 30]
+> # UDP connection idle lifetime in seconds; 0 disables idle expiry [default: 30]
 > udp_idle_lifetime = 30
 > ```
 
@@ -202,12 +210,12 @@ target = ["192.168.0.6:443"]
 # Load balancing method for QUIC connections [default: none]
 load_balance = "source_socket"
 
-# Idle lifetime for QUIC connections in seconds [default: 30]
+# Idle lifetime for QUIC connections in seconds; 0 disables idle expiry [default: 30]
 idle_lifetime = 30
 ```
 
 > [!NOTE]
-> Since IETF-QUIC is a UDP-based protocol, the `idle_lifetime` field is available for `protocol="quic"` to adjust the idle lifetime of the pseudo connection only valid for QUIC streams.
+> Since IETF-QUIC is a UDP-based protocol, the `idle_lifetime` field is available for `protocol="quic"` to adjust the idle lifetime of the pseudo connection only valid for QUIC streams. Setting it to `0` disables idle expiry with the same resource-retention behavior described for `udp_idle_lifetime`.
 
 Additionally, you can set the `tls_alpn` and `tls_sni` fields for the case where `protocol="tls"` or `protocol="quic"`. These are additional filters for the TLS/QUIC multiplexer to route the stream to the appropriate backend server based on the Application Layer Protocol Negotiation (ALPN) and Server Name Indication (SNI) values. This means that only streams with the specified ALPN and SNI values are forwarded to the target.
 
@@ -246,7 +254,7 @@ idle_lifetime = 30
 ```
 
 > [!NOTE]
-> As well as QUIC, WireGuard is a UDP-based protocol. The `idle_lifetime` field is available for `protocol="wireguard"`. You should adjust the value according to your WireGuard configuration, especially the keep-alive interval.
+> As well as QUIC, WireGuard is a UDP-based protocol. The `idle_lifetime` field is available for `protocol="wireguard"`. Setting it to `0` disables idle expiry with the same resource-retention behavior described for `udp_idle_lifetime`. Otherwise, you should set it longer than the keep-alive interval.
 
 #### 3.3. Passing through only the expected protocols (protocol sanitization)
 
@@ -342,6 +350,12 @@ The detailed configuration of the container can be found at [./docker](./docker)
 
 ## Caveats
 
+### `TCP` dead-peer reclamation (keepalive)
+
+`rpxy-l4` enables TCP keepalive (using the operating system's default keepalive timing) on both the client-facing and the backend TCP connections. This lets the kernel probe an idle connection and close it if the peer has vanished without a proper `FIN`/`RST` (a crash, a network partition, a NAT/firewall silently dropping state), so a dead or half-open connection does not hold its resources indefinitely.
+
+This is a hygiene measure that reclaims only *unresponsive* peers. It does **not** defend against a live client that deliberately holds a connection open (such a client answers the keepalive probes and keeps the connection alive); enforce that kind of policy at your network/L4 edge (firewall, load balancer). The detection timing follows the host keepalive policy (e.g. a common Linux default is ~2 hours of idle before the first probe), which you can tune via the operating system if faster reclamation is required.
+
 ### `UDP` pseudo connection management
 
 As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from each clients based on the socket address. Also, `rpxy-l4` identifies specific protocols by probing their initial/handshake packets. These means that if the idle lifetime of pseudo connections is too short and the client sends packets in a long interval, the pseudo connection would be removed even during the communication. Then, the subsequent packets from the client, i.e., NOT the initial/handshake packets, are *routed not to the protocol-specific target but to the default target (or dropped if there is no default target)*. To avoid this, you should set the `idle_lifetime` value of UDP-based protocol multiplexer to be longer than the interval of the client's packet sending.
@@ -350,7 +364,7 @@ As mentioned earlier, `rpxy-l4` manages pseudo connections for UDP packets from 
 
 #### Reduced functionality
 
-*Currently we do not fully implement the function of client facing server described in the [IETF draft](https://www.ietf.org/archive/id/draft-ietf-tls-esni-24.html#section-7.1).* It works as the following *simplified and reduced* manner, which is different from the draft:
+*Currently we do not fully implement the function of client facing server described in [RFC9849](https://datatracker.ietf.org/doc/html/rfc9849#section-7.1).* It works as the following *simplified and reduced* manner, which is different from the RFC:
 
 - If no matching configuration with the given ECH is found, it just forwards the client hello to the backend server as it is.
 - `rpxy-l4` does not support the retry mechanisms of client facing server, i.e., it currently has no state about ECH request, and doesn't handle, forward or emit the `HelloRetryRequest` message to the client.
@@ -375,6 +389,16 @@ TBD!
 
 `rpxy-l4` is free, open-source software licensed under MIT License.
 
-You can open issues for bugs you've found or features you think are missing. You can also submit pull requests to this repository.
+## Security
 
-Contributors are more than welcome!
+If you discover a security vulnerability, **do not open a public Issue**.
+Please use [GitHub's Private vulnerability reporting](../../security/advisories/new) to notify the maintainers.
+
+## Contributing
+
+Contributions are welcome (issues, feature requests, bug reports, pull requests).
+
+Please note that this project is maintained primarily based on the code owner’s personal interests, and not backed by any commercial agreement.
+Contributions are handled on a best-effort basis. Sponsorship is also welcome to help sustain the project.
+
+For more details on contribution guidelines and project scope, please see [CONTRIBUTING.md](./CONTRIBUTING.md).

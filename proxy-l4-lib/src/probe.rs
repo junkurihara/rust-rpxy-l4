@@ -1,11 +1,14 @@
-use crate::{constants::TCP_PROTOCOL_DETECTION_BUFFER_SIZE, error::ProxyError, trace::*};
-use bytes::BytesMut;
-use quic_tls::{TlsClientHello, TlsClientHelloBuffer, TlsProbeFailure, probe_quic_initial_packets, probe_tls_handshake};
-use std::{
-  collections::HashSet,
-  sync::{Arc, atomic::AtomicU64},
+use crate::{
+  constants::{TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION, TCP_PROTOCOL_DETECTION_READ_CHUNK_SIZE},
+  error::ProxyError,
+  trace::*,
 };
-use tokio::{io::AsyncReadExt, net::TcpStream};
+use bytes::{BufMut, BytesMut};
+use quic_tls::{
+  TlsClientHello, TlsClientHelloBuffer, TlsProbeFailure, probe_quic_initial_packets, probe_tls_handshake_with_max_probe_bytes,
+};
+use std::collections::HashSet;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Probe result
@@ -16,6 +19,8 @@ pub(crate) enum ProbeResult<T> {
   PollNext,
   /// Failed to probe
   Failure,
+  /// Input matched a protocol but violated a parser safety or resource limit.
+  Rejected,
 }
 
 /* ---------------------------------------------------------- */
@@ -65,12 +70,19 @@ impl std::fmt::Display for TcpProbedProtocol {
 }
 
 /// Poll the incoming TCP stream to detect the protocol
-async fn read_tcp_stream(incoming_stream: &mut TcpStream, buf: &mut BytesMut) -> Result<usize, ProxyError> {
-  let read_len = incoming_stream.read_buf(buf).await?;
+async fn read_tcp_stream<R: AsyncRead + Unpin>(incoming_stream: &mut R, buf: &mut BytesMut) -> Result<usize, ProxyError> {
+  if buf.len() >= TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION {
+    return Err(ProxyError::TcpProbeLimitExceeded);
+  }
+
+  let read_cap = TCP_PROTOCOL_DETECTION_READ_CHUNK_SIZE.min(TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION - buf.len());
+  let mut limited_buf = (&mut *buf).limit(read_cap);
+  let read_len = incoming_stream.read_buf(&mut limited_buf).await?;
   if read_len == 0 {
-    error!("No data received");
+    debug!("No data received while probing TCP protocol");
     return Err(ProxyError::NoDataReceivedTcpStream(String::new()));
   }
+  debug_assert!(buf.len() <= TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION);
   Ok(read_len)
 }
 
@@ -132,48 +144,51 @@ pub(crate) fn detect_socks5(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
 
 /// Detect TLS handshake
 pub(crate) fn detect_tls_handshake(buf: &[u8]) -> ProbeResult<TcpProbedProtocol> {
-  let mut buf = BytesMut::from(buf);
-  match probe_tls_handshake(&mut buf) {
+  let mut buf = buf;
+  match probe_tls_handshake_with_max_probe_bytes(&mut buf, TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION) {
     Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
     Err(TlsProbeFailure::PollNext) => ProbeResult::PollNext,
+    Err(TlsProbeFailure::Rejected(_)) => ProbeResult::Rejected,
     Ok(chi) => ProbeResult::Success(TcpProbedProtocol::Tls(chi)),
   }
 }
 
 impl TcpProbedProtocol {
   /// Detect the protocol from the first few bytes of the incoming stream
-  pub(crate) async fn detect_protocol(
-    incoming_stream: &mut TcpStream,
+  pub(crate) async fn detect_protocol<R: AsyncRead + Unpin>(
+    incoming_stream: &mut R,
     buf: &mut BytesMut,
   ) -> Result<ProbeResult<Self>, ProxyError> {
     let mut probe_functions = vec![detect_ssh, detect_http, detect_socks5, detect_tls_handshake];
 
     while !probe_functions.is_empty() {
-      // Read the first several bytes to probe. at the first loop, the buffer is empty.
-      let mut next_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_BUFFER_SIZE);
-      let _read_len = read_tcp_stream(incoming_stream, &mut next_buf).await?;
-      buf.extend_from_slice(&next_buf[..]);
+      // Read directly into the canonical initial buffer through a bounded view.
+      let _read_len = read_tcp_stream(incoming_stream, buf).await?;
 
-      // Check probe functions
-      #[allow(clippy::type_complexity)]
-      let (new_probe_fns, probe_res): (Vec<fn(&[u8]) -> ProbeResult<_>>, Vec<_>) = probe_functions
-        .into_iter()
-        .filter_map(|f| {
-          let res = f(buf);
-          match res {
-            ProbeResult::Success(_) | ProbeResult::PollNext => Some((f, res)),
-            _ => None,
+      let mut next_probe_functions = Vec::with_capacity(probe_functions.len());
+      let mut successful_probe = None;
+      let mut rejected = false;
+      for probe in probe_functions {
+        match probe(buf) {
+          success @ ProbeResult::Success(_) => {
+            if successful_probe.is_none() {
+              successful_probe = Some(success);
+            }
           }
-        })
-        .unzip();
+          ProbeResult::PollNext => next_probe_functions.push(probe),
+          ProbeResult::Failure => {}
+          ProbeResult::Rejected => rejected = true,
+        }
+      }
 
-      // If any of them returns Success, return the protocol.
-      if let Some(probe_success) = probe_res.into_iter().find(|r| matches!(r, ProbeResult::Success(_))) {
-        return Ok(probe_success);
-      };
+      if rejected {
+        return Err(ProxyError::TcpProbeRejected);
+      }
+      if let Some(success) = successful_probe {
+        return Ok(success);
+      }
 
-      // If the rest returned PollNext, fetch more data
-      probe_functions = new_probe_fns;
+      probe_functions = next_probe_functions;
     }
 
     debug!("Untyped TCP connection");
@@ -219,13 +234,10 @@ impl std::fmt::Display for UdpProbedProtocol {
   }
 }
 
-#[derive(Clone)]
 /// UDP initial datagrams buffer for protocol detection
 pub(crate) struct UdpInitialDatagrams {
   /// inner buffer of multiple UDP datagram payloads
   pub(crate) inner: Vec<Vec<u8>>,
-  /// created at
-  pub(crate) created_at: Arc<AtomicU64>,
   /// Protocols that were detected as 'poll_next'
   pub(crate) probed_as_pollnext: HashSet<UdpProbedProtocol>,
 }
@@ -260,15 +272,46 @@ pub(crate) fn detect_quic_initial(initial_datagrams: &mut UdpInitialDatagrams) -
   let initial_datagrams_inner = initial_datagrams.inner.as_slice();
 
   match probe_quic_initial_packets(initial_datagrams_inner) {
-    Err(TlsProbeFailure::Failure) => ProbeResult::Failure,
-    Err(TlsProbeFailure::PollNext) => {
+    Err(failure) => map_quic_probe_failure(initial_datagrams, failure),
+    Ok(client_hello_info) => ProbeResult::Success(UdpProbedProtocol::Quic(client_hello_info)),
+  }
+}
+
+fn map_quic_probe_failure(
+  initial_datagrams: &mut UdpInitialDatagrams,
+  failure: TlsProbeFailure,
+) -> ProbeResult<UdpProbedProtocol> {
+  match failure {
+    TlsProbeFailure::Failure | TlsProbeFailure::Rejected(_) => ProbeResult::Failure,
+    TlsProbeFailure::PollNext => {
       initial_datagrams
         .probed_as_pollnext
         .insert(UdpProbedProtocol::Quic(Default::default()));
       ProbeResult::PollNext
     }
-    Ok(client_hello_info) => ProbeResult::Success(UdpProbedProtocol::Quic(client_hello_info)),
   }
+}
+
+fn select_udp_probe_result(probe_res: &[ProbeResult<UdpProbedProtocol>]) -> ProbeResult<UdpProbedProtocol> {
+  // Keep parser-safety rejections fail-closed even if a future UDP probe
+  // returns Rejected directly instead of mapping it to Failure first.
+  if probe_res.iter().any(|result| matches!(result, ProbeResult::Rejected)) {
+    return ProbeResult::Rejected;
+  }
+
+  // In case any of the probe results is a success, return it
+  if let Some(probe_success) = probe_res.iter().find(|result| matches!(result, ProbeResult::Success(_))) {
+    return probe_success.clone();
+  }
+
+  // In case any of the probe results is PollNext, return it
+  if probe_res.iter().any(|result| matches!(result, ProbeResult::PollNext)) {
+    return ProbeResult::PollNext;
+  }
+
+  // All detection finished as failure
+  debug!("Untyped UDP connection detected");
+  ProbeResult::Success(UdpProbedProtocol::Any)
 }
 
 impl UdpProbedProtocol {
@@ -285,36 +328,59 @@ impl UdpProbedProtocol {
       initial_datagrams
         .probed_as_pollnext
         .iter()
-        .map(|p| match p {
-          UdpProbedProtocol::Wireguard => detect_wireguard,
-          UdpProbedProtocol::Quic(_) => detect_quic_initial,
-          _ => unreachable!(),
+        .filter_map(|p| match p {
+          UdpProbedProtocol::Wireguard => Some(detect_wireguard as fn(&mut UdpInitialDatagrams) -> ProbeResult<_>),
+          UdpProbedProtocol::Quic(_) => Some(detect_quic_initial),
+          UdpProbedProtocol::Any => {
+            warn!("Ignoring unexpected Any protocol in UDP poll-next candidates");
+            None
+          }
         })
         .collect()
     };
 
     let probe_res = probe_functions.into_iter().map(|f| f(initial_datagrams)).collect::<Vec<_>>();
-
-    // In case any of the probe results is a success, return it
-    if let Some(probe_success) = probe_res.iter().find(|r| matches!(r, ProbeResult::Success(_))) {
-      return Ok(probe_success.clone());
-    };
-
-    // In case any of the probe results is PollNext, return it
-    if let Some(probe_pollnext) = probe_res.iter().find(|r| matches!(r, ProbeResult::PollNext)) {
-      return Ok(probe_pollnext.to_owned());
-    };
-
-    // All detection finished as failure
-    debug!("Untyped UDP connection detected");
-    Ok(ProbeResult::Success(Self::Any))
+    Ok(select_udp_probe_result(&probe_res))
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::time_util::get_since_the_epoch;
+  use tokio::io::AsyncWriteExt;
+
+  fn tls_record(payload: &[u8]) -> Vec<u8> {
+    let mut record = Vec::with_capacity(5 + payload.len());
+    record.extend_from_slice(&[0x16, 0x03, 0x01]);
+    record.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    record.extend_from_slice(payload);
+    record
+  }
+
+  fn valid_client_hello_bytes() -> Vec<u8> {
+    let mut sni_extension = Vec::new();
+    sni_extension.extend_from_slice(&0x0000u16.to_be_bytes());
+    sni_extension.extend_from_slice(&16u16.to_be_bytes());
+    sni_extension.extend_from_slice(&14u16.to_be_bytes());
+    sni_extension.push(0);
+    sni_extension.extend_from_slice(&11u16.to_be_bytes());
+    sni_extension.extend_from_slice(b"example.com");
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&0x0303u16.to_be_bytes());
+    body.extend_from_slice(&[0u8; 32]);
+    body.push(0);
+    body.extend_from_slice(&2u16.to_be_bytes());
+    body.extend_from_slice(&0xc02fu16.to_be_bytes());
+    body.push(1);
+    body.push(0);
+    body.extend_from_slice(&(sni_extension.len() as u16).to_be_bytes());
+    body.extend_from_slice(&sni_extension);
+
+    let mut handshake = vec![0x01, 0, 0, body.len() as u8];
+    handshake.extend_from_slice(&body);
+    tls_record(&handshake)
+  }
 
   #[test]
   fn test_ssh_detection() {
@@ -385,6 +451,133 @@ mod tests {
   }
 
   #[test]
+  fn test_oversized_tls_record_is_rejected() {
+    let oversized_record_header = [0x16, 0x03, 0x01, 0x40, 0x01];
+
+    assert_eq!(detect_tls_handshake(&oversized_record_header), ProbeResult::Rejected);
+  }
+
+  #[tokio::test]
+  async fn test_tcp_read_is_bounded_at_the_per_connection_limit() {
+    let (mut reader, mut writer) = tokio::io::duplex(8);
+    writer.write_all(b"ab").await.unwrap();
+
+    let mut buf = BytesMut::from(vec![0; TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION - 1].as_slice());
+    assert_eq!(read_tcp_stream(&mut reader, &mut buf).await.unwrap(), 1);
+    assert_eq!(buf.len(), TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION);
+    assert_eq!(buf[buf.len() - 1], b'a');
+
+    assert!(matches!(
+      read_tcp_stream(&mut reader, &mut buf).await,
+      Err(ProxyError::TcpProbeLimitExceeded)
+    ));
+    assert_eq!(buf.len(), TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION);
+
+    let mut unread = [0u8; 1];
+    reader.read_exact(&mut unread).await.unwrap();
+    assert_eq!(unread, [b'b']);
+  }
+
+  #[tokio::test]
+  async fn test_valid_client_hello_fragmented_across_tcp_reads() {
+    let encoded = valid_client_hello_bytes();
+    let expected = encoded.clone();
+    let (mut reader, mut writer) = tokio::io::duplex(1);
+    let writer_task = tokio::spawn(async move {
+      writer.write_all(&encoded).await.unwrap();
+    });
+    let mut initial_buf = BytesMut::new();
+
+    let result = TcpProbedProtocol::detect_protocol(&mut reader, &mut initial_buf)
+      .await
+      .unwrap();
+
+    assert!(matches!(result, ProbeResult::Success(TcpProbedProtocol::Tls(_))));
+    assert_eq!(initial_buf.as_ref(), expected.as_slice());
+    writer_task.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn test_ghsa_shaped_oversized_record_is_rejected_without_fallback() {
+    let (mut reader, mut writer) = tokio::io::duplex(16);
+    writer.write_all(&[0x16, 0x03, 0x01, 0xff, 0xff]).await.unwrap();
+    let mut initial_buf = BytesMut::new();
+
+    assert!(matches!(
+      TcpProbedProtocol::detect_protocol(&mut reader, &mut initial_buf).await,
+      Err(ProxyError::TcpProbeRejected)
+    ));
+    assert_eq!(initial_buf.len(), 5);
+  }
+
+  #[tokio::test]
+  async fn test_tls_rejection_takes_precedence_over_another_probe_success() {
+    let input = b"\x16\x03\x01\xff\xffHTTP";
+    let (mut reader, mut writer) = tokio::io::duplex(input.len());
+    writer.write_all(input).await.unwrap();
+    let mut initial_buf = BytesMut::new();
+
+    assert!(matches!(
+      TcpProbedProtocol::detect_protocol(&mut reader, &mut initial_buf).await,
+      Err(ProxyError::TcpProbeRejected)
+    ));
+  }
+
+  #[tokio::test]
+  async fn test_incomplete_tls_records_stop_at_the_cumulative_limit() {
+    const DECLARED_CLIENT_HELLO_BODY_LEN: usize = 0xff_ffff;
+    let mut first_payload = vec![0; 16 * 1024];
+    first_payload[..4].copy_from_slice(&[
+      0x01,
+      (DECLARED_CLIENT_HELLO_BODY_LEN >> 16) as u8,
+      (DECLARED_CLIENT_HELLO_BODY_LEN >> 8) as u8,
+      DECLARED_CLIENT_HELLO_BODY_LEN as u8,
+    ]);
+
+    let mut input = tls_record(&first_payload);
+    let zero_payload = vec![0; 16 * 1024];
+    for _ in 1..8 {
+      input.extend_from_slice(&tls_record(&zero_payload));
+    }
+    assert!(input.len() > TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION);
+
+    let (mut reader, mut writer) = tokio::io::duplex(input.len());
+    writer.write_all(&input).await.unwrap();
+    let mut initial_buf = BytesMut::new();
+
+    assert!(matches!(
+      TcpProbedProtocol::detect_protocol(&mut reader, &mut initial_buf).await,
+      Err(ProxyError::TcpProbeLimitExceeded)
+    ));
+    assert_eq!(initial_buf.len(), TCP_PROTOCOL_DETECTION_MAX_BYTES_PER_CONNECTION);
+  }
+
+  #[tokio::test]
+  async fn test_timeout_and_eof_leave_probe_buffer_bounded() {
+    let (mut waiting_reader, _waiting_writer) = tokio::io::duplex(1);
+    let mut timeout_buf = BytesMut::new();
+
+    assert!(
+      tokio::time::timeout(
+        std::time::Duration::from_millis(1),
+        TcpProbedProtocol::detect_protocol(&mut waiting_reader, &mut timeout_buf),
+      )
+      .await
+      .is_err()
+    );
+    assert!(timeout_buf.is_empty());
+
+    let (mut eof_reader, eof_writer) = tokio::io::duplex(1);
+    drop(eof_writer);
+    let mut eof_buf = BytesMut::new();
+    assert!(matches!(
+      TcpProbedProtocol::detect_protocol(&mut eof_reader, &mut eof_buf).await,
+      Err(ProxyError::NoDataReceivedTcpStream(_))
+    ));
+    assert!(eof_buf.is_empty());
+  }
+
+  #[test]
   fn test_wireguard_detection() {
     // Create a valid Wireguard initiation packet (148 bytes, starts with 0x01000000)
     let mut wg_data = vec![0u8; 148];
@@ -395,7 +588,6 @@ mod tests {
 
     let mut initial_datagrams = UdpInitialDatagrams {
       inner: vec![wg_data],
-      created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
       probed_as_pollnext: Default::default(),
     };
 
@@ -408,10 +600,50 @@ mod tests {
     let invalid_wg = vec![0u8; 100]; // Wrong length
     let mut initial_datagrams_invalid = UdpInitialDatagrams {
       inner: vec![invalid_wg],
-      created_at: Arc::new(AtomicU64::new(get_since_the_epoch())),
       probed_as_pollnext: Default::default(),
     };
 
     assert_eq!(detect_wireguard(&mut initial_datagrams_invalid), ProbeResult::Failure);
+  }
+
+  #[tokio::test]
+  async fn test_unexpected_any_pollnext_candidate_falls_back_to_any() {
+    let mut initial_datagrams = UdpInitialDatagrams {
+      inner: vec![vec![0]],
+      probed_as_pollnext: HashSet::from([UdpProbedProtocol::Any]),
+    };
+
+    assert_eq!(
+      UdpProbedProtocol::detect_protocol(&mut initial_datagrams).await.unwrap(),
+      ProbeResult::Success(UdpProbedProtocol::Any)
+    );
+  }
+
+  #[test]
+  fn test_quic_tls_rejection_does_not_poll_next() {
+    let mut initial_datagrams = UdpInitialDatagrams {
+      inner: vec![vec![0]],
+      probed_as_pollnext: HashSet::new(),
+    };
+
+    assert_eq!(
+      map_quic_probe_failure(
+        &mut initial_datagrams,
+        TlsProbeFailure::Rejected(quic_tls::TlsProbeRejection::ClientHelloTooLarge),
+      ),
+      ProbeResult::Failure
+    );
+    assert!(initial_datagrams.probed_as_pollnext.is_empty());
+  }
+
+  #[test]
+  fn test_udp_rejection_takes_precedence_and_never_falls_back_to_any() {
+    let results = [
+      ProbeResult::Success(UdpProbedProtocol::Any),
+      ProbeResult::PollNext,
+      ProbeResult::Rejected,
+    ];
+
+    assert_eq!(select_udp_probe_result(&results), ProbeResult::Rejected);
   }
 }

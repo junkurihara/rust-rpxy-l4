@@ -1,15 +1,16 @@
 use crate::{
   access_log::{AccessLogProtocolType, access_log_finish, access_log_start},
   constants::{UDP_BUFFER_SIZE, UDP_CHANNEL_CAPACITY},
+  count::ConnectionPermit,
   error::ProxyError,
   proto::UdpProtocolType,
   socket::{DownstreamUdpSocket, bind_udp_socket},
-  time_util::get_since_the_epoch,
+  time_util::get_monotonic_seconds,
   trace::*,
   udp_proxy::UdpDestinationInner,
 };
 use std::{
-  net::{IpAddr, SocketAddr},
+  net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
   sync::{
     Arc, OnceLock,
     atomic::{AtomicU64, Ordering},
@@ -23,14 +24,20 @@ pub static BASE_ANY_SOCKET_V4: OnceLock<SocketAddr> = OnceLock::new();
 /// Any socket address for IPv6 for auto-binding
 pub static BASE_ANY_SOCKET_V6: OnceLock<SocketAddr> = OnceLock::new();
 
-/// Initialize once lock values
-fn init_once_lock() {
-  let _ = BASE_ANY_SOCKET_V4.get_or_init(|| "0.0.0.0:0".parse().unwrap());
-  let _ = BASE_ANY_SOCKET_V6.get_or_init(|| "[::]:0".parse().unwrap());
+fn base_any_socket_v4() -> &'static SocketAddr {
+  BASE_ANY_SOCKET_V4.get_or_init(|| SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
+}
+
+fn base_any_socket_v6() -> &'static SocketAddr {
+  BASE_ANY_SOCKET_V6.get_or_init(|| SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0))
 }
 
 /// DashMap type alias, uses ahash::RandomState as hashbuilder
 type DashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
+
+fn should_retain_udp_connection(idle_lifetime: u64, last_active: u64, current: u64) -> bool {
+  idle_lifetime == 0 || current.saturating_sub(last_active) < idle_lifetime
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 /// Key for UDP pseudo-connections scoped by downstream source socket and local destination IP.
@@ -46,7 +53,6 @@ impl UdpFlowKey {
 }
 
 /* ---------------------------------------------------------- */
-#[derive(Clone)]
 /// Udp connection pool
 pub(crate) struct UdpConnectionPool {
   /// inner hashmap
@@ -60,8 +66,6 @@ pub(crate) struct UdpConnectionPool {
 impl UdpConnectionPool {
   /// Create a new UdpConnectionManager
   pub(crate) fn new(runtime_handle: Handle, parent_cancel_token: CancellationToken) -> Self {
-    init_once_lock();
-
     let inner: DashMap<UdpFlowKey, UdpConnection> = DashMap::default();
     Self {
       inner,
@@ -83,12 +87,13 @@ impl UdpConnectionPool {
   /// Create and insert a new UdpConnection, and return the
   /// If the source address + port already exists, update the value.
   pub(crate) async fn create_new_connection(
-    &self,
+    self: &Arc<Self>,
     src_addr: &SocketAddr,
     udp_dst: &UdpDestinationInner,
     protocol: &UdpProtocolType,
     udp_socket_to_downstream: Arc<DownstreamUdpSocket>,
     local_ip: IpAddr,
+    connection_permit: ConnectionPermit,
   ) -> Result<UdpConnection, ProxyError> {
     // Connection limit is handled by the caller
 
@@ -100,6 +105,7 @@ impl UdpConnectionPool {
         udp_socket_to_downstream,
         local_ip,
         self.parent_cancel_token.child_token(),
+        connection_permit,
       )
       .await?,
     );
@@ -112,13 +118,13 @@ impl UdpConnectionPool {
       old_conn.inner.cancel_token.cancel(); // cancel the old connection
     }
     // spawn the connection service
-    let self_clone = self.clone();
+    let pool = Arc::clone(self);
     self.runtime_handle.spawn(async move {
       // Here we are establishing a udp connection. Logging info for the connection as an access log.
       udp_access_log_start(&conn);
-      conn.serve(rx, self_clone.runtime_handle.clone()).await;
+      conn.serve(rx, pool.runtime_handle.clone()).await;
       // clean up if the connection service is closed, here the connection service was already closed
-      self_clone.remove(&flow_key);
+      pool.remove_if_same(&flow_key, &conn);
       // finish log
       udp_access_log_finish(&conn);
     });
@@ -128,8 +134,10 @@ impl UdpConnectionPool {
   }
 
   /// Remove the entry by the downstream flow key.
-  fn remove(&self, flow_key: &UdpFlowKey) {
-    self.inner.remove(flow_key);
+  fn remove_if_same(&self, flow_key: &UdpFlowKey, connection: &Arc<UdpConnectionInner>) {
+    self
+      .inner
+      .remove_if(flow_key, |_, current| Arc::ptr_eq(&current.inner, connection));
   }
 
   /// Prune inactive connections
@@ -137,13 +145,13 @@ impl UdpConnectionPool {
   pub(crate) fn prune_inactive_connections(&self) {
     self.inner.retain(|_, conn| {
       let last_active = conn.inner.last_active.load(Ordering::Acquire);
-      let current = get_since_the_epoch();
-      let elapsed = current - last_active;
+      let current = get_monotonic_seconds();
+      let elapsed = current.saturating_sub(last_active);
       debug!(
         "UdpConnection from {} to {} is active for {} seconds",
         conn.inner.src_addr, conn.inner.dst_addr, elapsed
       );
-      if elapsed < conn.inner.idle_lifetime {
+      if should_retain_udp_connection(conn.inner.idle_lifetime, last_active, current) {
         return true;
       }
       debug!("UdpConnection from {} is pruned due to inactivity", conn.inner.src_addr);
@@ -185,9 +193,12 @@ impl UdpConnection {
   }
 }
 /* ---------------------------------------------------------- */
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 /// Udp connection
 struct UdpConnectionInner {
+  /// Permit for one global UDP connection slot
+  _connection_permit: ConnectionPermit,
+
   /// Udp protocol type
   protocol: UdpProtocolType,
 
@@ -227,21 +238,23 @@ impl UdpConnectionInner {
     udp_socket_to_downstream: Arc<DownstreamUdpSocket>,
     local_ip: IpAddr,
     cancel_token: CancellationToken,
+    connection_permit: ConnectionPermit,
   ) -> Result<Self, ProxyError> {
     let dst_addr = udp_dst.get_destination(src_addr).await?;
     let idle_lifetime = udp_dst.get_connection_idle_lifetime() as u64;
     let udp_socket_to_upstream = match dst_addr {
-      SocketAddr::V4(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V4.get().unwrap())?),
-      SocketAddr::V6(_) => UdpSocket::from_std(bind_udp_socket(BASE_ANY_SOCKET_V6.get().unwrap())?),
+      SocketAddr::V4(_) => UdpSocket::from_std(bind_udp_socket(base_any_socket_v4())?),
+      SocketAddr::V6(_) => UdpSocket::from_std(bind_udp_socket(base_any_socket_v6())?),
     }
     .map(Arc::new)?;
 
     udp_socket_to_upstream.connect(dst_addr).await?;
     debug!("Connected to the upstream server: {dst_addr}");
 
-    let last_active = Arc::new(AtomicU64::new(get_since_the_epoch()));
+    let last_active = Arc::new(AtomicU64::new(get_monotonic_seconds()));
 
     Ok(Self {
+      _connection_permit: connection_permit,
       protocol: protocol.clone(),
       src_addr: *src_addr,
       dst_addr,
@@ -256,26 +269,26 @@ impl UdpConnectionInner {
 
   /// Update the last active time
   fn update_last_active(&self) {
-    self.last_active.store(get_since_the_epoch(), Ordering::Release);
+    self.last_active.store(get_monotonic_seconds(), Ordering::Release);
   }
 
   /// Serve the UdpConnection
-  async fn serve(&self, channel_rx: mpsc::Receiver<Vec<u8>>, runtime_handle: Handle) {
+  async fn serve(self: &Arc<Self>, channel_rx: mpsc::Receiver<Vec<u8>>, runtime_handle: Handle) {
     debug!("UdpConnection from {} to {} started", self.src_addr, self.dst_addr);
     let udp_socket_to_upstream_tx = self.udp_socket_to_upstream.clone();
     let udp_socket_to_upstream_rx = self.udp_socket_to_upstream.clone();
 
     /* ---------------------------------------------------------- */
     let downstream_jh = runtime_handle.clone().spawn({
-      let self_clone = self.clone();
-      async move { self_clone.service_forward_downstream(udp_socket_to_upstream_rx).await }
+      let connection = Arc::clone(self);
+      async move { connection.service_forward_downstream(udp_socket_to_upstream_rx).await }
     });
 
     /* ---------------------------------------------------------- */
     let upstream_jh = runtime_handle.clone().spawn({
-      let self_clone = self.clone();
+      let connection = Arc::clone(self);
       async move {
-        self_clone
+        connection
           .service_forward_upstream(channel_rx, udp_socket_to_upstream_tx)
           .await
       }
@@ -398,7 +411,10 @@ fn udp_access_log_finish(conn: &UdpConnectionInner) {
 /* ---------------------------------------------------------- */
 #[cfg(test)]
 mod tests {
-  use crate::target::{DnsCache, TargetAddr};
+  use crate::{
+    count::ConnectionCount,
+    target::{DnsCache, TargetAddr},
+  };
 
   use super::*;
   use std::str::FromStr;
@@ -420,13 +436,43 @@ mod tests {
     tracing_subscriber::registry().with(stdio_layer).init();
   }
 
+  async fn wait_for_connection_count(count: &ConnectionCount, expected: usize) {
+    tokio::time::timeout(tokio::time::Duration::from_secs(1), async {
+      while count.current() != expected {
+        tokio::task::yield_now().await;
+      }
+    })
+    .await
+    .unwrap();
+  }
+
+  #[test]
+  fn test_should_retain_udp_connection() {
+    let cases = [
+      ("zero lifetime at creation", 0, 100, 100, true),
+      ("zero lifetime after long idle", 0, 100, u64::MAX, true),
+      ("below nonzero boundary", 30, 100, 129, true),
+      ("at nonzero boundary", 30, 100, 130, false),
+      ("above nonzero boundary", 30, 100, 131, false),
+      ("defensive clock regression", 30, 101, 100, true),
+    ];
+
+    for (case, idle_lifetime, last_active, current, expected) in cases {
+      assert_eq!(
+        should_retain_udp_connection(idle_lifetime, last_active, current),
+        expected,
+        "{case}"
+      );
+    }
+  }
+
   #[tokio::test]
   async fn test_udp_connection_pool() {
     init_logger();
     let runtime_handle = tokio::runtime::Handle::current();
 
     let cancel_token = CancellationToken::new();
-    let udp_connection_pool = UdpConnectionPool::new(runtime_handle.clone(), cancel_token.clone());
+    let udp_connection_pool = Arc::new(UdpConnectionPool::new(runtime_handle.clone(), cancel_token.clone()));
 
     let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
     let dns_cache = Arc::new(DnsCache::default());
@@ -441,22 +487,68 @@ mod tests {
     let socket: SocketAddr = "127.0.0.1:55555".parse().unwrap();
     let udp_socket_to_downstream = Arc::new(DownstreamUdpSocket::bind(&socket).unwrap());
     let protocol = UdpProtocolType::Any;
+    let admission_count = ConnectionCount::default();
 
-    let _udp_connection = udp_connection_pool
+    let udp_connection = udp_connection_pool
       .create_new_connection(
         &src_addr,
         &udp_dst,
         &protocol,
         udp_socket_to_downstream,
         IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        admission_count.try_acquire(1).unwrap(),
       )
       .await
       .unwrap();
+    assert_eq!(admission_count.current(), 1);
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    drop(udp_connection);
+    cancel_token.cancel();
+    wait_for_connection_count(&admission_count, 0).await;
+    assert_eq!(admission_count.current(), 0);
+  }
 
-    udp_connection_pool.prune_inactive_connections();
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+  #[tokio::test]
+  async fn test_zero_idle_lifetime_disables_pruning_and_retains_permit() {
+    let runtime_handle = tokio::runtime::Handle::current();
+    let cancel_token = CancellationToken::new();
+    let pool = Arc::new(UdpConnectionPool::new(runtime_handle, cancel_token.clone()));
+    let src_addr: SocketAddr = "127.0.0.1:12347".parse().unwrap();
+    let local_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let dns_cache = Arc::new(DnsCache::default());
+    let udp_dst = UdpDestinationInner::try_from((
+      ["127.0.0.1:54323".parse::<TargetAddr>().unwrap()].as_slice(),
+      None,
+      &dns_cache,
+      Some(0),
+    ))
+    .unwrap();
+    let downstream = Arc::new(DownstreamUdpSocket::bind(&"127.0.0.1:0".parse().unwrap()).unwrap());
+    let admission_count = ConnectionCount::default();
+
+    let connection = pool
+      .create_new_connection(
+        &src_addr,
+        &udp_dst,
+        &UdpProtocolType::Any,
+        downstream,
+        local_ip,
+        admission_count.try_acquire(1).unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(pool.local_pool_size(), 1);
+    assert_eq!(admission_count.current(), 1);
+
+    pool.prune_inactive_connections();
+
+    assert!(pool.get(&UdpFlowKey::new(src_addr, local_ip)).is_some());
+    assert_eq!(pool.local_pool_size(), 1);
+    assert_eq!(admission_count.current(), 1);
+
+    drop(connection);
+    cancel_token.cancel();
+    wait_for_connection_count(&admission_count, 0).await;
   }
 
   #[test]
@@ -512,7 +604,7 @@ mod tests {
     // because not all CI environments have multiple loopback addresses available.
     let runtime_handle = tokio::runtime::Handle::current();
     let cancel_token = CancellationToken::new();
-    let pool = UdpConnectionPool::new(runtime_handle, cancel_token.clone());
+    let pool = Arc::new(UdpConnectionPool::new(runtime_handle, cancel_token.clone()));
 
     let src_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
     let dns_cache = Arc::new(DnsCache::default());
@@ -531,23 +623,91 @@ mod tests {
     // Both connections share the same downstream socket (bind to loopback).
     let socket_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let ds = Arc::new(DownstreamUdpSocket::bind(&socket_addr).unwrap());
+    let admission_count = ConnectionCount::default();
 
-    let _conn_a = pool
-      .create_new_connection(&src_addr, &udp_dst, &UdpProtocolType::Any, ds.clone(), vip_a)
+    let conn_a = pool
+      .create_new_connection(
+        &src_addr,
+        &udp_dst,
+        &UdpProtocolType::Any,
+        ds.clone(),
+        vip_a,
+        admission_count.try_acquire(2).unwrap(),
+      )
       .await
       .unwrap();
-    let _conn_b = pool
-      .create_new_connection(&src_addr, &udp_dst, &UdpProtocolType::Any, ds, vip_b)
+    let conn_b = pool
+      .create_new_connection(
+        &src_addr,
+        &udp_dst,
+        &UdpProtocolType::Any,
+        ds,
+        vip_b,
+        admission_count.try_acquire(2).unwrap(),
+      )
       .await
       .unwrap();
 
     // Both connections must coexist in the pool.
     assert_eq!(pool.local_pool_size(), 2);
+    assert_eq!(admission_count.current(), 2);
     assert!(pool.get(&UdpFlowKey::new(src_addr, vip_a)).is_some());
     assert!(pool.get(&UdpFlowKey::new(src_addr, vip_b)).is_some());
 
+    drop((conn_a, conn_b));
     cancel_token.cancel();
-    // Give spawned tasks time to clean up.
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    wait_for_connection_count(&admission_count, 0).await;
+    assert_eq!(admission_count.current(), 0);
+  }
+
+  #[tokio::test]
+  async fn test_udp_connection_replacement_releases_only_replaced_permit() {
+    let runtime_handle = tokio::runtime::Handle::current();
+    let cancel_token = CancellationToken::new();
+    let pool = Arc::new(UdpConnectionPool::new(runtime_handle, cancel_token.clone()));
+    let src_addr: SocketAddr = "127.0.0.1:12346".parse().unwrap();
+    let local_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let dns_cache = Arc::new(DnsCache::default());
+    let udp_dst = UdpDestinationInner::try_from((
+      ["127.0.0.1:54322".parse::<TargetAddr>().unwrap()].as_slice(),
+      None,
+      &dns_cache,
+      Some(10),
+    ))
+    .unwrap();
+    let downstream = Arc::new(DownstreamUdpSocket::bind(&"127.0.0.1:0".parse().unwrap()).unwrap());
+    let admission_count = ConnectionCount::default();
+
+    let replaced = pool
+      .create_new_connection(
+        &src_addr,
+        &udp_dst,
+        &UdpProtocolType::Any,
+        downstream.clone(),
+        local_ip,
+        admission_count.try_acquire(2).unwrap(),
+      )
+      .await
+      .unwrap();
+    let replacement = pool
+      .create_new_connection(
+        &src_addr,
+        &udp_dst,
+        &UdpProtocolType::Any,
+        downstream,
+        local_ip,
+        admission_count.try_acquire(2).unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(admission_count.current(), 2);
+
+    drop(replaced);
+    wait_for_connection_count(&admission_count, 1).await;
+    assert!(pool.get(&UdpFlowKey::new(src_addr, local_ip)).is_some());
+
+    drop(replacement);
+    cancel_token.cancel();
+    wait_for_connection_count(&admission_count, 0).await;
   }
 }

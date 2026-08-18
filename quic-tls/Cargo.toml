@@ -14,26 +14,27 @@ publish.workspace = true
 tracing = { version = "0.1.44" }
 
 # error handling
-anyhow = { version = "1.0.102" }
-thiserror = { version = "2.0.18" }
+anyhow = { version = "1.0.104" }
+thiserror = { version = "2.0.20" }
 
 # quic parser
-hkdf = { version = "0.12.4" }
-sha2 = { version = "0.10.9" }
-aes = { version = "0.8.4" }
-aes-gcm = { version = "0.10.3" }
+hkdf = { version = "0.13.0" }
+sha2 = { version = "0.11.0" }
+aes = { version = "0.9.2" }
+aes-gcm = { version = "0.11.0" }
 hex-literal = { version = "1.1.0" }
 
 # ech
-bytes = { version = "1.11.1" }
-rand = { version = "0.10.0" }
-base64 = { version = "0.22.1" }
-# Use my own fork of HPKE until the upstream crate is update to support the braking change at RustCrypto crypto-common 0.2.1
-# hpke = { version = "0.14.0-pre.2" }
-hpke = { git = "https://github.com/junkurihara/rust-hpke", rev = "0f51c54bdcb3065f3603684447a3197265d87147"}
-# Workaround for hkdf inside hpke build failure due to digest 0.11.2 update, remove when hpke updates to digest 0.11.2 or later
-digest = { version = "=0.11.1" }
-
+bytes = { version = "1.12.1" }
+rand = { version = "0.10.2" }
+base64 = { version = "0.23.1" }
+hpke = { version = "0.14.0", default-features = false, features = [
+  "aes",
+  "nistp",
+  "x25519",
+  "alloc",
+  "getrandom",
+] }
 
 [dev-dependencies]
-rustls = { version = "0.23.37" }
+rustls = { version = "0.23.43" }

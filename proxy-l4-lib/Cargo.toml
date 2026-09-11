@@ -46,7 +46,7 @@ tokio-util = { version = "0.7.19", default-features = false }
 
 # network
 socket2 = { version = "0.6.5", features = ["all"] }
-hickory-resolver = { version = "0.26.2" }
+hickory-resolver = { version = "0.26.3" }
 
 # quic and tls
 quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }

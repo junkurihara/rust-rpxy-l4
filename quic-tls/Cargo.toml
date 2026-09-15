@@ -37,4 +37,4 @@ hpke = { version = "0.14.1", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-rustls = { version = "0.23.44" }
+rustls = { version = "0.23.45" }

@@ -20,7 +20,7 @@ impl ConnectionCount {
   pub(crate) fn try_acquire(&self, max: usize) -> Option<ConnectionPermit> {
     self
       .0
-      .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+      .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         (current < max).then(|| current + 1)
       })
       .ok()

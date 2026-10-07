@@ -42,7 +42,7 @@ async-trait = { version = "0.1.92" }
 mimalloc = { version = "0.1.52", default-features = false }
 
 # async runtime
-tokio = { version = "1.53.1", default-features = false, features = [
+tokio = { version = "1.53.2", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",

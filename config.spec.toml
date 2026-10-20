@@ -34,6 +34,10 @@ tcp_backlog = 1024
 # (Optional) Maximum TCP connections [default: 1024]
 tcp_max_connections = 1024
 
+# (Optional) Maximum time in milliseconds to wait for the first bytes of a TCP connection while detecting its protocol [default: 100]
+# Connections that send nothing within this time are closed. Raise it for clients with a high round-trip time (e.g. behind a tunnel).
+# tcp_protocol_detection_timeout_msec = 100
+
 # (Optional) Maximum UDP connections [default: 2048]
 udp_max_connections = 2048
 

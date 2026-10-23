@@ -1642,7 +1642,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1662,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-examples"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "base64",
  "clap",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-lib"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "ahash",
  "bytes",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "rpxy-l4-quic-tls"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "aes",
  "aes-gcm",

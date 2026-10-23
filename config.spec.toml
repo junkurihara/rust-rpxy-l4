@@ -36,6 +36,7 @@ tcp_max_connections = 1024
 
 # (Optional) Maximum time in milliseconds to wait for the first bytes of a TCP connection while detecting its protocol [default: 100]
 # Connections that send nothing within this time are closed. Raise it for clients with a high round-trip time (e.g. behind a tunnel).
+# While waiting, each connection holds a slot of tcp_max_connections, so a larger value lets silent connections occupy slots longer.
 # tcp_protocol_detection_timeout_msec = 100
 
 # (Optional) Maximum UDP connections [default: 2048]

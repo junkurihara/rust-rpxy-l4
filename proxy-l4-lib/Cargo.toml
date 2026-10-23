@@ -34,7 +34,7 @@ thiserror = { version = "2.0.21" }
 tracing = { version = "0.1.44" }
 
 # async runtime
-tokio = { version = "1.53.3", default-features = false, features = [
+tokio = { version = "1.54.1", default-features = false, features = [
   "net",
   "rt-multi-thread",
   "time",
@@ -52,7 +52,7 @@ hickory-resolver = { version = "0.26.3" }
 quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }
 
 [target.'cfg(unix)'.dependencies]
-libc = { version = "0.2.190" }
+libc = { version = "0.2.191" }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.23" }

@@ -40,6 +40,7 @@ pub struct ConfigToml {
   pub listen_ipv6: Option<bool>,
   pub tcp_backlog: Option<u32>,
   pub tcp_max_connections: Option<u32>,
+  pub tcp_protocol_detection_timeout_msec: Option<u64>,
   pub udp_max_connections: Option<u32>,
   // tcp default target
   pub tcp_target: Option<Vec<String>>,
@@ -280,6 +281,7 @@ impl TryFrom<ConfigToml> for Config {
       listen_addresses_v6,
       tcp_backlog: config_toml.tcp_backlog,
       tcp_max_connections: config_toml.tcp_max_connections,
+      tcp_protocol_detection_timeout_msec: config_toml.tcp_protocol_detection_timeout_msec,
       udp_max_connections: config_toml.udp_max_connections,
       tcp_target,
       tcp_load_balance,
@@ -443,6 +445,24 @@ tcp_target = ["127.0.0.1:80"]
     let config_toml = parse_config_toml(toml_str);
     assert_eq!(config_toml.listen_port, Some(8448));
     assert_eq!(config_toml.tcp_target, Some(vec!["127.0.0.1:80".to_string()]));
+  }
+
+  #[test]
+  fn test_tcp_protocol_detection_timeout_from_toml() {
+    let config_toml: ConfigToml = toml::from_str(
+      r#"
+listen_port = 8448
+tcp_target = ["127.0.0.1:80"]
+tcp_protocol_detection_timeout_msec = 5000
+"#,
+    )
+    .unwrap();
+    assert_eq!(config_toml.tcp_protocol_detection_timeout_msec, Some(5000));
+    let config = Config::try_from(config_toml).unwrap();
+    assert_eq!(config.tcp_protocol_detection_timeout_msec, Some(5000));
+
+    let default_toml: ConfigToml = toml::from_str("listen_port = 8448\ntcp_target = [\"127.0.0.1:80\"]\n").unwrap();
+    assert_eq!(default_toml.tcp_protocol_detection_timeout_msec, None);
   }
 
   #[test]

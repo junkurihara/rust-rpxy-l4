@@ -290,6 +290,10 @@ pub struct TcpProxy {
   /// If `cnt` is shared with other spawned TCP proxies, this value is evaluated for the total number of connections
   max_connections: usize,
 
+  #[builder(default = "Duration::from_millis(crate::constants::TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC)")]
+  /// Maximum time to wait for the first bytes of a connection while detecting its protocol
+  protocol_detection_timeout: Duration,
+
   #[cfg(feature = "proxy-protocol")]
   #[builder(default = "None", setter(custom))]
   /// Configuration for receiving inbound PROXY protocol header, if None, the proxy will not attempt to parse the PROXY header
@@ -358,6 +362,7 @@ impl TcpProxy {
           handle_tcp_connection(
             dst_mux,
             connection_permit,
+            self.protocol_detection_timeout,
             incoming_stream,
             src_addr,
             #[cfg(feature = "proxy-protocol")]
@@ -438,6 +443,7 @@ fn enable_tcp_keepalive(stream: &TcpStream, leg: &str) {
 async fn handle_tcp_connection(
   dst_mux: Arc<TcpDestinationMux>,
   _connection_permit: ConnectionPermit,
+  protocol_detection_timeout: Duration,
   mut incoming_stream: TcpStream,
   #[cfg(feature = "proxy-protocol")] mut src_addr: SocketAddr,
   #[cfg(not(feature = "proxy-protocol"))] src_addr: SocketAddr,
@@ -475,12 +481,15 @@ async fn handle_tcp_connection(
 
   let mut initial_buf = BytesMut::with_capacity(TCP_PROTOCOL_DETECTION_READ_CHUNK_SIZE);
   let Ok(probe_result) = timeout(
-    Duration::from_millis(TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC),
+    protocol_detection_timeout,
     TcpProbedProtocol::detect_protocol(&mut incoming_stream, &mut initial_buf),
   )
   .await
   else {
-    error!("Timeout ({TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC}ms) while probing TCP stream from {src_addr}");
+    error!(
+      "Timeout ({}ms) while probing TCP stream from {src_addr}",
+      protocol_detection_timeout.as_millis()
+    );
     return;
   };
   let probed_protocol = match probe_result {
@@ -799,6 +808,7 @@ mod tests {
     let listen_on = listener.local_addr().unwrap();
     let connection_count = ConnectionCount::default();
     let destination_mux = Arc::new(TcpDestinationMuxBuilder::default().build().unwrap());
+    let detection_timeout = Duration::from_millis(crate::constants::TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC);
 
     for _ in 0..3 {
       let mut client = TcpStream::connect(listen_on).await.unwrap();
@@ -809,9 +819,18 @@ mod tests {
       assert_eq!(connection_count.current(), 1);
 
       #[cfg(feature = "proxy-protocol")]
-      handle_tcp_connection(destination_mux.clone(), permit, server, src_addr, listen_on, None).await;
+      handle_tcp_connection(
+        destination_mux.clone(),
+        permit,
+        detection_timeout,
+        server,
+        src_addr,
+        listen_on,
+        None,
+      )
+      .await;
       #[cfg(not(feature = "proxy-protocol"))]
-      handle_tcp_connection(destination_mux.clone(), permit, server, src_addr).await;
+      handle_tcp_connection(destination_mux.clone(), permit, detection_timeout, server, src_addr).await;
 
       assert_eq!(connection_count.current(), 0);
       let mut closed = [0u8; 1];

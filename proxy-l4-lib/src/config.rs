@@ -225,6 +225,12 @@ pub fn validate_basic_config(config: &Config) -> Result<(), ProxyBuildError> {
     ));
   }
 
+  if let Some(0) = config.tcp_protocol_detection_timeout_msec {
+    return Err(ProxyBuildError::BuildMultiplexersError(
+      "TCP protocol detection timeout cannot be 0 when specified".to_string(),
+    ));
+  }
+
   if let Some(max_udp) = config.udp_max_connections
     && max_udp == 0
   {
@@ -269,6 +275,7 @@ pub fn create_test_tcp_config(port: u16, target: &str) -> Config {
     listen_addresses_v6: vec![],
     tcp_backlog: None,
     tcp_max_connections: None,
+    tcp_protocol_detection_timeout_msec: None,
     udp_max_connections: None,
     tcp_target: Some(vec![target.parse().unwrap()]),
     tcp_load_balance: None,
@@ -296,6 +303,7 @@ pub fn create_test_udp_config(port: u16, target: &str) -> Config {
     listen_addresses_v6: vec![],
     tcp_backlog: None,
     tcp_max_connections: None,
+    tcp_protocol_detection_timeout_msec: None,
     udp_max_connections: None,
     tcp_target: None,
     tcp_load_balance: None,
@@ -328,6 +336,9 @@ pub struct Config {
   pub tcp_backlog: Option<u32>,
   /// Max TCP concurrent connections in total of all spawned TCP proxies
   pub tcp_max_connections: Option<u32>,
+  /// Maximum time in milliseconds to wait for the first bytes of a TCP connection while detecting its protocol.
+  /// `None` uses the default (`TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC`). Raise it for clients with a high round-trip time.
+  pub tcp_protocol_detection_timeout_msec: Option<u64>,
   /// Max UDP concurrent connections in total of all spawned UDP proxies
   pub udp_max_connections: Option<u32>,
   /// Default target for TCP (can be IP addresses or domain names)
@@ -507,6 +518,15 @@ mod tests {
     let mut invalid_config = config.clone();
     invalid_config.udp_max_connections = Some(0);
     assert!(validate_basic_config(&invalid_config).is_err());
+
+    // Test zero protocol detection timeout
+    let mut invalid_config = config.clone();
+    invalid_config.tcp_protocol_detection_timeout_msec = Some(0);
+    assert!(validate_basic_config(&invalid_config).is_err());
+
+    let mut valid_config = config.clone();
+    valid_config.tcp_protocol_detection_timeout_msec = Some(5000);
+    assert!(validate_basic_config(&valid_config).is_ok());
   }
 
   #[test]
@@ -681,6 +701,7 @@ mod tests {
       listen_addresses_v6: vec![],
       tcp_backlog: None,
       tcp_max_connections: None,
+      tcp_protocol_detection_timeout_msec: None,
       udp_max_connections: None,
       tcp_target: None,
       tcp_load_balance: None,

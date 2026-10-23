@@ -135,6 +135,7 @@ struct ProxyService {
   listen_sockets: Vec<SocketAddr>,
   tcp_backlog: Option<u32>,
   tcp_max_connections: Option<u32>,
+  tcp_protocol_detection_timeout_msec: Option<u64>,
   udp_max_connections: Option<u32>,
   tcp_admission_count: AdmissionCount,
   udp_admission_count: AdmissionCount,
@@ -162,6 +163,7 @@ impl ProxyService {
       listen_sockets: Self::build_listen_sockets(&config),
       tcp_backlog: config.tcp_backlog,
       tcp_max_connections: config.tcp_max_connections,
+      tcp_protocol_detection_timeout_msec: config.tcp_protocol_detection_timeout_msec,
       udp_max_connections: config.udp_max_connections,
       tcp_admission_count,
       udp_admission_count,
@@ -254,6 +256,9 @@ impl ProxyService {
     }
     if let Some(tcp_max_connections) = self.tcp_max_connections {
       tcp_proxy_builder.max_connections(tcp_max_connections as usize);
+    }
+    if let Some(timeout_msec) = self.tcp_protocol_detection_timeout_msec {
+      tcp_proxy_builder.protocol_detection_timeout(std::time::Duration::from_millis(timeout_msec));
     }
     #[cfg(feature = "proxy-protocol")]
     tcp_proxy_builder.recv_proxy_protocol_config(&self.tcp_recv_proxy_protocol, self.tcp_trusted_proxies.as_ref());

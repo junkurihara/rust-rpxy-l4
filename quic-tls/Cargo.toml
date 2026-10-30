@@ -28,7 +28,7 @@ hex-literal = { version = "1.1.0" }
 bytes = { version = "1.12.1" }
 rand = { version = "0.10.3" }
 base64 = { version = "0.23.1" }
-hpke = { version = "0.15.0", default-features = false, features = [
+hpke = { version = "0.15.1", default-features = false, features = [
   "aes",
   "nistp",
   "x25519",

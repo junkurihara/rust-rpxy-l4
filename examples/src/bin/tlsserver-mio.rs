@@ -571,6 +571,9 @@ fn make_config(args: &Args) -> Arc<rustls::ServerConfig> {
     .with_single_cert_with_ocsp(Arc::new(Identity::from_cert_chain(certs).unwrap()), privkey, Arc::from(ocsp))
     .expect("bad certificates/private key");
 
+  // Enable ECH support if the provider supports it.
+  config.ech_backend = true;
+
   config.key_log = Arc::new(KeyLogFile::new());
 
   if args.no_resumption {

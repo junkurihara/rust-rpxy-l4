@@ -40,13 +40,13 @@ use clap::Parser;
 // use hickory_resolver::proto::rr::rdata::svcb::{SvcParamKey, SvcParamValue};
 // use hickory_resolver::proto::rr::{RData, RecordType};
 use log::trace;
-use rustls::RootCertStore;
 use rustls::client::{EchConfig, EchGreaseConfig, EchStatus};
-use rustls::crypto::aws_lc_rs;
-use rustls::crypto::aws_lc_rs::hpke::ALL_SUPPORTED_SUITES;
 use rustls::crypto::hpke::Hpke;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, EchConfigListBytes, ServerName};
+use rustls::{Connection, RootCertStore};
+use rustls_aws_lc_rs::hpke::ALL_SUPPORTED_SUITES;
+use rustls_util::{KeyLogFile, Stream};
 
 //const ECH_CONFIG: &str = "ADz+DQA4ugAgACA9U8FCH7vKOFXVCCcAdpUUSfu3rzlooRNflhOXyV0uTwAEAAEAAQAJbG9jYWxob3N0AAA";
 const ECH_CONFIG: &str = "AEX+DQBBAQAgACA3tzLigJHNu8j9gnUIH1gdiQdAfoh0LbG/hYn19dSNDQAIAAEAAQABAAMADnB1YmxpYy5leGFtcGxlAAA";
@@ -101,15 +101,15 @@ fn main() {
     },
   };
 
-  // Construct a rustls client config with a custom provider, and ECH enabled.
-  let mut config = rustls::ClientConfig::builder_with_provider(aws_lc_rs::default_provider().into())
+  // Construct a rustls client config with a TLS1.3-only provider, and ECH enabled.
+  let mut config = rustls::ClientConfig::builder(rustls_aws_lc_rs::DEFAULT_TLS13_PROVIDER.into())
     .with_ech(ech_mode)
-    .unwrap()
     .with_root_certificates(root_store)
-    .with_no_client_auth();
+    .with_no_client_auth()
+    .unwrap();
 
   // Allow using SSLKEYLOGFILE.
-  config.key_log = Arc::new(rustls::KeyLogFile::new());
+  config.key_log = Arc::new(KeyLogFile::new());
   let config = Arc::new(config);
 
   // The "inner" SNI that we're really trying to reach.
@@ -117,7 +117,7 @@ fn main() {
 
   for i in 0..args.num_reqs {
     trace!("\nRequest {} of {}", i + 1, args.num_reqs);
-    let mut conn = rustls::ClientConnection::new(config.clone(), server_name.clone()).unwrap();
+    let mut conn = config.connect(server_name.clone()).build().unwrap();
     // The "outer" server that we're connecting to.
     // let sock_addr = (args.outer_hostname.as_str(), args.port)
     //   .to_socket_addrs()
@@ -126,7 +126,7 @@ fn main() {
     //   .unwrap();
     let sock_addr: std::net::SocketAddr = LOCAL_SOCK.parse().unwrap();
     let mut sock = TcpStream::connect(sock_addr).unwrap();
-    let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+    let mut tls = Stream::new(&mut conn, &mut sock);
 
     let request = format!(
       "GET /{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept-Encoding: identity\r\n\r\n",
@@ -244,4 +244,4 @@ struct Args {
 /// A HPKE suite to use for GREASE ECH.
 ///
 /// A real implementation should vary this suite across all of the suites that are supported.
-static GREASE_HPKE_SUITE: &dyn Hpke = aws_lc_rs::hpke::DH_KEM_X25519_HKDF_SHA256_AES_128;
+static GREASE_HPKE_SUITE: &dyn Hpke = rustls_aws_lc_rs::hpke::DH_KEM_X25519_HKDF_SHA256_AES_128;

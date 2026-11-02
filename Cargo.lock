@@ -202,9 +202,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e055fa6e3e40ad6187ba25b6855eeb635d5271f8e0f0e1e9a5826b8d75bea0"
+checksum = "375989decec1a0fa424442bed520fa12ede43a48475ce8c7417d2c69b32b5f6b"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1292,9 +1292,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "memchr"
@@ -1670,7 +1670,9 @@ dependencies = [
  "env_logger",
  "log",
  "mio",
- "rustls 0.23.27",
+ "rustls 0.24.0-dev.0",
+ "rustls-aws-lc-rs",
+ "rustls-util",
  "tokio",
  "webpki-roots",
 ]
@@ -1740,20 +1742,6 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.27"
-source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend#cfc3288272d8fbbb9816014cc6d78236faf8ba7e"
-dependencies = [
- "aws-lc-rs",
- "log",
- "once_cell",
- "rustls-pki-types",
- "rustls-webpki",
- "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "rustls"
 version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
@@ -1762,7 +1750,32 @@ dependencies = [
  "log",
  "once_cell",
  "rustls-pki-types",
- "rustls-webpki",
+ "rustls-webpki 0.103.16",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "rustls"
+version = "0.24.0-dev.0"
+source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend-2993#a4c8637f53a49e69486fd86408633ddce850a6b2"
+dependencies = [
+ "log",
+ "once_cell",
+ "rustls-pki-types",
+ "rustls-webpki 0.104.0-alpha.7",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "rustls-aws-lc-rs"
+version = "0.1.0-dev.0"
+source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend-2993#a4c8637f53a49e69486fd86408633ddce850a6b2"
+dependencies = [
+ "aws-lc-rs",
+ "rustls 0.24.0-dev.0",
+ "rustls-pki-types",
  "subtle",
  "zeroize",
 ]
@@ -1777,6 +1790,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-util"
+version = "0.1.0"
+source = "git+https://github.com/junkurihara/rustls.git?branch=ech-split-backend-2993#a4c8637f53a49e69486fd86408633ddce850a6b2"
+dependencies = [
+ "log",
+ "rustls 0.24.0-dev.0",
+]
+
+[[package]]
 name = "rustls-webpki"
 version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1784,6 +1806,16 @@ checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
+ "rustls-pki-types",
+ "untrusted",
+]
+
+[[package]]
+name = "rustls-webpki"
+version = "0.104.0-alpha.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bea702cca24d344fc70973022bf7eb920c224e318466eb49784272337dd24b1a"
+dependencies = [
  "rustls-pki-types",
  "untrusted",
 ]

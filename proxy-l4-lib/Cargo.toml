@@ -17,7 +17,7 @@ derive_builder = { version = "0.20.2" }
 bytes = { version = "1.12.1" }
 
 # backend selector
-rand = { version = "0.10.3" }
+rand = { version = "0.10.4" }
 
 # Connection pool
 dashmap = { version = "6.2.1" }

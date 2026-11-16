@@ -80,7 +80,7 @@ impl DnsCache {
     drop(entry);
 
     if !entry_clone.is_expired() {
-      debug!("DNS cache hit for domain: {}", domain);
+      trace!("DNS cache hit for domain: {}", domain);
       return Ok(entry_clone.addresses.clone());
     }
 

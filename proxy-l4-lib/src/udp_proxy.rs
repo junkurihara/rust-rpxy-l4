@@ -206,7 +206,7 @@ impl UdpDestinationMux {
     match self.inner.get(&proto_type) {
       // Found non-Quic protocol
       Some(UdpDestination::Udp(udp_destination)) => {
-        debug!("Setting up dest addr for {proto_type}");
+        trace!("Setting up dest addr for {proto_type}");
         return Ok(FoundUdpDestination::Udp(udp_destination.clone()));
       }
       // Found Quic protocol
@@ -218,7 +218,7 @@ impl UdpDestinationMux {
           .find(client_hello)
           .ok_or(ProxyError::NoDestinationAddressForProtocol(String::new()))
           .map(|found| {
-            debug!("Setting up dest addr for {proto_type}");
+            trace!("Setting up dest addr for {proto_type}");
             FoundUdpDestination::Quic(found.clone())
           });
       }
@@ -238,7 +238,7 @@ impl UdpDestinationMux {
     let UdpDestination::Udp(dst) = destination_any else {
       return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
     };
-    debug!("Setting up dest addr for unspecified proto");
+    trace!("Setting up dest addr for unspecified proto");
     Ok(FoundUdpDestination::Udp(dst.clone()))
   }
 }
@@ -325,14 +325,14 @@ impl UdpProxy {
 
         if let Some(conn) = udp_connection_pool.get(&flow_key) {
           // Handle case there is an existing connection
-          debug!("Found existing connection for {} -> {}", src_addr, local_ip);
+          trace!("Found existing connection for {} -> {}", src_addr, local_ip);
           let _ = conn.send(&udp_buf[..buf_size]).await;
           // here we ignore the error, as the connection might be closed
           continue;
         }
 
         // Handle case there is no existing connection
-        debug!(
+        trace!(
           "No existing connection for {src_addr} -> {}:{}",
           if local_ip.is_ipv6() {
             format!("[{}]", local_ip)

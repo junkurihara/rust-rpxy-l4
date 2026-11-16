@@ -189,7 +189,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
       break;
     };
     let Some(version) = quic_version(version_bytes) else {
-      debug!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
+      trace!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
       break;
     };
     ptr = version_end;
@@ -197,7 +197,7 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
     // with protected packet number field length ([0000])
     // omitting the protected part.
     let Some(packet_type) = quick_coalesceable_packet_type(&packet_type_byte, &version) else {
-      debug!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
+      trace!("Not a QUIC initial packet, possibly short header or padding, finish to parse");
       break;
     };
     trace!("QUIC Version: {}, Packet Type: {}", version, packet_type);
@@ -227,28 +227,28 @@ fn probe_quic_packets(udp_datagram: &[u8]) -> Vec<QuicPacket> {
 
     let payload_start = ptr;
     let Some(payload_end) = payload_start.checked_add(payload_len) else {
-      debug!("Payload offset overflow");
+      trace!("Payload offset overflow");
       break;
     };
     let Some(payload) = udp_datagram.get(payload_start..payload_end) else {
-      debug!("Buffer too short for payload");
+      trace!("Buffer too short for payload");
       break;
     };
     trace!("Payload: {:x?}", payload);
 
     let Some(packet) = udp_datagram.get(packet_start..payload_end) else {
-      debug!("Invalid QUIC packet range");
+      trace!("Invalid QUIC packet range");
       break;
     };
     let Some(packet_number_offset) = payload_start.checked_sub(packet_start) else {
-      debug!("Invalid QUIC packet number offset");
+      trace!("Invalid QUIC packet number offset");
       break;
     };
 
     // So far, the buffer is consistent with a QUIC coalesceable packet.
     // Now, try to decrypt the packet and check if it is a TLS ClientHello.
     let Ok(unprotected_result) = unprotect(&version, packet, &dcid, packet_number_offset, payload_len) else {
-      debug!("invalid to unprotect payload, just continue to parse the next packet");
+      trace!("invalid to unprotect payload, just continue to parse the next packet");
       ptr = payload_end;
       continue;
     };
@@ -306,7 +306,7 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<
   };
   let expected_client_hello = match reassemble_res {
     ReassembleResult::MissingFrames => {
-      debug!("Missing frames to reassemble the QUIC crypto frames");
+      trace!("Missing frames to reassemble the QUIC crypto frames");
       return Err(TlsProbeFailure::PollNext);
     }
     ReassembleResult::CompleteFromGivenFrames(content) => content,
@@ -734,7 +734,7 @@ fn variable_length_int(buf: &[u8], pos: &mut usize) -> Result<usize, anyhow::Err
     .checked_add(len)
     .ok_or_else(|| anyhow!("Variable-length integer offset overflow"))?;
   let encoded = buf.get(start..end).ok_or_else(|| {
-    debug!("buffer too short as variable-length integer");
+    trace!("buffer too short as variable-length integer");
     anyhow!("Buffer too short")
   })?;
   let value = encoded.iter().enumerate().fold(0u64, |acc, (index, byte)| {

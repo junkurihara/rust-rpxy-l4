@@ -8,6 +8,8 @@ readme.workspace = true
 repository.workspace = true
 categories.workspace = true
 publish = false
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
 # rustls = { version = "0.23.25", features = ["logging"] }

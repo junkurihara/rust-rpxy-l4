@@ -1,8 +1,7 @@
-use crate::config::ProxyProtocolVersion;
+use crate::{config::ProxyProtocolVersion, trace::*};
 use ipnet::IpNet;
 use std::net::{IpAddr, SocketAddr};
 use tokio::{io::AsyncReadExt, net::TcpStream};
-use tracing::{debug, trace};
 
 /// Encode a PROXY protocol header for the given source and destination addresses.
 ///
@@ -238,7 +237,7 @@ async fn parse_v2_inbound(
 
   // Check command type
   if header.command == ppp::v2::Command::Local {
-    debug!("PROXY v2 LOCAL command received");
+    trace!("PROXY v2 LOCAL command received");
     return Ok(None);
   }
 
@@ -267,7 +266,7 @@ async fn parse_v2_inbound(
       "Unix socket addresses not supported in PROXY protocol",
     )),
     ppp::v2::Addresses::Unspecified => {
-      debug!("PROXY v2 unspecified addresses");
+      trace!("PROXY v2 unspecified addresses");
       Ok(None)
     }
   }
@@ -325,7 +324,7 @@ async fn parse_v1_inbound(stream: &mut TcpStream) -> Result<Option<SocketAddr>, 
       Ok(Some(src))
     }
     ppp::v1::Addresses::Unknown => {
-      debug!("PROXY v1 UNKNOWN command received");
+      trace!("PROXY v1 UNKNOWN command received");
       Ok(None)
     }
   }

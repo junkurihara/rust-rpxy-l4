@@ -78,7 +78,7 @@ pub(crate) fn probe_tls_handshake_message<B: Buf>(
   max_client_hello_body_len: Option<usize>,
 ) -> Result<TlsHandshakeMessageHeader, TlsProbeFailure> {
   if buf.remaining() < TLS_HANDSHAKE_MESSAGE_HEADER_LEN {
-    debug!("TLS ClientHello header is not fully received");
+    trace!("TLS ClientHello header is not fully received");
     return Err(TlsProbeFailure::PollNext);
   }
   let msg_type = buf.get_u8();
@@ -87,7 +87,7 @@ pub(crate) fn probe_tls_handshake_message<B: Buf>(
   }
 
   let length = ((buf.get_u16() as usize) << 8) + buf.get_u8() as usize;
-  debug!("TLS ClientHello body length: {}", length);
+  trace!("TLS ClientHello body length: {}", length);
 
   if max_client_hello_body_len.is_some_and(|max_len| length > max_len) {
     debug!("TLS ClientHello body exceeds the probe budget");
@@ -97,7 +97,7 @@ pub(crate) fn probe_tls_handshake_message<B: Buf>(
   }
 
   if buf.remaining() < length {
-    debug!("TLS ClientHello body is not fully received");
+    trace!("TLS ClientHello body is not fully received");
     return Err(TlsProbeFailure::PollNext);
   }
   let mut length_bytes = [0u8; 3];
@@ -128,7 +128,7 @@ pub(crate) fn probe_tls_client_hello<B: Buf>(buf: &mut B) -> Option<TlsClientHel
     return None;
   }
 
-  debug!("TLS ClientHello detected: {:#?}", client_hello);
+  trace!("TLS ClientHello detected: {:#?}", client_hello);
   Some(client_hello)
 }
 

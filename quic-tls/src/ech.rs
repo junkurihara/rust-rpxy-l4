@@ -71,7 +71,7 @@ impl TlsClientHello {
       return Err(TlsClientHelloError::PublicNameMismatch);
     }
 
-    debug!("Decrypted and recomposed client hello inner: {decrypted_ch:#?}");
+    trace!("Decrypted and recomposed client hello inner: {decrypted_ch:#?}");
     Ok(Some(decrypted_ch))
   }
 

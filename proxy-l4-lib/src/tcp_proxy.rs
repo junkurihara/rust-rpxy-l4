@@ -230,7 +230,7 @@ impl TcpDestinationMux {
     match self.inner.get(&proto_type) {
       // Found non-TLS protocol
       Some(TcpDestination::Tcp(tcp_destination)) => {
-        debug!("Setting up dest addr for {proto_type}");
+        trace!("Setting up dest addr for {proto_type}");
         return Ok(FoundTcpDestination::Tcp(tcp_destination.clone()));
       }
       // Found TLS protocol
@@ -242,7 +242,7 @@ impl TcpDestinationMux {
           .find(&client_hello_buf.client_hello)
           .ok_or(ProxyError::NoDestinationAddressForProtocol(String::new()))
           .map(|found| {
-            debug!("Setting up dest addr for {proto_type}");
+            trace!("Setting up dest addr for {proto_type}");
             FoundTcpDestination::Tls(found.clone())
           });
       }
@@ -262,7 +262,7 @@ impl TcpDestinationMux {
     let TcpDestination::Tcp(dst) = destination_any else {
       return Err(ProxyError::NoDestinationAddressForProtocol(String::new()));
     };
-    debug!("Setting up dest addr for unspecified proto");
+    trace!("Setting up dest addr for unspecified proto");
     Ok(FoundTcpDestination::Tcp(dst.clone()))
   }
 }

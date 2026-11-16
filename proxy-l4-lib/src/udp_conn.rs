@@ -147,7 +147,7 @@ impl UdpConnectionPool {
       let last_active = conn.inner.last_active.load(Ordering::Acquire);
       let current = get_monotonic_seconds();
       let elapsed = current.saturating_sub(last_active);
-      debug!(
+      trace!(
         "UdpConnection from {} to {} is active for {} seconds",
         conn.inner.src_addr, conn.inner.dst_addr, elapsed
       );

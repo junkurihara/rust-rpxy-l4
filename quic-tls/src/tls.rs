@@ -185,10 +185,10 @@ fn probe_tls_handshake_inner<B: Buf>(
       return Err(TlsProbeFailure::Rejected(TlsProbeRejection::RecordOverflow));
     }
     if buf.remaining() < payload_len {
-      debug!("Read buffer for TLS handshake detection is not enough");
+      trace!("Read buffer for TLS handshake detection is not enough");
       return Err(TlsProbeFailure::PollNext);
     }
-    debug!("TLS Payload length: {}", payload_len);
+    trace!("TLS Payload length: {}", payload_len);
 
     let b = buf.copy_to_bytes(payload_len);
     tls_plaintext.extend_from_slice(&b);

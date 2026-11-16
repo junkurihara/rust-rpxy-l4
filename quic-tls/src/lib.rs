@@ -27,3 +27,10 @@ pub use tls::{
   TlsAlertBuffer, TlsAlertDescription, TlsAlertLevel, TlsClientHelloBuffer, probe_tls_handshake,
   probe_tls_handshake_with_max_probe_bytes,
 };
+
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing {
+  //! Fuzzing-only entrypoints that expose crate-private parsers.
+  //! Enabled by the `fuzzing` feature; not part of the stable public API.
+  pub use crate::{ech_extension::probe_ech_extension, quic::probe_quic_unprotected_payload};
+}

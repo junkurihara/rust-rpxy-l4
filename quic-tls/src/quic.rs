@@ -324,6 +324,24 @@ fn probe_quic_unprotected_frames(unprotected_payloads: &[QuicPacket]) -> Result<
   Ok(client_hello)
 }
 
+/// Exercise the post-AEAD QUIC path (CRYPTO/ACK/CONNECTION_CLOSE frame extraction, reassembly,
+/// and inner ClientHello parsing) on a raw decrypted Initial payload (fuzzing only).
+/// AEAD authentication is bypassed because random input never passes it.
+#[cfg(feature = "fuzzing")]
+pub fn probe_quic_unprotected_payload(payload: &[u8]) {
+  let packet = QuicPacket {
+    version: QuicVersion::V1,
+    packet_type: QuicCoalesceablePacketType::Initial,
+    dcid: Vec::new(),
+    scid: Vec::new(),
+    token: Vec::new(),
+    header: Vec::new(),
+    packet_number: vec![0],
+    payload: payload.to_vec(),
+  };
+  let _ = probe_quic_unprotected_frames(&[packet]);
+}
+
 /* ---------------------------------------------------- */
 #[derive(Debug, Clone)]
 /// Struct for CRYPTO Frame, type 0x06

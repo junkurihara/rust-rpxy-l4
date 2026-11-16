@@ -11,6 +11,11 @@ publish.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+# Expose crate-private parser entrypoints for fuzz harnesses only.
+# Off by default; enables no additional dependencies.
+fuzzing = []
+
 [dependencies]
 # traces and logs
 tracing = { version = "0.1.44" }

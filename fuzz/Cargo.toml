@@ -1,0 +1,46 @@
+[package]
+name = "rpxy-l4-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# Exact pin. Bump only together with the toolchain pins in .github/workflows/fuzz.yml (see fuzz/README.md).
+libfuzzer-sys = "=0.4.13"
+rpxy-l4-quic-tls = { path = "../quic-tls", features = ["fuzzing"] }
+
+[[bin]]
+name = "tls_clienthello"
+path = "fuzz_targets/tls_clienthello.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "quic_initial"
+path = "fuzz_targets/quic_initial.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "quic_frames"
+path = "fuzz_targets/quic_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ech_extension"
+path = "fuzz_targets/ech_extension.rs"
+test = false
+doc = false
+bench = false
+
+# Independent workspace: stable workspace builds never include the fuzz harnesses,
+# and the parent release profile (panic = "abort") does not apply here.
+[workspace]
+members = ["."]

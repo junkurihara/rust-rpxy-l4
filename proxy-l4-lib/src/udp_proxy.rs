@@ -380,7 +380,7 @@ async fn connection_pruner_service(
       ))
       .await;
       udp_connection_pool.prune_inactive_connections();
-      debug!(
+      trace!(
         "Current connection: (local: {}, global: {}) @{}",
         udp_connection_pool.local_pool_size(),
         admission_count.current(),

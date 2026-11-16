@@ -107,6 +107,12 @@ impl Serialize for EncryptedClientHello {
   }
 }
 
+/// Exercise the ECH extension payload parser on raw bytes (fuzzing only).
+#[cfg(feature = "fuzzing")]
+pub fn probe_ech_extension(mut buf: &[u8]) {
+  let _ = EncryptedClientHello::deserialize(&mut buf);
+}
+
 impl Deserialize for ClientHelloOuter {
   type Error = TlsClientHelloError;
   /// Deserialize the outer ClientHello

@@ -1,0 +1,120 @@
+name: Fuzz
+
+# Advisory parser fuzzing with cargo-fuzz (libFuzzer). Not a required check: fuzzing is
+# non-deterministic, so a failure here must be triaged rather than block merges.
+# Pins (nightly date, cargo-fuzz, libfuzzer-sys in fuzz/Cargo.toml) are bumped manually and
+# together; the nightly must stay at or above the workspace `rust-version` (see fuzz/README.md).
+
+on:
+  push:
+    paths:
+      - "Cargo.toml"
+      - "quic-tls/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  pull_request:
+    types: [synchronize, opened]
+    paths:
+      - "Cargo.toml"
+      - "quic-tls/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  FUZZ_NIGHTLY: nightly-2026-11-14
+  CARGO_FUZZ_VERSION: 0.13.2
+
+jobs:
+  fmt:
+    name: Fuzz harness formatting
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The runner image's preinstalled Rust can lag behind the latest stable,
+      # while the workspace tracks it via `rust-version`.
+      - name: Update Rust toolchain to latest stable
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustc --version
+
+      - name: Check fuzz harness formatting
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [tls_clienthello, quic_initial, quic_frames, ech_extension]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The runner image's preinstalled Rust can lag behind the latest stable,
+      # while the workspace tracks it via `rust-version`.
+      - name: Update Rust toolchain to latest stable
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustc --version
+
+      - name: Install pinned nightly toolchain
+        run: |
+          rustup toolchain install "$FUZZ_NIGHTLY" --profile minimal --no-self-update
+          rustc +"$FUZZ_NIGHTLY" --version
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+
+      # cargo-fuzz has no --locked flag, so reject a stale fuzz/Cargo.lock explicitly.
+      - name: Verify fuzz lockfile is up to date
+        run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
+
+      - name: Build fuzz target
+        env:
+          RUSTUP_TOOLCHAIN: ${{ env.FUZZ_NIGHTLY }}
+          TARGET: ${{ matrix.target }}
+        run: cargo fuzz build "$TARGET"
+
+      # The writable corpus comes first: libFuzzer writes new inputs only to the first
+      # corpus directory, which keeps the tracked seed corpus read-only.
+      # Push/PR runs are short and use a fixed seed; scheduled runs are longer and let
+      # libFuzzer pick a random seed (printed in the log) so weekly runs explore new paths.
+      - name: Run fuzz target
+        env:
+          RUSTUP_TOOLCHAIN: ${{ env.FUZZ_NIGHTLY }}
+          TARGET: ${{ matrix.target }}
+          FUZZ_TIME: ${{ github.event_name == 'schedule' && '900' || '60' }}
+          FUZZ_SEED: ${{ github.event_name == 'schedule' && '0' || '1' }}
+        run: |
+          mkdir -p "fuzz/corpus/$TARGET"
+          cargo fuzz run "$TARGET" "fuzz/corpus/$TARGET" "fuzz/seed_corpus/$TARGET" \
+            -- -max_total_time="$FUZZ_TIME" -seed="$FUZZ_SEED"
+
+      # Check the Git status and its emptiness separately so a Git failure cannot pass silently.
+      - name: Verify tracked seed corpus is unchanged
+        run: |
+          seed_status="$(/usr/bin/git status --porcelain=v1 --untracked-files=all -- fuzz/seed_corpus)" || exit 1
+          test -z "$seed_status"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore

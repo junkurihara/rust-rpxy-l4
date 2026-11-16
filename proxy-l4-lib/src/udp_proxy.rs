@@ -352,12 +352,10 @@ impl UdpProxy {
 
     tokio::select! {
       result = listener_service => {
-        if let Err(ref e) = result {
-          error!("UDP proxy on {} stopped: {e}", self.listen_on);
-        } else {
-          error!("UDP proxy on {} stopped", self.listen_on);
-        }
-        result
+        // The listener loop exits only with an error, so its success type is uninhabited.
+        let Err(e): Result<!, ProxyError> = result;
+        error!("UDP proxy on {} stopped: {e}", self.listen_on);
+        Err(e)
       }
       _ = cancel_token.cancelled() => {
         warn!("UDP proxy cancelled");
@@ -391,7 +389,8 @@ async fn connection_pruner_service(
     }
   };
   tokio::select! {
-    _ = service => (),
+    // The pruner loop never completes, so this arm is statically unreachable.
+    never = service => match never {},
     _ = cancel_token.cancelled() => {
       warn!("UDP connection pruner cancelled");
     }

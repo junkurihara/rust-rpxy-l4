@@ -22,6 +22,19 @@ RUN if [ $TARGETARCH = "amd64" ]; then \
 
 WORKDIR /build
 
+# Tie the toolchain layer's cache to the current stable release: this file changes
+# only when a new stable is published, so the layer below is rebuilt exactly then.
+# Otherwise the layer cache can keep serving an old stable that no longer satisfies
+# `rust-version`, and `rustup update` in a later layer fails on overlayfs (EXDEV
+# when renaming component directories that live in a lower layer).
+ADD https://static.rust-lang.org/dist/channel-rust-stable.toml.sha256 /tmp/channel-rust-stable.toml.sha256
+
+RUN echo "Install toolchain" && \
+  # force to reinstall rustup to get the latest version
+  rm -rf ~/.rustup && \
+  curl https://sh.rustup.rs -sqSf | sh -s -- -y --profile minimal --default-toolchain stable --default-host $(uname -m)-unknown-linux-gnu && \
+  rustup target add $(cat /arch)-unknown-linux-musl
+
 RUN --mount=type=bind,target=. \
   --mount=type=cache,target=/root/.cargo/registry,sharing=locked \
   --mount=type=cache,target=/root/.cargo/git,sharing=locked \

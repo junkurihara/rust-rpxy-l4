@@ -3,9 +3,9 @@ name = "rpxy-l4"
 description = "L4 reverse proxy written in Rust"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 readme.workspace = true
 repository.workspace = true
-homepage.workspace = true
 categories.workspace = true
 publish.workspace = true
 

@@ -332,7 +332,11 @@ impl UdpConnectionInner {
     };
 
     tokio::select! {
-      res = service => res,
+      res = service => {
+        // The forwarding loop exits only with an error, so its success type is uninhabited.
+        let Err(e): Result<!, ProxyError> = res;
+        Err(e)
+      }
       _ = self.cancel_token.cancelled() => {
         debug!("UdpConnection cancelled [{} -> {}]", self.src_addr, self.dst_addr);
         Ok(())
@@ -374,7 +378,11 @@ impl UdpConnectionInner {
     };
 
     tokio::select! {
-      res = service => res,
+      res = service => {
+        // The forwarding loop exits only with an error, so its success type is uninhabited.
+        let Err(e): Result<!, ProxyError> = res;
+        Err(e)
+      }
       _ = self.cancel_token.cancelled() => {
         debug!("UdpConnection cancelled: [{} <- {}]", self.src_addr, self.dst_addr);
         Ok(())

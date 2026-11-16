@@ -3,9 +3,9 @@ name = "rpxy-l4-examples"
 description = "examples and utils for rpxy-l4"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 readme.workspace = true
 repository.workspace = true
-homepage.workspace = true
 categories.workspace = true
 publish = false
 

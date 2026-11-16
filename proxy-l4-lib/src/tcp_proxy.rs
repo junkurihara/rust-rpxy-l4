@@ -374,9 +374,8 @@ impl TcpProxy {
       }
     };
     tokio::select! {
-      _ = listener_service => {
-        error!("TCP proxy stopped");
-      }
+      // The accept loop never completes, so this arm is statically unreachable.
+      never = listener_service => match never {},
       _ = cancel_token.cancelled() => {
         warn!("TCP proxy cancelled");
       }

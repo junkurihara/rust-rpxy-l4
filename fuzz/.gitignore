@@ -2,3 +2,5 @@ target
 corpus
 artifacts
 coverage
+# Derived from the root Cargo.lock before each build (see README.md)
+Cargo.lock

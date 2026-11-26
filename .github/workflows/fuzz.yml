@@ -4,11 +4,13 @@ name: Fuzz
 # non-deterministic, so a failure here must be triaged rather than block merges.
 # Pins (nightly date, cargo-fuzz, libfuzzer-sys in fuzz/Cargo.toml) are bumped manually and
 # together; the nightly must stay at or above the workspace `rust-version` (see fuzz/README.md).
+# fuzz/Cargo.lock is not tracked: it is derived from the root Cargo.lock on every run.
 
 on:
   push:
     paths:
       - "Cargo.toml"
+      - "Cargo.lock"
       - "quic-tls/**"
       - "fuzz/**"
       - ".github/workflows/fuzz.yml"
@@ -16,6 +18,7 @@ on:
     types: [synchronize, opened]
     paths:
       - "Cargo.toml"
+      - "Cargo.lock"
       - "quic-tls/**"
       - "fuzz/**"
       - ".github/workflows/fuzz.yml"
@@ -80,9 +83,13 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
 
-      # cargo-fuzz has no --locked flag, so reject a stale fuzz/Cargo.lock explicitly.
-      - name: Verify fuzz lockfile is up to date
-        run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
+      # Seed the fuzz lockfile from the root one so the parser is fuzzed against exactly the
+      # dependency versions that ship. Cargo keeps those versions, adds only the fuzz-only crates
+      # (libfuzzer-sys is pinned exactly in fuzz/Cargo.toml), and prunes the rest.
+      - name: Derive fuzz lockfile from the root lockfile
+        run: |
+          cp Cargo.lock fuzz/Cargo.lock
+          cargo fetch --manifest-path fuzz/Cargo.toml
 
       - name: Build fuzz target
         env:

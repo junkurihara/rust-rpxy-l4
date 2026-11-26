@@ -20,15 +20,15 @@ proxy-protocol = ["rpxy-l4-lib/proxy-protocol"]
 rpxy-l4-lib = { path = "../proxy-l4-lib", default-features = false }
 
 # error handling
-anyhow = { version = "1.0.104" }
+anyhow = { version = "1.0.105" }
 
 # logging
 tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.23" }
 
 # config
-clap = { version = "4.6.7", features = ["std", "cargo", "wrap_help"] }
-toml = { version = "1.2.1", default-features = false, features = [
+clap = { version = "4.6.10", features = ["std", "cargo", "wrap_help"] }
+toml = { version = "1.2.3", default-features = false, features = [
   "parse",
   "serde",
 ] }

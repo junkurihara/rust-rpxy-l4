@@ -16,14 +16,14 @@ proxy-protocol = ["dep:ppp", "dep:ipnet"]
 
 [dependencies]
 derive_builder = { version = "0.20.2" }
-bytes = { version = "1.12.1" }
+bytes = { version = "1.12.2" }
 
 # backend selector
 rand = { version = "0.10.4" }
 
 # Connection pool
 dashmap = { version = "6.2.1" }
-ahash = { version = "0.8.12" }
+ahash = { version = "0.8.14" }
 
 # proxy protocol (optional)
 ppp = { version = "2.3.0", optional = true }
@@ -48,7 +48,7 @@ tokio-util = { version = "0.7.20", default-features = false }
 
 # network
 socket2 = { version = "0.6.5", features = ["all"] }
-hickory-resolver = { version = "0.26.3" }
+hickory-resolver = { version = "0.26.4" }
 
 # quic and tls
 quic-tls = { package = "rpxy-l4-quic-tls", path = "../quic-tls/" }

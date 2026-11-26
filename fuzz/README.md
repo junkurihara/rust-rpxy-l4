@@ -22,6 +22,8 @@ ClientHello recomposition after HPKE decryption, and the trivial TCP/WireGuard d
 - `seed_corpus/<target>/` is tracked and read-only: known crash boundaries and valid inputs.
 - `corpus/<target>/` is the ignored, writable corpus that libFuzzer grows.
 - `artifacts/<target>/` is where crashing inputs are written (ignored).
+- `Cargo.lock` is not tracked. It is derived from the root `Cargo.lock`, so the parser is fuzzed
+  against exactly the dependency versions that ship.
 
 ## Running locally
 
@@ -33,11 +35,14 @@ FUZZ_NIGHTLY=nightly-YYYY-MM-DD   # value of FUZZ_NIGHTLY in the workflow
 CARGO_FUZZ_VERSION=X.Y.Z          # value of CARGO_FUZZ_VERSION in the workflow
 ```
 
-Then install the tools and run a target:
+Then install the tools, derive the lockfile, and run a target:
 
 ```sh
 rustup toolchain install "$FUZZ_NIGHTLY" --profile minimal
 cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+
+cp Cargo.lock fuzz/Cargo.lock
+cargo fetch --manifest-path fuzz/Cargo.toml
 
 mkdir -p fuzz/corpus/tls_clienthello
 cargo +"$FUZZ_NIGHTLY" fuzz run tls_clienthello \
@@ -46,6 +51,10 @@ cargo +"$FUZZ_NIGHTLY" fuzz run tls_clienthello \
 
 Always pass the writable `corpus/<target>` first. libFuzzer writes new inputs only to the
 first corpus directory, and the seed corpus must stay unchanged.
+
+Copying the root lockfile keeps every shared dependency at its shipped version. Cargo then adds
+only the fuzz-only crates and prunes the rest. Repeat the two lockfile commands after the root
+`Cargo.lock` changes.
 
 ## Triage
 
@@ -65,8 +74,8 @@ For each new crash: add the input to `seed_corpus/<target>/`, add a regression `
 
 The nightly date, `cargo-fuzz` (both in the workflow), and `libfuzzer-sys` (exact in
 `fuzz/Cargo.toml`) are bumped manually and together, then confirmed by a green CI build and
-smoke run. Refresh `fuzz/Cargo.lock` with `cargo update --manifest-path fuzz/Cargo.toml` in the
-same change.
+smoke run. Dependency updates of the parser crates need no fuzz-side change, because the fuzz
+lockfile follows the root `Cargo.lock`.
 
 The pinned nightly must not be older than the workspace `rust-version`. Review the nightly pin
 whenever `rust-version` is raised to the nightly's minor version or above.

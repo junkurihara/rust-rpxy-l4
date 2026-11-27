@@ -1,6 +1,6 @@
 use crate::{
   EchPrivateKey,
-  client_hello::{TlsClientHello, TlsClientHelloExtension},
+  client_hello::{ExtensionType, TlsClientHello, TlsClientHelloExtension},
   ech_config::{EchConfig, HpkeKemPrivateKey},
   ech_extension::ClientHelloOuter,
   error::TlsClientHelloError,
@@ -150,9 +150,27 @@ impl TlsClientHello {
       }
     };
 
-    let mut client_hello_inner: TlsClientHello = parse(&mut encoded_client_hello_inner.as_slice())?;
+    self.decode_client_hello_inner(&encoded_client_hello_inner)
+  }
+
+  /// Reconstruct ClientHelloInner from a decrypted EncodedClientHelloInner and validate it
+  /// as RFC 9849 Sections 5.1 and 7.1 require
+  fn decode_client_hello_inner(&self, mut encoded_client_hello_inner: &[u8]) -> Result<TlsClientHello, TlsClientHelloError> {
+    let mut client_hello_inner: TlsClientHello = parse(&mut encoded_client_hello_inner)?;
+    // Every byte after the ClientHello is padding and must be zero
+    if encoded_client_hello_inner.iter().any(|&byte| byte != 0) {
+      error!("Non-zero padding in EncodedClientHelloInner");
+      return Err(TlsClientHelloError::NonZeroEchPadding);
+    }
+
     // Recompose the ClientHelloInner
     self.recompose_client_hello_inner(&mut client_hello_inner)?;
+
+    // Checked after recomposition, since "supported_versions" may be copied from ClientHelloOuter
+    if !client_hello_inner.offers_no_tls12_or_below() {
+      error!("ClientHelloInner offers TLS 1.2 or below");
+      return Err(TlsClientHelloError::Tls12OrBelowInDecryptedClientHello);
+    }
 
     // Check if the ClientHelloInner is valid
     if client_hello_inner.sni().is_empty() {
@@ -192,6 +210,11 @@ impl TlsClientHello {
         // If outer extensions extension found, copy extensions in self.extensions() matched with extension_type
         let mut exts_in_outer = Vec::new();
         for outer_ext_type in outer_extensions_ext.iter() {
+          // "encrypted_client_hello" must not be referenced (RFC 9849 Section 5.1)
+          if outer_ext_type == ExtensionType::ECH {
+            error!("OuterExtensions references encrypted_client_hello");
+            return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
+          }
           // Proceed to the next extension until the matched one is found
           for outer_ext in outer_extensions.by_ref() {
             if outer_ext.extension_type() == outer_ext_type {
@@ -221,8 +244,16 @@ mod tests {
   use crate::{
     client_hello::{ServerNameIndication, TlsClientHello},
     ech_config::EchConfigList,
+    tls::probe_tls_handshake,
   };
   use hpke::{aead::AesGcm128, kdf::HkdfSha256};
+  use rustls::{
+    ClientConfig, ClientConnection, RootCertStore,
+    client::{EchConfig as RustlsEchConfig, EchMode},
+    crypto::aws_lc_rs,
+    pki_types::{EchConfigListBytes, ServerName},
+  };
+  use std::sync::Arc;
 
   /// Helper function to create a test ECH configuration and private keys
   fn create_test_ech_config() -> (EchConfigList, Vec<EchPrivateKey>) {
@@ -529,5 +560,272 @@ mod tests {
       "ECH brute force decryption took too long: {:?}",
       duration
     );
+  }
+
+  /* ------------------------------------------- */
+  // Wire-format builders for ClientHelloOuter and EncodedClientHelloInner
+
+  const SUPPORTED_GROUPS: u16 = 0x000a;
+  const SUPPORTED_VERSIONS: u16 = 0x002b;
+  const TLS13: u16 = 0x0304;
+  const OUTER_SESSION_ID: [u8; 32] = [0x11; 32];
+
+  fn ext(ext_type: u16, payload: &[u8]) -> Vec<u8> {
+    let mut ext = ext_type.to_be_bytes().to_vec();
+    ext.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    ext.extend_from_slice(payload);
+    ext
+  }
+
+  fn sni_ext(name: &str) -> Vec<u8> {
+    let mut list = vec![0x00];
+    list.extend_from_slice(&(name.len() as u16).to_be_bytes());
+    list.extend_from_slice(name.as_bytes());
+    let mut payload = (list.len() as u16).to_be_bytes().to_vec();
+    payload.extend_from_slice(&list);
+    ext(0x0000, &payload)
+  }
+
+  fn supported_groups_ext() -> Vec<u8> {
+    ext(SUPPORTED_GROUPS, &[0x00, 0x02, 0x00, 0x1d])
+  }
+
+  fn supported_versions_ext(versions: &[u16]) -> Vec<u8> {
+    let mut payload = vec![(versions.len() * 2) as u8];
+    for version in versions {
+      payload.extend_from_slice(&version.to_be_bytes());
+    }
+    ext(SUPPORTED_VERSIONS, &payload)
+  }
+
+  fn ech_outer_ext() -> Vec<u8> {
+    let mut payload = vec![0x00]; // type outer
+    payload.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // HKDF-SHA256, AES-128-GCM
+    payload.push(0x2a); // config_id
+    payload.extend_from_slice(&[0x00, 0x02, 0xaa, 0xbb]); // enc
+    payload.extend_from_slice(&[0x00, 0x03, 0x01, 0x02, 0x03]); // payload
+    ext(ExtensionType::ECH, &payload)
+  }
+
+  fn ech_inner_ext() -> Vec<u8> {
+    ext(ExtensionType::ECH, &[0x01])
+  }
+
+  fn outer_extensions_ext(ext_types: &[u16]) -> Vec<u8> {
+    let mut payload = vec![(ext_types.len() * 2) as u8];
+    for ext_type in ext_types {
+      payload.extend_from_slice(&ext_type.to_be_bytes());
+    }
+    ext(0xfd00, &payload)
+  }
+
+  /// ClientHello body (no handshake header) with the given session ID and extensions
+  fn client_hello_body(session_id: &[u8], extensions: &[Vec<u8>]) -> Vec<u8> {
+    let mut body = 0x0303u16.to_be_bytes().to_vec();
+    body.extend_from_slice(&[0u8; 32]);
+    body.push(session_id.len() as u8);
+    body.extend_from_slice(session_id);
+    body.extend_from_slice(&[0x00, 0x02, 0x13, 0x01]);
+    body.extend_from_slice(&[0x01, 0x00]);
+    let extensions = extensions.concat();
+    body.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+    body.extend_from_slice(&extensions);
+    body
+  }
+
+  fn outer_with(extensions: &[Vec<u8>]) -> TlsClientHello {
+    parse(&mut client_hello_body(&OUTER_SESSION_ID, extensions).as_slice()).unwrap()
+  }
+
+  /// ClientHelloOuter with extensions SNI, supported_groups, supported_versions [TLS 1.3], ECH outer
+  fn default_outer() -> TlsClientHello {
+    outer_with(&[
+      sni_ext("public.example"),
+      supported_groups_ext(),
+      supported_versions_ext(&[TLS13]),
+      ech_outer_ext(),
+    ])
+  }
+
+  /// EncodedClientHelloInner with SNI and ECH inner followed by `extensions`, without padding
+  fn encoded_inner(extensions: &[Vec<u8>]) -> Vec<u8> {
+    let mut all = vec![sni_ext("private.example"), ech_inner_ext()];
+    all.extend_from_slice(extensions);
+    client_hello_body(&[], &all)
+  }
+
+  fn extension_types(client_hello: &TlsClientHello) -> Vec<u16> {
+    client_hello.extensions().iter().map(|ext| ext.extension_type()).collect()
+  }
+
+  #[test]
+  fn decode_recomposes_inner_from_outer_extensions() {
+    let outer = default_outer();
+    let mut encoded = encoded_inner(&[outer_extensions_ext(&[SUPPORTED_GROUPS, SUPPORTED_VERSIONS])]);
+    encoded.extend_from_slice(&[0u8; 5]);
+
+    let inner = outer.decode_client_hello_inner(&encoded).unwrap();
+
+    assert_eq!(
+      extension_types(&inner),
+      vec![0x0000, ExtensionType::ECH, SUPPORTED_GROUPS, SUPPORTED_VERSIONS]
+    );
+    assert_eq!(inner.extensions()[2..], outer.extensions()[1..3]);
+    assert_eq!(inner.legacy_session_id().as_ref(), OUTER_SESSION_ID.as_slice());
+    assert_eq!(inner.sni(), vec!["private.example".to_string()]);
+  }
+
+  #[test]
+  fn decode_rejects_non_zero_padding() {
+    let mut encoded = encoded_inner(&[supported_versions_ext(&[TLS13])]);
+    encoded.extend_from_slice(&[0x00, 0xff]);
+
+    let result = default_outer().decode_client_hello_inner(&encoded);
+
+    assert!(matches!(result, Err(TlsClientHelloError::NonZeroEchPadding)));
+  }
+
+  #[test]
+  fn decode_rejects_reference_to_encrypted_client_hello() {
+    for referenced in [vec![ExtensionType::ECH], vec![SUPPORTED_GROUPS, ExtensionType::ECH]] {
+      let encoded = encoded_inner(&[outer_extensions_ext(&referenced), supported_versions_ext(&[TLS13])]);
+
+      let result = default_outer().decode_client_hello_inner(&encoded);
+
+      assert!(
+        matches!(result, Err(TlsClientHelloError::InvalidOuterExtensionsExtension)),
+        "OuterExtensions {referenced:x?}: {result:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn decode_requires_exactly_one_ech_inner_extension() {
+    let supported_versions = supported_versions_ext(&[TLS13]);
+    let cases = [
+      (
+        "ECH outer and ECH inner",
+        vec![sni_ext("private.example"), ech_outer_ext(), ech_inner_ext()],
+      ),
+      (
+        "two ECH inner",
+        vec![sni_ext("private.example"), ech_inner_ext(), ech_inner_ext()],
+      ),
+      ("no ECH", vec![sni_ext("private.example")]),
+    ];
+    for (name, mut extensions) in cases {
+      extensions.push(supported_versions.clone());
+      let encoded = client_hello_body(&[], &extensions);
+
+      let result = default_outer().decode_client_hello_inner(&encoded);
+
+      assert!(
+        matches!(result, Err(TlsClientHelloError::InvalidClientHelloRecomposition)),
+        "{name}: {result:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn decode_rejects_ech_inner_extension_with_trailing_data() {
+    let encoded = client_hello_body(
+      &[],
+      &[
+        sni_ext("private.example"),
+        ext(ExtensionType::ECH, &[0x01, 0xff]),
+        supported_versions_ext(&[TLS13]),
+      ],
+    );
+
+    let result = default_outer().decode_client_hello_inner(&encoded);
+
+    assert!(matches!(result, Err(TlsClientHelloError::InvalidTlsClientHello)));
+  }
+
+  #[test]
+  fn decode_rejects_inner_offering_tls12_or_below() {
+    let cases = [
+      ("no supported_versions", vec![]),
+      ("TLS 1.2", vec![supported_versions_ext(&[0x0303])]),
+      ("SSL 3.0", vec![supported_versions_ext(&[0x0300])]),
+      ("TLS 1.3 and TLS 1.2", vec![supported_versions_ext(&[TLS13, 0x0303])]),
+      ("length mismatch", vec![ext(SUPPORTED_VERSIONS, &[0x03, 0x03, 0x04])]),
+      ("empty list", vec![ext(SUPPORTED_VERSIONS, &[0x00])]),
+      ("odd length", vec![ext(SUPPORTED_VERSIONS, &[0x01, 0x03])]),
+      ("empty payload", vec![ext(SUPPORTED_VERSIONS, &[])]),
+      (
+        "valid and TLS 1.2 extensions",
+        vec![supported_versions_ext(&[TLS13]), supported_versions_ext(&[0x0303])],
+      ),
+    ];
+    for (name, extensions) in cases {
+      let result = default_outer().decode_client_hello_inner(&encoded_inner(&extensions));
+
+      assert!(
+        matches!(result, Err(TlsClientHelloError::Tls12OrBelowInDecryptedClientHello)),
+        "{name}: {result:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn decode_ignores_unknown_supported_versions() {
+    for versions in [[0x0a0a, TLS13], [TLS13, 0x0001], [0x7f1c, TLS13]] {
+      let result = default_outer().decode_client_hello_inner(&encoded_inner(&[supported_versions_ext(&versions)]));
+
+      assert!(result.is_ok(), "supported_versions {versions:x?}: {result:?}");
+    }
+  }
+
+  #[test]
+  fn decode_checks_supported_versions_copied_from_outer() {
+    let outer = outer_with(&[
+      sni_ext("public.example"),
+      supported_versions_ext(&[TLS13, 0x0303]),
+      ech_outer_ext(),
+    ]);
+    let encoded = encoded_inner(&[outer_extensions_ext(&[SUPPORTED_VERSIONS])]);
+
+    let result = outer.decode_client_hello_inner(&encoded);
+
+    assert!(matches!(result, Err(TlsClientHelloError::Tls12OrBelowInDecryptedClientHello)));
+  }
+
+  #[test]
+  fn decode_rejects_missing_or_out_of_order_references() {
+    for referenced in [vec![0x0017], vec![SUPPORTED_VERSIONS, SUPPORTED_GROUPS]] {
+      let result = default_outer().decode_client_hello_inner(&encoded_inner(&[outer_extensions_ext(&referenced)]));
+
+      assert!(
+        matches!(result, Err(TlsClientHelloError::InvalidOuterExtensionsExtension)),
+        "OuterExtensions {referenced:x?}: {result:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn rustls_ech_client_hello_is_decrypted() {
+    let (config_list, keys) = create_test_ech_config();
+    let config_list_bytes = compose(&config_list).unwrap().to_vec();
+    let ech_config = RustlsEchConfig::new(
+      EchConfigListBytes::from(config_list_bytes),
+      aws_lc_rs::hpke::ALL_SUPPORTED_SUITES,
+    )
+    .unwrap();
+    let config = ClientConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+      .with_ech(EchMode::from(ech_config))
+      .unwrap()
+      .with_root_certificates(RootCertStore::empty())
+      .with_no_client_auth();
+    let mut connection = ClientConnection::new(Arc::new(config), ServerName::try_from("private.example").unwrap()).unwrap();
+    let mut wire = Vec::new();
+    connection.write_tls(&mut wire).unwrap();
+
+    let outer = probe_tls_handshake(&mut wire.as_slice()).unwrap();
+    assert_eq!(outer.client_hello.sni(), vec!["test.example.com".to_string()]);
+    let inner = outer.client_hello.decrypt_ech(&keys, false).unwrap().unwrap();
+
+    assert_eq!(inner.sni(), vec!["private.example".to_string()]);
+    assert!(inner.offers_no_tls12_or_below());
   }
 }

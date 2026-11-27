@@ -238,7 +238,12 @@ impl Serialize for OuterExtensions {
       error!("Empty outer extensions");
       return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
     }
-    buf.put_u8(self.outer_extensions.len() as u8);
+    // The length prefix counts bytes, at most 254 (RFC 9849 Section 5.1)
+    let Ok(len) = u8::try_from(self.outer_extensions.len() * 2) else {
+      error!("Too many outer extensions");
+      return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
+    };
+    buf.put_u8(len);
     for ext in self.outer_extensions {
       buf.put_u16(ext);
     }
@@ -251,6 +256,7 @@ impl Serialize for OuterExtensions {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::serialize::{compose, parse};
 
   #[test]
   fn empty_ech_input_returns_short_input() {
@@ -296,6 +302,29 @@ mod tests {
     let mut input = &[0x02, 0x00, 0x0a, 0xfe, 0x0d][..];
 
     let result = OuterExtensions::deserialize(&mut input);
+
+    assert!(matches!(result, Err(TlsClientHelloError::InvalidOuterExtensionsExtension)));
+  }
+
+  #[test]
+  fn outer_extensions_serialize_round_trip() {
+    let outer_extensions = OuterExtensions {
+      outer_extensions: vec![0x000a, 0x002b],
+    };
+
+    let serialized = compose(outer_extensions.clone()).unwrap();
+    assert_eq!(serialized.as_ref(), &[0x04, 0x00, 0x0a, 0x00, 0x2b]);
+    let reparsed: OuterExtensions = parse(&mut serialized.as_ref()).unwrap();
+    assert_eq!(reparsed, outer_extensions);
+  }
+
+  #[test]
+  fn outer_extensions_beyond_length_limit_are_not_serialized() {
+    let outer_extensions = OuterExtensions {
+      outer_extensions: vec![0x000a; 128],
+    };
+
+    let result = compose(outer_extensions);
 
     assert!(matches!(result, Err(TlsClientHelloError::InvalidOuterExtensionsExtension)));
   }

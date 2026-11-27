@@ -88,6 +88,8 @@ impl TlsClientHelloBuffer {
 
 impl Serialize for TlsClientHelloBuffer {
   type Error = TlsClientHelloError;
+  /// Serialize as one handshake message split into records of at most `TLS_PLAINTEXT_MAX_LEN` bytes,
+  /// each carrying the content type and version of `record_header`.
   fn serialize<B: BufMut>(self, buf: &mut B) -> Result<(), Self::Error> {
     let client_hello_bytes = compose(self.client_hello)?;
 
@@ -101,14 +103,19 @@ impl Serialize for TlsClientHelloBuffer {
     handshake_message_header.length = handshake_msg_len_field;
     let handshake_message_header_bytes = compose(handshake_message_header)?;
 
-    let record_layer_len_field = client_hello_len + handshake_message_header_bytes.len();
-    let mut record_header = self.record_header.clone();
-    record_header.length = record_layer_len_field as u16;
-    let record_header_bytes = compose(record_header)?;
+    let mut handshake_message = BytesMut::with_capacity(handshake_message_header_bytes.len() + client_hello_len);
+    handshake_message.extend_from_slice(&handshake_message_header_bytes);
+    handshake_message.extend_from_slice(&client_hello_bytes);
 
-    buf.put_slice(&record_header_bytes);
-    buf.put_slice(&handshake_message_header_bytes);
-    buf.put_slice(&client_hello_bytes);
+    // A record payload must not exceed TLS_PLAINTEXT_MAX_LEN (RFC 8446 Section 5.1),
+    // so a large ClientHello spans several records.
+    for fragment in handshake_message.chunks(TLS_PLAINTEXT_MAX_LEN) {
+      let mut record_header = self.record_header.clone();
+      // Fits in u16 because a fragment is at most TLS_PLAINTEXT_MAX_LEN bytes.
+      record_header.length = fragment.len() as u16;
+      buf.put_slice(&compose(record_header)?);
+      buf.put_slice(fragment);
+    }
     Ok(())
   }
 }
@@ -200,12 +207,12 @@ fn probe_tls_handshake_inner<B: Buf>(
     });
   }
 
-  // Check if all the TLS record headers are the same
+  // Fragments of one handshake message may differ in length, but not in content type or version
   if record_headers.len() > 1 {
     let first_header = &record_headers[0];
     for header in &record_headers[1..] {
-      if header != first_header {
-        debug!("TLS record headers are not the same");
+      if header.content_type != first_header.content_type || header.version != first_header.version {
+        debug!("TLS record headers are not consistent");
         return Err(TlsProbeFailure::Failure);
       }
     }
@@ -458,5 +465,130 @@ mod tests {
     let mut encoded = encoded.as_ref();
 
     assert!(probe_tls_handshake(&mut encoded).is_ok());
+  }
+
+  /// ClientHello handshake message (header and body) with SNI `example.com` and an opaque
+  /// extension of `padding_len` zero bytes to control the message size.
+  fn client_hello_handshake(padding_len: usize) -> Vec<u8> {
+    let mut extensions = Vec::new();
+    extensions.extend_from_slice(&[0x00, 0x00, 0x00, 0x10, 0x00, 0x0e, 0x00, 0x00, 0x0b]);
+    extensions.extend_from_slice(b"example.com");
+    extensions.extend_from_slice(&0xff00u16.to_be_bytes());
+    extensions.extend_from_slice(&(padding_len as u16).to_be_bytes());
+    extensions.resize(extensions.len() + padding_len, 0);
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&0x0303u16.to_be_bytes());
+    body.extend_from_slice(&[0u8; 32]);
+    body.push(0);
+    body.extend_from_slice(&2u16.to_be_bytes());
+    body.extend_from_slice(&0x1301u16.to_be_bytes());
+    body.push(1);
+    body.push(0);
+    body.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+    body.extend_from_slice(&extensions);
+
+    let mut handshake = client_hello_header(body.len()).to_vec();
+    handshake.extend_from_slice(&body);
+    handshake
+  }
+
+  /// Split a handshake message into consecutive records of the given payload lengths.
+  fn records_of(handshake: &[u8], payload_lens: &[usize]) -> Vec<u8> {
+    assert_eq!(payload_lens.iter().sum::<usize>(), handshake.len());
+    let mut wire = Vec::new();
+    let mut offset = 0;
+    for &len in payload_lens {
+      wire.extend_from_slice(&tls_record_header(len));
+      wire.extend_from_slice(&handshake[offset..offset + len]);
+      offset += len;
+    }
+    wire
+  }
+
+  /// Payload lengths of the records in `wire`, together with their (content type, version).
+  fn record_layout(wire: &[u8]) -> Vec<(u8, u16, usize)> {
+    let mut layout = Vec::new();
+    let mut rest = wire;
+    while !rest.is_empty() {
+      let header: TlsRecordHeader = parse(&mut rest).unwrap();
+      let len = header.length as usize;
+      layout.push((header.content_type, header.version, len));
+      rest = &rest[len..];
+    }
+    layout
+  }
+
+  /// Concatenated record payloads of `wire`.
+  fn record_payloads(wire: &[u8]) -> Vec<u8> {
+    let mut payloads = Vec::new();
+    let mut offset = 0;
+    for (_, _, len) in record_layout(wire) {
+      offset += TLS_RECORD_HEADER_LEN;
+      payloads.extend_from_slice(&wire[offset..offset + len]);
+      offset += len;
+    }
+    payloads
+  }
+
+  #[test]
+  fn client_hello_fragmented_into_records_of_different_lengths_is_probeable() {
+    let handshake = client_hello_handshake(100);
+    let first_len = handshake.len() / 2;
+    let fragmented = records_of(&handshake, &[first_len, handshake.len() - first_len]);
+    let single = records_of(&handshake, &[handshake.len()]);
+
+    let from_fragments = probe_tls_handshake(&mut fragmented.as_slice()).unwrap();
+    let from_single = probe_tls_handshake(&mut single.as_slice()).unwrap();
+    assert_eq!(from_fragments.client_hello, from_single.client_hello);
+    assert_eq!(from_fragments.client_hello.sni(), vec!["example.com".to_string()]);
+  }
+
+  #[test]
+  fn large_client_hello_spanning_full_and_partial_records_is_probeable() {
+    let handshake = client_hello_handshake(20_000);
+    let wire = records_of(&handshake, &[TLS_PLAINTEXT_MAX_LEN, handshake.len() - TLS_PLAINTEXT_MAX_LEN]);
+
+    let probed = probe_tls_handshake_with_max_probe_bytes(&mut wire.as_slice(), 128 * 1024).unwrap();
+    assert_eq!(probed.client_hello.sni(), vec!["example.com".to_string()]);
+  }
+
+  #[test]
+  fn records_with_different_versions_are_rejected() {
+    let handshake = client_hello_handshake(100);
+    let first_len = handshake.len() / 2;
+    let mut wire = records_of(&handshake, &[first_len, handshake.len() - first_len]);
+    let second_header = TLS_RECORD_HEADER_LEN + first_len;
+    wire[second_header + 1..second_header + 3].copy_from_slice(&SUPPORTED_TLS_VERSIONS[2].to_be_bytes());
+
+    assert_eq!(probe_tls_handshake(&mut wire.as_slice()), Err(TlsProbeFailure::Failure));
+  }
+
+  #[test]
+  fn large_client_hello_is_serialized_into_records_within_plaintext_limit() {
+    let handshake = client_hello_handshake(20_000);
+    let wire = records_of(&handshake, &[TLS_PLAINTEXT_MAX_LEN, handshake.len() - TLS_PLAINTEXT_MAX_LEN]);
+    let probed = probe_tls_handshake(&mut wire.as_slice()).unwrap();
+
+    let serialized = probed.try_to_bytes().unwrap();
+    let layout = record_layout(&serialized);
+    assert_eq!(layout.len(), handshake.len().div_ceil(TLS_PLAINTEXT_MAX_LEN));
+    for (content_type, version, len) in layout {
+      assert_eq!(content_type, TLS_HANDSHAKE_CONTENT_TYPE);
+      assert_eq!(version, SUPPORTED_TLS_VERSIONS[0]);
+      assert!(len <= TLS_PLAINTEXT_MAX_LEN);
+    }
+    assert_eq!(record_payloads(&serialized), handshake);
+
+    let reprobed = probe_tls_handshake(&mut serialized.as_ref()).unwrap();
+    assert_eq!(reprobed.client_hello, probed.client_hello);
+  }
+
+  #[test]
+  fn small_client_hello_is_serialized_into_one_record() {
+    let encoded = valid_client_hello_record();
+    let probed = probe_tls_handshake(&mut encoded.as_slice()).unwrap();
+
+    assert_eq!(probed.try_to_bytes().unwrap().as_ref(), encoded.as_slice());
   }
 }

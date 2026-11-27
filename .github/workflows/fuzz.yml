@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [tls_clienthello, quic_initial, quic_frames, ech_extension]
+        target: [tls_clienthello, quic_initial, quic_frames, ech_extension, ech_recompose]
 
     steps:
       - uses: actions/checkout@v7

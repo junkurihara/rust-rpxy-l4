@@ -46,6 +46,10 @@ pub enum TlsClientHelloError {
   InvalidClientHelloRecomposition,
   #[error("No SNI in decrypted ClientHello")]
   NoSniInDecryptedClientHello,
+  #[error("Non-zero padding in decrypted EncodedClientHelloInner")]
+  NonZeroEchPadding,
+  #[error("Decrypted ClientHello offers TLS 1.2 or below")]
+  Tls12OrBelowInDecryptedClientHello,
 
   #[error("Error in serialization/deserialization")]
   SerDeserError(#[from] SerDeserError),

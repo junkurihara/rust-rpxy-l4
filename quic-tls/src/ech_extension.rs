@@ -81,7 +81,14 @@ impl Deserialize for EncryptedClientHello {
         let payload = ClientHelloOuter::deserialize(buf)?;
         Ok(EncryptedClientHello::Outer(payload))
       }
-      1 => Ok(EncryptedClientHello::Inner),
+      1 => {
+        // The inner variant carries no data after the type (RFC 9849 Section 5)
+        if buf.has_remaining() {
+          error!("Unexpected data after ECH ClientHello type inner");
+          return Err(TlsClientHelloError::InvalidEchExtension);
+        }
+        Ok(EncryptedClientHello::Inner)
+      }
       _ => {
         error!("Unknown ECH ClientHello type: {}", ech_client_hello_type);
         Err(TlsClientHelloError::InvalidEchExtension)
@@ -259,5 +266,14 @@ mod tests {
     let result = EncryptedClientHello::deserialize(&mut input).unwrap();
 
     assert_eq!(result, EncryptedClientHello::Inner);
+  }
+
+  #[test]
+  fn ech_inner_type_with_trailing_data_is_rejected() {
+    let mut input = &[0x01, 0xff][..];
+
+    let result = EncryptedClientHello::deserialize(&mut input);
+
+    assert!(matches!(result, Err(TlsClientHelloError::InvalidEchExtension)));
   }
 }

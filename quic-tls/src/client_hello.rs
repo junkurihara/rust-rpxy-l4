@@ -12,17 +12,22 @@ pub(crate) const TLS_HANDSHAKE_MESSAGE_HEADER_LEN: usize = 4;
 const TLS_HANDSHAKE_TYPE_CLIENT_HELLO: u8 = 0x01;
 
 /// Supported TLS ClientHello extension types
-struct ExtensionType;
+pub(crate) struct ExtensionType;
 impl ExtensionType {
   /// Server Name Indication
   const SNI: u16 = 0x0000;
   /// Application-Layer Protocol Negotiation
   const ALPN: u16 = 0x0010;
+  /// Supported Versions, read only to validate a decrypted ClientHelloInner
+  const SUPPORTED_VERSIONS: u16 = 0x002b;
   /// Encrypted ClientHello
-  const ECH: u16 = 0xfe0d;
+  pub(crate) const ECH: u16 = 0xfe0d;
   /// OuterExtensions
   const OUTER_EXTENSIONS: u16 = 0xfd00;
 }
+
+/// SSL 3.0, TLS 1.0, TLS 1.1, and TLS 1.2, which ClientHelloInner must not offer (RFC 9849 Section 7.1)
+const TLS12_AND_BELOW_VERSIONS: [u16; 4] = [0x0300, 0x0301, 0x0302, 0x0303];
 
 /* ---------------------------------------------------------- */
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,13 +248,51 @@ impl TlsClientHello {
       .iter()
       .any(|ext| matches!(ext, TlsClientHelloExtension::Ech(EncryptedClientHello::Outer(_))))
   }
-  /// Is decrypted ech inner
+  /// Is decrypted ech inner: exactly one ECH extension, of type inner (RFC 9849 Section 7.1)
   pub(crate) fn is_ech_inner(&self) -> bool {
-    self
+    let mut ech_extensions = self
       .extensions
       .iter()
-      .any(|ext| matches!(ext, TlsClientHelloExtension::Ech(EncryptedClientHello::Inner)))
+      .filter(|ext| matches!(ext, TlsClientHelloExtension::Ech(_)));
+    matches!(
+      (ech_extensions.next(), ech_extensions.next()),
+      (Some(TlsClientHelloExtension::Ech(EncryptedClientHello::Inner)), None)
+    )
   }
+
+  /// Whether the ClientHello has a "supported_versions" extension, and every such extension is
+  /// well-formed and lists none of TLS 1.2 and below. Without the extension, a ClientHello offers
+  /// TLS 1.2 or below. Unknown values, including GREASE, are not versions and are ignored
+  /// (RFC 9846 Section 4.3.1).
+  pub(crate) fn offers_no_tls12_or_below(&self) -> bool {
+    let mut found = false;
+    for ext in &self.extensions {
+      let TlsClientHelloExtension::Other(other) = ext else {
+        continue;
+      };
+      if other.extension_type != ExtensionType::SUPPORTED_VERSIONS {
+        continue;
+      }
+      // ProtocolVersion versions<2..254>
+      let Some((&len, versions)) = other.extension_payload.split_first() else {
+        return false;
+      };
+      if usize::from(len) != versions.len() || versions.len() < 2 || versions.len() % 2 != 0 {
+        return false;
+      }
+      if versions
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .any(|version| TLS12_AND_BELOW_VERSIONS.contains(&u16::from_be_bytes(*version)))
+      {
+        return false;
+      }
+      found = true;
+    }
+    found
+  }
+
   /// If extensions contains ECH Outer, fill its payload with zeros,
   /// Used for AAD calculation
   pub(crate) fn fill_ech_payload_with_zeros(&mut self) {
@@ -491,6 +534,11 @@ impl Deserialize for TlsClientHello {
           return Err(TlsClientHelloError::InvalidTlsClientHello);
         }
       }
+    }
+    // The last extension must end exactly at the declared extensions length
+    if buf.remaining() != expected_padding_len {
+      error!("TLS ClientHello extensions exceed the declared extensions length");
+      return Err(TlsClientHelloError::InvalidExtensionLength);
     }
 
     // OuterExtensions and ECHOuter must not be simultaneously present
@@ -857,6 +905,19 @@ mod tests {
     let result = TlsClientHello::deserialize(&mut input);
 
     assert!(matches!(result, Err(TlsClientHelloError::InvalidExtensionLength)));
+  }
+
+  #[test]
+  fn extension_beyond_declared_extensions_length_is_rejected() {
+    // One extension of 4 + 8 = 12 bytes
+    let extensions = [0x12, 0x34, 0x00, 0x08, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa];
+
+    let overrunning = client_hello_body(8, &extensions);
+    let result = TlsClientHello::deserialize(&mut overrunning.as_slice());
+    assert!(matches!(result, Err(TlsClientHelloError::InvalidExtensionLength)));
+
+    let exact = client_hello_body(extensions.len() as u16, &extensions);
+    assert!(TlsClientHello::deserialize(&mut exact.as_slice()).is_ok());
   }
 
   #[test]

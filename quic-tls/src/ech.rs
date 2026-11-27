@@ -15,6 +15,7 @@ use hpke::{
   kdf::Kdf,
   kem::{DhP256HkdfSha256, X25519HkdfSha256},
 };
+use std::collections::HashSet;
 
 impl TlsClientHello {
   /// Implementation of the ECH decryption, return the re-composed ClientHelloInner
@@ -203,6 +204,7 @@ impl TlsClientHello {
     let mut outer_extensions = outer_extensions.iter();
 
     let mut new_extensions = Vec::new();
+    let mut referenced_types = HashSet::new();
     let inner_extensions = compressed_inner.extensions();
     for ext in inner_extensions.iter() {
       if let TlsClientHelloExtension::OuterExtensions(outer_extensions_ext) = ext {
@@ -213,6 +215,11 @@ impl TlsClientHello {
           // "encrypted_client_hello" must not be referenced (RFC 9849 Section 5.1)
           if outer_ext_type == ExtensionType::ECH {
             error!("OuterExtensions references encrypted_client_hello");
+            return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
+          }
+          // No extension may be referenced more than once (RFC 9849 Section 5.1)
+          if !referenced_types.insert(outer_ext_type) {
+            error!("OuterExtensions references an extension more than once");
             return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
           }
           // Proceed to the next extension until the matched one is found
@@ -801,6 +808,53 @@ mod tests {
         "OuterExtensions {referenced:x?}: {result:?}"
       );
     }
+  }
+
+  #[test]
+  fn decode_rejects_outer_extensions_with_trailing_data() {
+    // The declared list is [supported_groups]; a reference to encrypted_client_hello follows outside it
+    let outer_extensions = ext(0xfd00, &[0x02, 0x00, 0x0a, 0xfe, 0x0d]);
+    let encoded = encoded_inner(&[outer_extensions, supported_versions_ext(&[TLS13])]);
+
+    let result = default_outer().decode_client_hello_inner(&encoded);
+
+    assert!(matches!(result, Err(TlsClientHelloError::InvalidTlsClientHello)));
+  }
+
+  #[test]
+  fn decode_rejects_duplicate_references() {
+    // Two supported_groups extensions in the outer, so a second reference would find a match
+    let outer = outer_with(&[
+      sni_ext("public.example"),
+      supported_groups_ext(),
+      supported_groups_ext(),
+      supported_versions_ext(&[TLS13]),
+      ech_outer_ext(),
+    ]);
+    let cases = [
+      ("one list", vec![outer_extensions_ext(&[SUPPORTED_GROUPS, SUPPORTED_GROUPS])]),
+      (
+        "two lists",
+        vec![
+          outer_extensions_ext(&[SUPPORTED_GROUPS]),
+          outer_extensions_ext(&[SUPPORTED_GROUPS]),
+        ],
+      ),
+    ];
+    for (name, mut extensions) in cases {
+      extensions.push(supported_versions_ext(&[TLS13]));
+
+      let result = outer.decode_client_hello_inner(&encoded_inner(&extensions));
+
+      assert!(
+        matches!(result, Err(TlsClientHelloError::InvalidOuterExtensionsExtension)),
+        "{name}: {result:?}"
+      );
+    }
+
+    // A single reference is still accepted
+    let single = encoded_inner(&[outer_extensions_ext(&[SUPPORTED_GROUPS]), supported_versions_ext(&[TLS13])]);
+    assert!(outer.decode_client_hello_inner(&single).is_ok());
   }
 
   #[test]

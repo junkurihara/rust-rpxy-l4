@@ -208,6 +208,11 @@ impl Deserialize for OuterExtensions {
     }
 
     let outer_extensions = read_lengthed(buf, 1)?;
+    // The extension data is exactly the list of extension types (RFC 9849 Section 5.1)
+    if buf.has_remaining() {
+      error!("Unexpected data after OuterExtensions");
+      return Err(TlsClientHelloError::InvalidOuterExtensionsExtension);
+    }
 
     if outer_extensions.is_empty() || outer_extensions.len() % 2 != 0 {
       error!("Invalid OuterExtensions");
@@ -275,5 +280,23 @@ mod tests {
     let result = EncryptedClientHello::deserialize(&mut input);
 
     assert!(matches!(result, Err(TlsClientHelloError::InvalidEchExtension)));
+  }
+
+  #[test]
+  fn outer_extensions_list_is_parsed() {
+    let mut input = &[0x02, 0x00, 0x0a][..];
+
+    let result = OuterExtensions::deserialize(&mut input).unwrap();
+
+    assert_eq!(result.iter().collect::<Vec<_>>(), vec![0x000a]);
+  }
+
+  #[test]
+  fn outer_extensions_with_trailing_data_is_rejected() {
+    let mut input = &[0x02, 0x00, 0x0a, 0xfe, 0x0d][..];
+
+    let result = OuterExtensions::deserialize(&mut input);
+
+    assert!(matches!(result, Err(TlsClientHelloError::InvalidOuterExtensionsExtension)));
   }
 }

@@ -532,16 +532,21 @@ async fn handle_tcp_connection(
   let to_be_written = match (&found_dst, &probed_protocol) {
     (FoundTcpDestination::Tls(tls_destination), TcpProbedProtocol::Tls(client_hello_buf)) => {
       // Handle tls, especially ECH
-      let Ok(client_hello_bytes) = handle_tls_client_hello(client_hello_buf, tls_destination, &mut dst_addr).await else {
-        // Error means that illegal parameter must be sent back when error
-        error!("Failed to handle TLS client hello, sending illegal_parameter alert back to the client");
-        let illegal_parameter_alert = TlsAlertBuffer::default();
-        if let Err(e) = send_back_tls_alert(&mut incoming_stream, &illegal_parameter_alert).await {
-          error!("Failed to send TLS alert: {e}");
+      match handle_tls_client_hello(client_hello_buf, tls_destination, &mut dst_addr).await {
+        // ECH decryption replaced the ClientHello with the recomposed ClientHelloInner
+        Ok(Some(client_hello_bytes)) => client_hello_bytes,
+        // Forward exactly what the client sent, since the backend's handshake transcript covers it
+        Ok(None) => initial_buf.freeze(),
+        Err(_) => {
+          // Error means that illegal parameter must be sent back when error
+          error!("Failed to handle TLS client hello, sending illegal_parameter alert back to the client");
+          let illegal_parameter_alert = TlsAlertBuffer::default();
+          if let Err(e) = send_back_tls_alert(&mut incoming_stream, &illegal_parameter_alert).await {
+            error!("Failed to send TLS alert: {e}");
+          }
+          return;
         }
-        return;
-      };
-      client_hello_bytes
+      }
     }
     _ => {
       // handle non-tls
@@ -630,18 +635,20 @@ async fn handle_tcp_connection(
 }
 
 /// handle tls, especially ECH
-/// This returns as is (Ok(...)) in Bytes when no matching config_id is found (case of GREASE), otherwise returns decrypted ClientHello record in Bytes
+/// This returns Ok(Some(...)) with the recomposed ClientHelloInner records when ECH decryption replaced the ClientHello,
+/// and Ok(None) when the original ClientHello must be forwarded unchanged (no ECH, no ECH configuration, or no matching
+/// config_id such as GREASE).
 /// If this returns Err(...), it means that it failed to be decrypted or that the decrypted result is illegal. Then we must send some error back to the client.
 async fn handle_tls_client_hello<T>(
   orig_ch_buf: &TlsClientHelloBuffer,
   tls_destination: &TlsDestinationItem<T>,
   dst_addr: &mut SocketAddr,
-) -> Result<bytes::Bytes, ProxyError> {
+) -> Result<Option<bytes::Bytes>, ProxyError> {
   if orig_ch_buf.is_ech_outer() && tls_destination.ech().is_some() {
     trace!("Handling ECH ClientHello Outer");
     let ech = tls_destination.ech().unwrap();
     let Some(decrypted_ch) = orig_ch_buf.client_hello.decrypt_ech(&ech.private_keys, false)? else {
-      return Ok(orig_ch_buf.try_to_bytes()?);
+      return Ok(None);
     };
     // Decryption succeeded, so we need to replace the destination address with the one in the decrypted ClientHello Inner
     trace!("Decrypted ClientHello Inner: {decrypted_ch:#?}");
@@ -676,10 +683,10 @@ async fn handle_tls_client_hello<T>(
       handshake_message_header: orig_ch_buf.handshake_message_header.clone(),
     };
 
-    return Ok(new_ch_buf.try_to_bytes()?);
+    return Ok(Some(new_ch_buf.try_to_bytes()?));
   };
 
-  Ok(orig_ch_buf.try_to_bytes()?)
+  Ok(None)
 }
 
 /// Handle TLS alert, writing TLS alert to the incoming stream back to the client
@@ -835,6 +842,113 @@ mod tests {
       let mut closed = [0u8; 1];
       assert_eq!(client.read(&mut closed).await.unwrap(), 0);
     }
+  }
+
+  /// ClientHello for example.com, framed as two TLS records of different lengths.
+  fn fragmented_client_hello_records() -> Vec<u8> {
+    const RECORD_HEADER_LEN: usize = 5;
+    let mut sni = ServerNameIndication::default();
+    sni.add_server_name("example.com");
+    let mut client_hello_buf = TlsClientHelloBuffer::default();
+    client_hello_buf.client_hello.add_replace_sni(&sni);
+    let single_record = client_hello_buf.try_to_bytes().unwrap();
+
+    let (record_header, handshake_message) = single_record.split_at(RECORD_HEADER_LEN);
+    let (first, second) = handshake_message.split_at(handshake_message.len() / 3);
+    assert_ne!(first.len(), second.len());
+    let mut records = Vec::new();
+    for fragment in [first, second] {
+      // Keep the content type and version, and set the length of this fragment.
+      records.extend_from_slice(&record_header[..3]);
+      records.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+      records.extend_from_slice(fragment);
+    }
+    records
+  }
+
+  fn tls_base_destination_mux(backend: TargetAddr, dns_cache: &Arc<DnsCache>) -> TcpDestinationMux {
+    TcpDestinationMuxBuilder::default()
+      .set_base(
+        TcpProtocolType::Tls,
+        &[backend],
+        dns_cache,
+        None,
+        #[cfg(feature = "proxy-protocol")]
+        None,
+      )
+      .build()
+      .unwrap()
+  }
+
+  #[tokio::test]
+  async fn test_tls_client_hello_without_ech_is_not_replaced() {
+    let dns_cache = Arc::new(DnsCache::default());
+    let destination_mux = tls_base_destination_mux("127.0.0.1:50443".parse().unwrap(), &dns_cache);
+    let mut sni = ServerNameIndication::default();
+    sni.add_server_name("example.com");
+    let mut client_hello_buf = TlsClientHelloBuffer::default();
+    client_hello_buf.client_hello.add_replace_sni(&sni);
+
+    let found = destination_mux
+      .find_destination(&TcpProbedProtocol::Tls(client_hello_buf.clone()))
+      .unwrap();
+    let FoundTcpDestination::Tls(tls_destination) = found else {
+      panic!("TLS destination expected");
+    };
+    let mut dst_addr = "127.0.0.1:50443".parse().unwrap();
+    let replaced = handle_tls_client_hello(&client_hello_buf, &tls_destination, &mut dst_addr)
+      .await
+      .unwrap();
+    assert!(replaced.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_fragmented_tls_client_hello_is_forwarded_unchanged() {
+    let backend = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dns_cache = Arc::new(DnsCache::default());
+    let backend_addr = backend.local_addr().unwrap().to_string().parse().unwrap();
+    let destination_mux = Arc::new(tls_base_destination_mux(backend_addr, &dns_cache));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listen_on = listener.local_addr().unwrap();
+    let mut client = TcpStream::connect(listen_on).await.unwrap();
+    let (server, src_addr) = listener.accept().await.unwrap();
+    let connection_count = ConnectionCount::default();
+    let permit = connection_count.try_acquire(1).unwrap();
+    let detection_timeout = Duration::from_millis(crate::constants::TCP_PROTOCOL_DETECTION_TIMEOUT_MSEC);
+    let wait = Duration::from_secs(5);
+
+    #[cfg(feature = "proxy-protocol")]
+    let proxy = tokio::spawn(handle_tcp_connection(
+      destination_mux,
+      permit,
+      detection_timeout,
+      server,
+      src_addr,
+      listen_on,
+      None,
+    ));
+    #[cfg(not(feature = "proxy-protocol"))]
+    let proxy = tokio::spawn(handle_tcp_connection(
+      destination_mux,
+      permit,
+      detection_timeout,
+      server,
+      src_addr,
+    ));
+
+    let client_hello = fragmented_client_hello_records();
+    client.write_all(&client_hello).await.unwrap();
+
+    let (mut upstream, _) = timeout(wait, backend.accept()).await.unwrap().unwrap();
+    let mut received = vec![0u8; client_hello.len()];
+    timeout(wait, upstream.read_exact(&mut received)).await.unwrap().unwrap();
+    assert_eq!(received, client_hello);
+
+    drop(client);
+    drop(upstream);
+    timeout(wait, proxy).await.unwrap().unwrap();
+    assert_eq!(connection_count.current(), 0);
   }
 
   #[tokio::test]

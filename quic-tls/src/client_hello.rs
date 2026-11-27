@@ -319,6 +319,11 @@ impl TlsClientHello {
   pub(crate) fn legacy_session_id(&self) -> Bytes {
     self.legacy_session_id.clone()
   }
+  /// Legacy version of the ClientHello (fuzzing only)
+  #[cfg(feature = "fuzzing")]
+  pub(crate) fn legacy_version(&self) -> u16 {
+    self.protocol_version
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

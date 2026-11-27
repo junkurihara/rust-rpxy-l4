@@ -10,12 +10,16 @@ panic is a whole-process denial of service. These targets catch such regressions
 | `quic_initial` | `probe_quic_initial_packets` | QUIC long header, header protection, AEAD attempt |
 | `quic_frames` | `fuzzing::probe_quic_unprotected_payload` | Decrypted Initial payload: frames, CRYPTO reassembly, inner ClientHello |
 | `ech_extension` | `fuzzing::probe_ech_extension` | ECH extension body |
+| `ech_recompose` | `fuzzing::probe_ech_recomposition` | ClientHelloInner reconstruction after ECH decryption (HPKE bypassed) and its write-back, which must read back as the same ClientHello |
 
 The `fuzzing` module exists only with the default-off `fuzzing` feature of `rpxy-l4-quic-tls`.
 This crate has its own workspace, so stable workspace builds never include it.
 
-Not covered here: PROXY protocol parsing (async and delegated to `ppp`), ECH inner
-ClientHello recomposition after HPKE decryption, and the trivial TCP/WireGuard detectors.
+An `ech_recompose` input is a 2-byte big-endian length `n`, `n` bytes of ClientHelloOuter TLS
+records, and then the decrypted EncodedClientHelloInner.
+
+Not covered here: PROXY protocol parsing (async and delegated to `ppp`), HPKE itself, and the
+trivial TCP/WireGuard detectors.
 
 ## Layout
 

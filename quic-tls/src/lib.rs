@@ -32,5 +32,5 @@ pub use tls::{
 pub mod fuzzing {
   //! Fuzzing-only entrypoints that expose crate-private parsers.
   //! Enabled by the `fuzzing` feature; not part of the stable public API.
-  pub use crate::{ech_extension::probe_ech_extension, quic::probe_quic_unprotected_payload};
+  pub use crate::{ech::probe_ech_recomposition, ech_extension::probe_ech_extension, quic::probe_quic_unprotected_payload};
 }

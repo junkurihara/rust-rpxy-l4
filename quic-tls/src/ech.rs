@@ -245,6 +245,70 @@ impl TlsClientHello {
   }
 }
 
+/// Exercise ClientHelloInner reconstruction after ECH decryption and its write-back on raw bytes
+/// (fuzzing only). Bypasses HPKE.
+///
+/// Input: a 2-byte big-endian length `n`, `n` bytes of ClientHelloOuter TLS records, and then the
+/// decrypted EncodedClientHelloInner. Panics if a reconstructed ClientHelloInner violates the
+/// postconditions of the reconstruction or does not read back from its written records.
+#[cfg(feature = "fuzzing")]
+pub fn probe_ech_recomposition(data: &[u8]) {
+  use crate::{
+    SUPPORTED_TLS_VERSIONS,
+    error::TlsProbeFailure,
+    tls::{TlsClientHelloBuffer, probe_tls_handshake},
+  };
+
+  let Some((outer_len, rest)) = data.split_first_chunk::<2>() else {
+    return;
+  };
+  let Some((mut outer_records, encoded_client_hello_inner)) = rest.split_at_checked(usize::from(u16::from_be_bytes(*outer_len)))
+  else {
+    return;
+  };
+  let Ok(outer) = probe_tls_handshake(&mut outer_records) else {
+    return;
+  };
+  let Ok(client_hello_inner) = outer.client_hello.decode_client_hello_inner(encoded_client_hello_inner) else {
+    return;
+  };
+
+  // Reconstruction leaves exactly one ECH extension, of type inner, and no OuterExtensions (RFC 9849 Sections 5.1 and 7.1)
+  assert!(
+    client_hello_inner.is_ech_inner(),
+    "reconstructed ClientHelloInner must have exactly one ECH extension of type inner"
+  );
+  assert!(
+    !client_hello_inner
+      .extensions()
+      .iter()
+      .any(|ext| matches!(ext, TlsClientHelloExtension::OuterExtensions(_))),
+    "reconstructed ClientHelloInner must not contain OuterExtensions"
+  );
+
+  // Written back as handle_tls_client_hello in proxy-l4-lib does
+  let inner_buffer = TlsClientHelloBuffer {
+    client_hello: client_hello_inner,
+    record_header: outer.record_header,
+    handshake_message_header: outer.handshake_message_header,
+  };
+  let Ok(written) = inner_buffer.try_to_bytes() else {
+    // Typed serialization error, such as an extensions block over 65535 bytes
+    return;
+  };
+  match probe_tls_handshake(&mut written.as_ref()) {
+    Ok(read_back) => assert_eq!(
+      read_back.client_hello, inner_buffer.client_hello,
+      "written ClientHelloInner reads back differently"
+    ),
+    // The probe also requires a legacy_version in SUPPORTED_TLS_VERSIONS, which reconstruction does not check
+    Err(failure) => assert!(
+      failure == TlsProbeFailure::Failure && !SUPPORTED_TLS_VERSIONS.contains(&inner_buffer.client_hello.legacy_version()),
+      "written ClientHelloInner does not read back: {failure:?}"
+    ),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -644,14 +708,34 @@ mod tests {
     parse(&mut client_hello_body(&OUTER_SESSION_ID, extensions).as_slice()).unwrap()
   }
 
-  /// ClientHelloOuter with extensions SNI, supported_groups, supported_versions [TLS 1.3], ECH outer
-  fn default_outer() -> TlsClientHello {
-    outer_with(&[
+  /// Extensions of the default ClientHelloOuter: SNI, supported_groups, supported_versions [TLS 1.3], ECH outer
+  fn default_outer_extensions() -> Vec<Vec<u8>> {
+    vec![
       sni_ext("public.example"),
       supported_groups_ext(),
       supported_versions_ext(&[TLS13]),
       ech_outer_ext(),
-    ])
+    ]
+  }
+
+  fn default_outer() -> TlsClientHello {
+    outer_with(&default_outer_extensions())
+  }
+
+  /// Input of `probe_ech_recomposition`: the default ClientHelloOuter as one TLS handshake record, then `encoded`
+  #[cfg(feature = "fuzzing")]
+  fn recomposition_input(encoded: &[u8]) -> Vec<u8> {
+    let body = client_hello_body(&OUTER_SESSION_ID, &default_outer_extensions());
+    let mut handshake = vec![0x01, 0x00]; // ClientHello, upper byte of the 3-byte length
+    handshake.extend_from_slice(&(body.len() as u16).to_be_bytes());
+    handshake.extend_from_slice(&body);
+    let mut records = vec![0x16, 0x03, 0x01];
+    records.extend_from_slice(&(handshake.len() as u16).to_be_bytes());
+    records.extend_from_slice(&handshake);
+    let mut input = (records.len() as u16).to_be_bytes().to_vec();
+    input.extend_from_slice(&records);
+    input.extend_from_slice(encoded);
+    input
   }
 
   /// EncodedClientHelloInner with SNI and ECH inner followed by `extensions`, without padding
@@ -881,5 +965,26 @@ mod tests {
 
     assert_eq!(inner.sni(), vec!["private.example".to_string()]);
     assert!(inner.offers_no_tls12_or_below());
+  }
+
+  #[cfg(feature = "fuzzing")]
+  #[test]
+  fn probe_ech_recomposition_accepts_known_inputs() {
+    let compressed = encoded_inner(&[outer_extensions_ext(&[SUPPORTED_GROUPS, SUPPORTED_VERSIONS])]);
+    let mut legacy_version_unsupported = compressed.clone();
+    legacy_version_unsupported[..2].copy_from_slice(&0x0000u16.to_be_bytes());
+    // Both reach the write-back: one reads back, the other fails the legacy_version check of the probe
+    assert!(default_outer().decode_client_hello_inner(&compressed).is_ok());
+    assert!(default_outer().decode_client_hello_inner(&legacy_version_unsupported).is_ok());
+
+    for input in [
+      recomposition_input(&compressed),
+      recomposition_input(&legacy_version_unsupported),
+      vec![],
+      vec![0x00],
+      vec![0xff, 0xff, 0x16],
+    ] {
+      probe_ech_recomposition(&input);
+    }
   }
 }

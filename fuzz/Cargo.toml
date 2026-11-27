@@ -40,6 +40,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "ech_recompose"
+path = "fuzz_targets/ech_recompose.rs"
+test = false
+doc = false
+bench = false
+
 # Independent workspace: stable workspace builds never include the fuzz harnesses,
 # and the parent release profile (panic = "abort") does not apply here.
 [workspace]
